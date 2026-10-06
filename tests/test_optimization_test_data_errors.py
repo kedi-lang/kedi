@@ -52,7 +52,9 @@ def _patch_optimizer_services(monkeypatch: Any, *, test_error: Exception | None)
     )
     monkeypatch.setattr(app, "parse_program", lambda *args, **kwargs: program)
     monkeypatch.setattr(app, "compile_program", lambda *args, **kwargs: object())
-    monkeypatch.setattr(app, "PydanticAdapter", lambda *, model: ("pydantic", model))
+    monkeypatch.setattr(
+        app, "PydanticAdapter", lambda *, model, defer_model_check: ("pydantic", model)
+    )
     monkeypatch.setattr(
         OptimizerConfig,
         "from_cli_options",

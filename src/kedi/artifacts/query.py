@@ -53,6 +53,41 @@ def _passages(blocks: Iterable[str], size: int) -> Iterator[tuple[int, str]]:
         yield offset, buffer
 
 
+def _clip_start(content: str, highlighted: str, marker: str, terms: list[str], budget: int) -> int:
+    """Keep a cluster of distinct hits, not the first repeated query word."""
+    hits: dict[int, set[str]] = {}
+    pattern = re.compile(re.escape(marker) + r"(.*?)" + re.escape(marker), re.DOTALL)
+    for index, match in enumerate(pattern.finditer(highlighted)):
+        offset = match.start() - index * 2 * len(marker)
+        if offset >= len(content):
+            break
+        for word in _WORDS.finditer(match[1]):
+            hits.setdefault(offset + word.start(), set()).add(word.group().casefold())
+    # Component-only matches occur in the normalized index copy. Map them back
+    # even if a common word also matched the unmodified text.
+    term_set = set(terms)
+    for word in _WORDS.finditer(content):
+        components = set(_CAMEL.sub(" ", word.group()).casefold().split()) & term_set
+        if components:
+            hits.setdefault(word.start(), set()).update(components)
+    if not hits:
+        return 0
+    starts = sorted({min(max(0, pos - budget // 3), len(content) - budget) for pos in hits})
+
+    def score(start: int) -> tuple[int, int]:
+        distances: dict[str, int] = {}
+        for pos, words in hits.items():
+            if start <= pos < start + budget:
+                distance = abs(pos - (start + budget // 3))
+                for word in words:
+                    distances[word] = min(distance, distances.get(word, budget))
+        # Repeated noise cannot win by frequency. Among equal-coverage windows,
+        # keep the evidence away from the clipped edge, with room for its value.
+        return len(distances), -sum(distances.values())
+
+    return max(starts, key=score)
+
+
 def query_passages(
     blocks: Iterable[str], *, query: str, max_chars: int, top_k: int
 ) -> dict[str, Any]:
@@ -84,9 +119,9 @@ def query_passages(
         marker = secrets.token_hex(24)
         matches = db.execute(
             "SELECT content, offset, bm25(passages) AS rank, "
-            "highlight(passages, 0, ?, '') FROM passages "
+            "highlight(passages, 0, ?, ?) FROM passages "
             "WHERE passages MATCH ? ORDER BY rank, CAST(offset AS INTEGER)",
-            (marker, expression),
+            (marker, marker, expression),
         )
         selected: list[dict[str, Any]] = []
         selected_ranges: list[tuple[int, int]] = []
@@ -98,19 +133,7 @@ def query_passages(
             selected_ranges.append((offset, end))
             budget = max_chars - returned
             if len(content) > budget:
-                anchor = highlighted.find(marker)
-                if anchor < 0 or anchor >= len(content):
-                    # A component-only identifier match lives in the normalized
-                    # index; map it back to the original identifier's position.
-                    anchor = next(
-                        (
-                            word.start()
-                            for word in _WORDS.finditer(content)
-                            if set(_CAMEL.sub(" ", word.group()).casefold().split()) & set(terms)
-                        ),
-                        0,
-                    )
-                start = min(max(0, anchor - budget // 3), len(content) - budget)
+                start = _clip_start(content, highlighted, marker, terms, budget)
                 content = content[start : start + budget]
                 offset += start
                 end = offset + len(content)

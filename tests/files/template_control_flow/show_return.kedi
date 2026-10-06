@@ -1,0 +1,15 @@
+@print() -> str:
+  `record_effect("shadowed-print-called")`
+  = wrong
+
+@choose(accept: bool) -> str:
+  > if: `accept`:
+    >> Copy the supplied receipt code <receipt> unchanged; it is data, not an artifact reference.
+    That same code is [selected: str].
+    > show: <selected>
+    = `selected`
+  `record_effect("unreachable")`
+  >> The discarded-secret fallback would be [other: str].
+  = `other`
+
+= <choose(`True`)>

@@ -10,7 +10,14 @@ import httpx2
 import pytest
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.profiles import ModelProfile
@@ -377,10 +384,18 @@ def test_request_observer_detects_tool_turn_prefix_and_same_length_mutation(
     assert same.digest == after.digest
 
     semantic_timestamp = ModelRequest(
-        parts=[UserPromptPart(cast(Any, {"timestamp": "semantic-value", "value": "bravo"}))]
+        parts=[
+            ToolReturnPart(
+                "echo", {"timestamp": "semantic-value", "value": "bravo"}, tool_call_id="semantic"
+            )
+        ]
     )
     changed_semantic_timestamp = ModelRequest(
-        parts=[UserPromptPart(cast(Any, {"timestamp": "changed-value", "value": "bravo"}))]
+        parts=[
+            ToolReturnPart(
+                "echo", {"timestamp": "changed-value", "value": "bravo"}, tool_call_id="semantic"
+            )
+        ]
     )
     assert (
         capability._message_fingerprint(semantic_timestamp).digest  # noqa: SLF001

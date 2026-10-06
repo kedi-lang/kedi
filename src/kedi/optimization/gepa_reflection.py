@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import dspy
+
 from ..agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ..model_normalization import normalize_for_litellm
 from ..reporter import Reporter
@@ -13,13 +15,14 @@ __all__ = ["build_reflection_lm"]
 def build_reflection_lm(
     config: OptimizerConfig,
     reporter: Reporter,
-) -> Any | None:
-    """Configure and return a traced reflection LM, or ``None`` if not configured."""
+) -> Any:
+    """Use the configured main LM unless a separate reflection model is requested."""
     if not config.reflection_model:
-        reporter.emit(
-            "\n⚠️  No reflection model configured - GEPA will use default LM for reflection"
-        )
-        return None
+        main_lm = dspy.settings.lm
+        if main_lm is None:
+            raise ValueError("Configure a main DSPy LM or an explicit reflection model for GEPA")
+        reporter.emit("\nUsing the configured main DSPy LM for GEPA reflection")
+        return main_lm
 
     reporter.emit("\n🤔 Configuring reflection LM...")
     reporter.emit(f"   Model: {config.reflection_model}")

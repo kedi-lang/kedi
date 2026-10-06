@@ -36,6 +36,7 @@ from kedi.agent_adapter.adapters.langchain.tools import (
     _langchain_mcp_server_configs,
     _langchain_projection_tools,
     _langchain_tool_from_spec,
+    _langchain_tool_parameters_schema,
     _langchain_tool_spec_from_native,
 )
 from kedi.agent_adapter.approvals.policy import ApprovalPolicy
@@ -329,8 +330,6 @@ class LangChainAdapter(HookRegistrationMixin):
         output_schema: dict[str, Any],
         **kwargs: Any,
     ) -> Mapping[str, Any]:
-        from langchain.agents.structured_output import ToolStrategy
-
         instructions = cast(str | None, kwargs.pop("instructions", None))
         if instructions is None:
             instructions = self.active_profile.system
@@ -348,7 +347,9 @@ class LangChainAdapter(HookRegistrationMixin):
             agent = self._create_agent(
                 model=model,
                 tools=tools,
-                response_format=ToolStrategy(output_schema),
+                # Match ordinary typed calls: use native structured output when
+                # the model supports it, with LangChain's tool fallback otherwise.
+                response_format=output_schema,
                 system_prompt=system_prompt,
                 middleware=self._middleware_for_run(
                     model,
@@ -468,6 +469,12 @@ class LangChainAdapter(HookRegistrationMixin):
         finally:
             self._conversation_var.reset(token)
 
+    @staticmethod
+    def estimate_history_tokens(state: Mapping[str, Any]) -> int:
+        from .budget import estimate_history_tokens
+
+        return estimate_history_tokens(state)
+
     @contextmanager
     def approval_ceiling(
         self,
@@ -522,7 +529,9 @@ class LangChainAdapter(HookRegistrationMixin):
         elif "recursion_limit" not in config:
             request_limit = limits.request_limit if limits is not None else 50
             if request_limit is not None:
-                config["recursion_limit"] = request_limit * 3 + 5
+                # Each cycle runs before_model, model, after_model, and tools.
+                # Native request admission, not graph bookkeeping, owns the budget.
+                config["recursion_limit"] = request_limit * 4 + 5
         conversation = self._conversation_var.get()
         with (
             self._history_processor_runner.run_scope(
@@ -732,12 +741,27 @@ class LangChainAdapter(HookRegistrationMixin):
         messages = result.get("messages")
         if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
             return
-        from langchain_core.messages import BaseMessage, message_to_dict
+        from langchain_core.messages import AIMessage, BaseMessage, message_to_dict
+        from kedi.agent_adapter.request_budget import capture_history_usage
 
         if all(isinstance(message, BaseMessage) for message in messages):
             conversation.result_state["langchain_messages"] = [
                 message_to_dict(_langchain_without_cache_control(message)) for message in messages
             ]
+            for index in range(len(messages) - 1, -1, -1):
+                message = messages[index]
+                if isinstance(message, AIMessage):
+                    usage = message.usage_metadata or {}
+                    capture_history_usage(
+                        conversation.result_state,
+                        "langchain_messages",
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                        trailing_messages=conversation.result_state["langchain_messages"][
+                            index + 1 :
+                        ],
+                    )
+                    break
             if isinstance(conversation, AdapterConversationContext):
                 self._history_processor_runner.capture(
                     messages, conversation.result_state["langchain_messages"]
@@ -877,10 +901,14 @@ class LangChainAdapter(HookRegistrationMixin):
 
         limits = CodeModeLimits(**settings.limit_values())
         known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
-        specs = tuple(
-            known_specs.get(tool.name) or _langchain_tool_spec_from_native(tool)
-            for tool in native_tools
-        )
+        specs = []
+        for tool in native_tools:
+            spec = known_specs.get(tool.name)
+            if spec is None:
+                spec = _langchain_tool_spec_from_native(tool)
+            elif spec.json_schema is None:
+                spec = replace(spec, json_schema=_langchain_tool_parameters_schema(tool))
+            specs.append(spec)
         projection = codemode_projection(
             specs,
             limits=limits,

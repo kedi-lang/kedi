@@ -6,11 +6,11 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, Mapping, Sequence
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, hook_config
-from langchain_core.messages import ToolCall, ToolMessage
+from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Overwrite
 from pydantic_ai import UsageLimits
@@ -25,6 +25,7 @@ from kedi.agent_adapter.history_processing import (
     rebase_history_cache_key,
 )
 from kedi.agent_adapter.invocation import InvocationUsage
+from kedi.agent_adapter.tools.dispatch import SequentialDispatchGate
 from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries
 
 
@@ -37,6 +38,7 @@ class LangChainRunState:
     pending_tools: int = 0
     revision: int = 0
     completed_tools: dict[str, ToolMessage] = field(default_factory=dict)
+    dispatch_gate: SequentialDispatchGate = field(default_factory=SequentialDispatchGate)
 
 
 _RUN: ContextVar[LangChainRunState | None] = ContextVar("kedi_langchain_run", default=None)
@@ -209,6 +211,7 @@ class LangChainRunMiddleware(AgentMiddleware):
             state.native_usage.cache_write_tokens += usage.cache_write_tokens
             state.limits.check_tokens(state.native_usage)
             state.limits.check_per_request_input_tokens(usage.input_tokens)
+        _check_model_completion(getattr(response, "result", ()))
         return response
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
@@ -223,7 +226,11 @@ class LangChainRunMiddleware(AgentMiddleware):
         state.pending_tools += 1
         token = _TOOL_CALL.set(request.tool_call)
         try:
-            result = await handler(request)
+            metadata = getattr(getattr(request, "tool", None), "metadata", None) or {}
+            async with state.dispatch_gate.enter(
+                sequential=metadata.get("kedi_sequential") is True
+            ):
+                result = await handler(request)
         finally:
             _TOOL_CALL.reset(token)
             state.pending_tools -= 1
@@ -241,6 +248,27 @@ class LangChainRunMiddleware(AgentMiddleware):
         else:
             state.native_usage.tool_calls += 1
         return result
+
+
+def _check_model_completion(messages: Sequence[Any]) -> None:
+    for message in reversed(messages):
+        if not isinstance(message, AIMessage):
+            continue
+        metadata = message.response_metadata
+        status = metadata.get("status")
+        reason = metadata.get("finish_reason", metadata.get("stop_reason"))
+        if status in {"incomplete", "failed"}:
+            details = metadata.get("incomplete_details")
+            reason = details.get("reason") if isinstance(details, Mapping) else status
+        elif reason not in {"length", "max_tokens", "content_filter"}:
+            return
+        # Only expose a reason code, never arbitrary provider response text.
+        code = (
+            reason
+            if isinstance(reason, str) and len(reason) <= 64 and reason.replace("_", "").isalnum()
+            else "unknown"
+        )
+        raise UnexpectedModelBehavior(f"LangChain model response is incomplete (reason: {code})")
 
 
 def _without_stale_continuation(model: Any, *, reset_previous_response: bool) -> Any:

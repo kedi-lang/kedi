@@ -161,6 +161,8 @@ def test_a2a_agent_card_advertises_the_versioned_structured_contract() -> None:
         "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
         "maxSchemaBytes": float(DEFAULT_A2A_MAX_SCHEMA_BYTES),
         "resultArtifactName": KEDI_STRUCTURED_OUTPUT_ARTIFACT_NAME,
+        "resultEncodings": ["json-utf8", "protobuf-value"],
+        "schemaEncodings": ["json-utf8", "protobuf-value"],
     }
 
 

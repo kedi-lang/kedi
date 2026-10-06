@@ -412,6 +412,10 @@ def _wrap_imported_procedure(
         return imported_rt._invoke_procedure(fn, [kwargs[param] for param in params])
 
     wrapper = self.rt.executor.create_dynamic_function(name, params, _body, defaults)
+    retry_policy = getattr(fn, "__kedi_tool_retry_policy__", None)
+    if retry_policy is not None:
+        # Preserve definition-site exception classes, including across re-exports.
+        setattr(wrapper, "__kedi_tool_retry_policy__", retry_policy)
     metadata = get_procedure_metadata(fn)
     if metadata is not None:
         setattr(wrapper, "__signature__", metadata.introspection_signature())

@@ -20,6 +20,8 @@ def _log(message: dict[str, Any]) -> None:
 
 
 _log({"method": "process/cwd", "cwd": os.getcwd()})
+pending = {}
+sessions = 0
 
 
 for line in sys.stdin:
@@ -31,10 +33,27 @@ for line in sys.stdin:
     if method == "initialize":
         _send({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": 1}})
     elif method == "session/new":
-        _send({"jsonrpc": "2.0", "id": request_id, "result": {"sessionId": "session-1"}})
+        sessions += 1
+        _send({"jsonrpc": "2.0", "id": request_id, "result": {"sessionId": f"session-{sessions}"}})
     elif method == "session/prompt":
         session_id = params["sessionId"]
         prompt = params["prompt"][0]["text"]
+        if prompt == "wait":
+            pending[session_id] = request_id
+            _send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "waiting"},
+                        },
+                    },
+                }
+            )
+            continue
         _send(
             {
                 "jsonrpc": "2.0",
@@ -61,7 +80,11 @@ for line in sys.stdin:
                 },
             }
         )
-        _send({"jsonrpc": "2.0", "id": request_id, "result": {}})
+        _send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+    elif method == "session/cancel":
+        pending_id = pending.pop(params["sessionId"], None)
+        if pending_id is not None:
+            _send({"jsonrpc": "2.0", "id": pending_id, "result": {"stopReason": "cancelled"}})
     elif method == "session/close":
         _send({"jsonrpc": "2.0", "id": request_id, "result": {}})
     else:

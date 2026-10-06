@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from google.protobuf import struct_pb2
-from google.protobuf.json_format import ParseDict
+from google.protobuf.json_format import MessageToDict, ParseDict
 from starlette.authentication import AuthenticationBackend
 
 from kedi.agent_adapter.subagents.runs import safe_subagent_error_message
@@ -26,7 +26,9 @@ from .protocol import (
     KEDI_STRUCTURED_OUTPUT_EXTENSION_URI,
     KEDI_STRUCTURED_OUTPUT_VERSION,
     KEDI_TEXT_ARTIFACT_NAME,
+    encode_structured_json,
     response_size,
+    structured_output_encoding,
     structured_output_schema,
 )
 from .runtime import A2AServedProgram
@@ -163,6 +165,7 @@ class _KediAgentExecutor:
         if context.task_id is None or context.context_id is None:
             raise RuntimeError("A2A SDK did not assign task and context identifiers")
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        completion_enqueued = False
         admission = (
             self._state.expect_admission(context.task_id) if self._state is not None else None
         )
@@ -188,8 +191,10 @@ class _KediAgentExecutor:
             raise
         try:
             schema = _requested_output_schema(context)
+            encoding = structured_output_encoding(context.metadata) if schema is not None else None
 
             async def publish_result(result: Any) -> None:
+                nonlocal completion_enqueued
                 if schema is None:
                     await updater.add_artifact(
                         [Part(text=str(result))],
@@ -197,15 +202,27 @@ class _KediAgentExecutor:
                         last_chunk=True,
                     )
                 else:
-                    value = getattr(struct_pb2, "Value")()
-                    ParseDict(result, value)
+                    if encoding == "json-utf8":
+                        part = Part(
+                            raw=encode_structured_json(result).encode("utf-8"),
+                            media_type="application/json",
+                        )
+                    else:
+                        value = getattr(struct_pb2, "Value")()
+                        ParseDict(result, value)
+                        if MessageToDict(value) != result:
+                            raise ValueError(
+                                "Structured result needs json-utf8 encoding to preserve numbers"
+                            )
+                        part = Part(data=value, media_type="application/json")
                     await updater.add_artifact(
-                        [Part(data=value, media_type="application/json")],
+                        [part],
                         name=KEDI_STRUCTURED_OUTPUT_ARTIFACT_NAME,
                         last_chunk=True,
                         extensions=[KEDI_STRUCTURED_OUTPUT_EXTENSION_URI],
                     )
                 await updater.complete()
+                completion_enqueued = True
 
             if self._state is None:
                 result = await self._program.invoke(
@@ -243,6 +260,10 @@ class _KediAgentExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if completion_enqueued:
+                # The SDK consumer handles a rejected completion; this updater
+                # cannot emit a second terminal event after complete().
+                raise
             message = updater.new_agent_message([Part(text=_safe_failure_message(exc))])
             await updater.failed(message)
 
@@ -320,6 +341,8 @@ def _agent_card(
             "schemaDialect": "https://json-schema.org/draft/2020-12/schema",
             "maxSchemaBytes": DEFAULT_A2A_MAX_SCHEMA_BYTES,
             "resultArtifactName": KEDI_STRUCTURED_OUTPUT_ARTIFACT_NAME,
+            "resultEncodings": ["json-utf8", "protobuf-value"],
+            "schemaEncodings": ["json-utf8", "protobuf-value"],
         },
         extension_params,
     )

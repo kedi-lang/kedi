@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -376,10 +377,11 @@ def test_history_archive_capability_rotates_cache_key_once_per_checkpoint(
         model_request_parameters=ModelRequestParameters(),
     )
     with artifact_admission_scope(manager=manager, policy=_policy(tmp_path)):
-        first = asyncio.run(capability.before_model_request(cast("RunContext[Any]", None), request))
+        ctx = cast("RunContext[Any]", SimpleNamespace(messages=list(messages)))
+        first = asyncio.run(capability.before_model_request(ctx, request))
         assert first.model_settings is not None
         first_key = cast("dict[str, Any]", first.model_settings)["openai_prompt_cache_key"]
-        second = asyncio.run(capability.before_model_request(cast("RunContext[Any]", None), first))
+        second = asyncio.run(capability.before_model_request(ctx, first))
 
     assert isinstance(first_key, str)
     assert first_key.startswith("stable_h")

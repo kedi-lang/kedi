@@ -241,6 +241,8 @@ _KNOWN_LANGCHAIN_CONTENT_TYPES = frozenset(
         "audio",
         "citation",
         "file",
+        "function_call",
+        "function_call_output",
         "image",
         "input_audio",
         "input_file",
@@ -295,7 +297,15 @@ def _langchain_content_lifecycle(
             continue
         mapping = cast("Mapping[object, object]", block)
         kind = mapping.get("type")
-        if kind in {"tool_call", "server_tool_call", "tool_use"}:
+        if kind in {"function_call", "function_call_output"}:
+            # Responses item IDs (fc_...) are not the call IDs used by tool results.
+            identifier = mapping.get("call_id")
+            if isinstance(identifier, str) and identifier:
+                target = opened if kind == "function_call" else closed
+                target.append(identifier)
+            else:
+                malformed = True
+        elif kind in {"tool_call", "server_tool_call", "tool_use"}:
             identifier = mapping.get("id") or mapping.get("tool_call_id")
             if identifier:
                 opened.append(str(identifier))

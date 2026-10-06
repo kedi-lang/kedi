@@ -1,0 +1,44 @@
+> import: decisions:
+  BooleanCriteria
+  ChoiceCriteria
+  Probability
+  Rubric
+
+```
+from kedi import Constraints
+```
+
+~Delivery(
+  damaged: Annotated[
+    bool,
+    `BooleanCriteria(true="The evidence explicitly says the delivery arrived damaged.", false="The delivery was undamaged or its condition is unknown.")`
+  ],
+  damage_probability: Annotated[
+    Probability,
+    `BooleanCriteria(true="The evidence explicitly says the delivery arrived damaged.", false="The delivery was undamaged or its condition is unknown.")`
+  ]
+)
+
+~Assessment(
+  delivery: Delivery,
+  category: Annotated[
+    Literal["billing", "technical"],
+    `ChoiceCriteria({"billing": "The customer reports an incorrect charge or invoice.", "technical": "The customer reports a software crash or malfunction."})`
+  ],
+  quality: Annotated[
+    float,
+    "Score only the proposed arithmetic answer against the reference.",
+    `Constraints(ge=0, le=2)`,
+    `Rubric(["Contradicts the reference", "Partially correct", "Matches the reference"])`
+  ]
+)
+
+>> Given <evidence>, the assessment is [review: Assessment].
+= ```
+return {
+    "damaged": review.delivery.damaged,
+    "probability_positive": review.delivery.damage_probability > 0.85,
+    "category": review.category,
+    "accepted": review.quality >= 1.5,
+}
+```

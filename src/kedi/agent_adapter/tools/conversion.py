@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import inspect
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path
 from typing import (
     Any,
     Callable,
     Mapping,
+    get_type_hints,
 )
 
-from pydantic import TypeAdapter
+from pydantic import (
+    PydanticInvalidForJsonSchema,
+    PydanticSchemaGenerationError,
+    PydanticUndefinedAnnotation,
+    TypeAdapter,
+)
 
 from kedi.agent_adapter.approvals.policy import ToolRisk
 from kedi.agent_adapter.tools.retry import (
@@ -108,13 +114,40 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
         name=name,
         description=description,
         return_schema=(
-            TypeAdapter(logical_return).json_schema() if logical_return is not None else None
+            TypeAdapter(logical_return).json_schema()
+            if logical_return is not None
+            else _python_callable_return_schema(callable_body)
         ),
         metadata=metadata,
         risk=risk,
         argument_validator=_python_callable_argument_validator(tool_fn),
         retry_policy=retry_policy,
     )
+
+
+def _python_callable_return_schema(fn: Callable[..., Any]) -> dict[str, Any] | None:
+    annotation = inspect.signature(fn).return_annotation
+    if annotation is inspect.Signature.empty:
+        return None
+    target = inspect.unwrap(fn)
+    while isinstance(target, partial):
+        target = inspect.unwrap(target.func)
+    if not inspect.isroutine(target):
+        target = target.__call__
+    try:
+        annotation = get_type_hints(target, include_extras=True).get("return", annotation)
+    except (NameError, TypeError):
+        if isinstance(annotation, str):
+            return None
+    try:
+        return TypeAdapter(annotation).json_schema()
+    except (
+        PydanticSchemaGenerationError,
+        PydanticInvalidForJsonSchema,
+        PydanticUndefinedAnnotation,
+    ):
+        # Arbitrary Python results remain usable when they have no JSON schema.
+        return None
 
 
 def _procedure_retry_policy(rt: KediRuntime, proc: ProcedureDef) -> ToolRetryPolicy:

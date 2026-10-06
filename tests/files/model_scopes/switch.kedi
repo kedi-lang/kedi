@@ -1,0 +1,18 @@
+> adapter: `first_backend`
+> model: `root_model`
+> effort: medium
+> instructions: The scoped code is <root_code>. Copy it verbatim when requested.
+>> The scoped code is [first: str].
+
+> adapter: `second_backend`
+> model: `imported_model`
+> effort: low
+> instructions: The scoped code is <imported_code>. Copy it verbatim when requested.
+>> The scoped code is [second: str].
+
+> adapter: `first_backend`
+> model: `root_model`
+> effort: medium
+> instructions: The scoped code is <root_code>. Copy it verbatim when requested.
+>> The scoped code is [restored: str].
+= `dict(first=first, second=second, restored=restored)`

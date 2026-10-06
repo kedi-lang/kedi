@@ -20,7 +20,7 @@ from kedi.lang.ast import (
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import dspy_config as dspy_config_module
 from kedi.optimization.services.dspy_config import (
-    AdaptiveJSONAdapter,
+    JSONAdapter,
     DSPyConfigurationService,
 )
 from kedi.optimization.services.dspy_example_formatter import DSPyExampleFormatter
@@ -105,50 +105,22 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     DSPyConfigurationService(OptimizerConfig(optimizer_model="openai/gpt-4o")).configure_main_lm()
 
 
-def test_adaptive_json_adapter_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = AdaptiveJSONAdapter()
-    lm = SimpleNamespace(model="model-a")
-    signature = object()
+def test_json_adapter_selects_fallback_before_model_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dspy.adapters.chat_adapter import ChatAdapter
+
+    adapter = JSONAdapter()
+    lm = SimpleNamespace(supported_params=["response_format"], supports_response_schema=False)
+    signature = dspy_config_module.dspy.Signature("question -> answer")
     calls: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(
-        adapter,
-        "_json_adapter_call_common",
-        lambda *args, **kwargs: [{"ok": True}],
-    )
-    assert adapter(lm, {}, signature, [], {}) == [{"ok": True}]
+    def fail_request(self: Any, lm: Any, lm_kwargs: dict[str, Any], *args: Any) -> Any:
+        calls.append(dict(lm_kwargs))
+        raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(adapter, "_json_adapter_call_common", lambda *args, **kwargs: [])
-    monkeypatch.setattr(
-        dspy_config_module.ChatAdapter,
-        "__call__",
-        lambda self, lm, lm_kwargs, signature, demos, inputs: (
-            calls.append(dict(lm_kwargs)) or [{"fallback": True}]
-        ),
-    )
-    AdaptiveJSONAdapter._failed_models.add("model-a")
-    assert adapter(lm, {}, signature, [], {}) == [{"fallback": True}]
-    assert calls[-1]["response_format"] == {"type": "json_object"}
-
-    monkeypatch.setattr(
-        dspy_config_module,
-        "_get_structured_outputs_response_format",
-        lambda *args: {"type": "schema"},
-    )
-    lm2 = SimpleNamespace(model="model-b")
-    assert adapter(lm2, {}, signature, [], {}) == [{"fallback": True}]
-    assert calls[-1]["response_format"] == {"type": "schema"}
-
-    def raise_structured(*_: Any) -> object:
-        raise RuntimeError("no structured")
-
-    monkeypatch.setattr(
-        dspy_config_module, "_get_structured_outputs_response_format", raise_structured
-    )
-    lm3 = SimpleNamespace(model="model-c")
-    assert adapter(lm3, {}, signature, [], {}) == [{"fallback": True}]
-    assert "model-c" in AdaptiveJSONAdapter._failed_models
-    assert calls[-1]["response_format"] == {"type": "json_object"}
+    monkeypatch.setattr(ChatAdapter, "__call__", fail_request)
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        adapter(lm, {}, signature, [], {"question": "test"})
+    assert calls == [{"response_format": {"type": "json_object"}}]
 
 
 def test_example_formatter_span_slow_paths(monkeypatch: pytest.MonkeyPatch) -> None:

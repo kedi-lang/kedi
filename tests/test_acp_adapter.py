@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import io
+import os
+import signal
 import shlex
 import sys
+from threading import Event, current_thread
+from types import SimpleNamespace
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +27,7 @@ from kedi.agent_adapter.events import AgentMessageEvent, AgentRunStateEvent, obs
 from kedi.agent_adapter.registry import adapter_capabilities, build_adapter
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import ACP_AGENT_SETTING_KEYS, AgentProfile
+from kedi.agent_profile.errors import AgentProfileOverrideUnsupported, AgentToolOverrideUnsupported
 from kedi.app import _build_runtime_adapter
 
 FAKE_ACP_AGENT = Path(__file__).parent / "files" / "fake_acp_agent.py"
@@ -46,6 +52,9 @@ class FakeACPClient:
 
 
 class BrokenStdin:
+    def close(self) -> None:
+        pass
+
     def write(self, line: str) -> None:
         raise BrokenPipeError
 
@@ -55,9 +64,10 @@ class BrokenStdin:
 
 class FakeProcess:
     def __init__(self) -> None:
+        self.pid = 1234
         self.stdin: Any = BrokenStdin()
-        self.stdout: Any = []
-        self.stderr: Any = []
+        self.stdout: Any = io.StringIO()
+        self.stderr: Any = io.StringIO()
         self.terminated = False
         self.killed = False
 
@@ -272,12 +282,62 @@ def test_acp_adapter_structured_output_is_explicitly_unsupported() -> None:
         asyncio.run(adapter.produce("template", output_schema={"answer": str}))
 
 
-def test_acp_adapter_accepts_but_ignores_registered_tools() -> None:
+def test_acp_adapter_rejects_registered_tools() -> None:
     adapter = ACPAdapter(client=cast(Any, FakeACPClient()))
 
-    adapter.register_tool(ToolSpec(fn=lambda: "ok", name="noop"))
-    with adapter.tool_scope((ToolSpec(fn=lambda: "scoped", name="scoped"),)):
+    with pytest.raises(AgentToolOverrideUnsupported):
+        adapter.register_tool(ToolSpec(fn=lambda: "ok", name="noop"))
+    with pytest.raises(AgentToolOverrideUnsupported):
+        adapter.tool_scope((ToolSpec(fn=lambda: "scoped", name="scoped"),))
+    with adapter.tool_scope():
         assert adapter.scoped_tools == ()
+
+
+@pytest.mark.parametrize("profile", [AgentProfile(model="unused"), AgentProfile(effort="high")])
+def test_acp_adapter_rejects_unsupported_model_configuration(profile):
+    client = FakeACPClient()
+    adapter = ACPAdapter(client=cast(Any, client))
+    with pytest.raises(AgentProfileOverrideUnsupported, match="model or effort"):
+        with adapter.profile_override(profile):
+            pytest.fail("Unsupported profile was accepted")
+    assert not client.sync_calls and not client.async_calls
+
+
+@pytest.mark.parametrize("field", ["mcp_servers", "tools", "tool_bindings"])
+def test_acp_profile_rejects_local_tool_projection(field):
+    adapter = ACPAdapter(client=cast(Any, FakeACPClient()))
+    from kedi.agent_profile import McpServerSpec
+
+    values = {
+        "mcp_servers": (McpServerSpec(command="unused"),),
+        "tools": ("noop",),
+        "tool_bindings": {"noop": ToolSpec(fn=lambda: "ok", name="noop")},
+    }
+    profile = AgentProfile(**{field: values[field]})
+    error = (
+        AgentProfileOverrideUnsupported if field == "mcp_servers" else AgentToolOverrideUnsupported
+    )
+    with pytest.raises(error), adapter.profile_override(profile):
+        pytest.fail("Unsupported tool projection was accepted")
+
+
+@pytest.mark.parametrize(
+    "reason", [None, "max_tokens", "max_turn_requests", "refusal", "cancelled", "unknown"]
+)
+def test_acp_partial_answer_is_not_reported_as_completed(monkeypatch, reason):
+    client = ACPClient(("fake",))
+    monkeypatch.setattr(client, "_new_session", lambda cwd: "s")
+
+    def request(method, params, **kwargs):
+        if method == "session/prompt":
+            client._sessions["s"].messages.append("partial")
+            return {"stopReason": reason}
+        return {}
+
+    monkeypatch.setattr(client, "request", request)
+    with pytest.raises(ACPProtocolError, match="did not complete"):
+        client.run_prompt_sync(prompt="test", cwd="/tmp", timeout=1)
+    assert not client._sessions
 
 
 def test_acp_client_runs_prompt_through_stdio_agent(tmp_path: Path) -> None:
@@ -354,8 +414,91 @@ def test_acp_client_close_without_process_is_safe() -> None:
     client = ACPClient(("fake",))
 
     client.close()
+    client.close()
 
     assert client._closed
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_acp_close_windows_process_without_pipes(monkeypatch, running):
+    from kedi.agent_adapter.adapters import acp
+
+    client = ACPClient(("fake",))
+    process = FakeProcess()
+    process.stdin = process.stdout = process.stderr = None
+    monkeypatch.setattr(process, "poll", lambda: None if running else 0)
+    monkeypatch.setattr(acp, "os", SimpleNamespace(name="nt"))
+    client._process = process
+    client._reader = current_thread()
+    client.close()
+    assert process.terminated is running
+    assert process.killed is running
+
+
+@pytest.mark.parametrize("method", ["initialize", "session/prompt"])
+def test_acp_expired_deadline_without_session_does_not_cancel(monkeypatch, method):
+    from kedi.agent_adapter.adapters import acp
+
+    client = ACPClient(("fake",))
+    messages = []
+    clock = iter((0, 2))
+    monkeypatch.setattr(client, "_ensure_started", lambda **kwargs: None)
+    monkeypatch.setattr(client, "_write", messages.append)
+    monkeypatch.setattr(acp, "monotonic", lambda: next(clock))
+    with pytest.raises(TimeoutError):
+        client.request(method, timeout=1)
+    assert [m["method"] for m in messages] == [method]
+    assert not client._pending
+
+
+@pytest.mark.parametrize("drain_error", [TimeoutError, ACPDisconnected])
+def test_acp_cancel_closes_transport_only_when_handshake_stalls(monkeypatch, drain_error):
+    from kedi.agent_adapter.adapters import acp
+
+    class FailedHandshake(Future):
+        def result(self, timeout=None):
+            assert timeout == 5
+            raise drain_error("handshake failed")
+
+    client = ACPClient(("fake",))
+    cancelled = Event()
+    cancelled.set()
+    messages = []
+    monkeypatch.setattr(client, "_ensure_started", lambda **kwargs: None)
+    monkeypatch.setattr(client, "_write", messages.append)
+    monkeypatch.setattr(acp, "Future", FailedHandshake)
+    with pytest.raises(acp.FutureCancelledError):
+        client.request("session/prompt", {"sessionId": "owned"}, _cancelled=cancelled)
+    assert [m["method"] for m in messages] == ["session/prompt", "session/cancel"]
+    assert messages[-1]["params"] == {"sessionId": "owned"}
+    assert client._closed is (drain_error is TimeoutError)
+    assert not client._pending
+
+
+@pytest.mark.asyncio
+async def test_acp_repeated_cancel_drains_worker_failure(monkeypatch):
+    client = ACPClient(("fake",))
+    entered, release = Event(), Event()
+
+    def prompt(**kwargs):
+        entered.set()
+        assert release.wait(5)
+        assert kwargs["_cancelled"].is_set()
+        raise ACPDisconnected("worker stopped")
+
+    monkeypatch.setattr(client, "run_prompt_sync", prompt)
+    task = asyncio.create_task(client.run_prompt(prompt="wait", cwd="/tmp", timeout=1))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
 
 
 def test_acp_client_close_fails_pending_requests() -> None:
@@ -408,7 +551,7 @@ def test_acp_client_preserves_a_replaced_session_during_prompt_cleanup(
         del timeout
         if method == "session/prompt":
             client._sessions["same"] = replacement
-        return {}
+        return {"stopReason": "end_turn"}
 
     monkeypatch.setattr(client, "request", request)
 
@@ -445,15 +588,117 @@ def test_acp_client_running_uninitialized_process_initializes() -> None:
     assert called == [True]
 
 
-def test_acp_client_close_terminates_and_kills_running_process() -> None:
+def test_acp_client_close_terminates_and_kills_running_process(monkeypatch) -> None:
     client = ACPClient(("fake",))
     process = FakeProcess()
     client._process = cast(Any, process)
+
+    def kill_group(pid, sig):
+        assert pid == process.pid
+        if sig == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+
+    if os.name == "posix":
+        monkeypatch.setattr(os, "killpg", kill_group)
 
     client.close()
 
     assert process.terminated
     assert process.killed
+
+
+@pytest.mark.parametrize("cancel", [False, True], ids=["timeout", "cancel"])
+def test_acp_cancellation_notifies_and_drains_only_owned_session(tmp_path, cancel):
+    log_path = tmp_path / "acp.jsonl"
+    client = ACPClient(
+        (sys.executable, str(FAKE_ACP_AGENT)),
+        env={"KEDI_ACP_FAKE_LOG": str(log_path)},
+        request_timeout=2,
+    )
+
+    async def scenario():
+        blocked = asyncio.create_task(
+            client.run_prompt(prompt="wait", cwd=str(tmp_path), timeout=2 if cancel else 0.1)
+        )
+        async with asyncio.timeout(3):
+            while not any(state.messages for state in client._sessions.values()):
+                await asyncio.sleep(0.005)
+        # A second call uses its own session even while the first is active.
+        assert (
+            await client.run_prompt(prompt="sibling", cwd=str(tmp_path), timeout=1)
+            == "echo:sibling"
+        )
+        if cancel:
+            blocked.cancel()
+        with pytest.raises(asyncio.CancelledError if cancel else TimeoutError):
+            await blocked
+        assert not client._sessions
+        assert not client._pending
+        assert await client.run_prompt(prompt="after", cwd=str(tmp_path), timeout=1) == "echo:after"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        client.close()
+    messages = _messages(log_path)
+    cancellations = [m for m in messages if m.get("method") == "session/cancel"]
+    assert len(cancellations) == 1
+    assert "id" not in cancellations[0]
+    assert not client._reader.is_alive()
+    assert not client._stderr_reader.is_alive()
+    assert client._process.stdout.closed
+    assert client._process.stderr.closed
+
+
+def test_acp_inbound_request_cannot_resolve_outbound_request(monkeypatch):
+    client = ACPClient(("fake",))
+    pending = Future()
+    client._pending[1] = pending
+    replies = []
+    monkeypatch.setattr(client, "_write", replies.append)
+    client._handle_message(
+        {"jsonrpc": "2.0", "id": 1, "method": "session/request_permission", "params": {}}
+    )
+    assert not pending.done()
+    assert replies == [{"jsonrpc": "2.0", "id": 1, "result": {"outcome": {"outcome": "cancelled"}}}]
+    client._handle_message(
+        {"jsonrpc": "2.0", "id": "remote", "method": "fs/read_text_file", "params": {}}
+    )
+    assert replies[-1]["error"]["code"] == -32601
+    assert not pending.done()
+
+
+def test_acp_cancel_before_session_setup_does_not_submit_prompt(monkeypatch):
+    from threading import Event
+
+    client = ACPClient(("fake",))
+    entered, release = Event(), Event()
+    calls = []
+
+    def new_session(cwd):
+        entered.set()
+        assert release.wait(2)
+        return "new"
+
+    monkeypatch.setattr(client, "_new_session", new_session)
+    monkeypatch.setattr(client, "request", lambda method, *args, **kwargs: calls.append(method))
+
+    async def scenario():
+        task = asyncio.create_task(client.run_prompt(prompt="unused", cwd="/tmp", timeout=1))
+        async with asyncio.timeout(2):
+            while not entered.is_set():
+                await asyncio.sleep(0.005)
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not client._sessions
+
+    asyncio.run(scenario())
+    assert calls == ["session/close"]
 
 
 def test_acp_client_message_routing_edge_paths() -> None:

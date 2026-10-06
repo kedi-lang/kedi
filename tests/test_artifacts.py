@@ -187,9 +187,16 @@ def test_artifact_contract_routes_simple_and_complex_inspection() -> None:
     assert "before a ref appears in the conversation" in instructions
     assert "task_id, or context_id is not an artifact ref_id" in instructions
     assert "release is not required before answering" in instructions
+    assert "pattern searches literal text without paging" in instructions
+    assert "targeted search instead of paging from the beginning" in instructions
+    assert "when sequential coverage is needed" in instructions
+    assert "query_artifact" not in instructions
+    assert "Use query_artifact" in artifact_instructions(query_artifact=True)
     assert isinstance(usage_hint, str)
     assert "Copy this exact ref_id" in usage_hint
-    assert "read_artifact for a known literal or bounded inspection" in usage_hint
+    assert "read_artifact for a known literal (pattern)" in usage_hint
+    assert "if available, query_artifact" in usage_hint
+    assert "release is optional" in usage_hint
     assert "filtering, aggregation, joins, or multi-artifact transformations" in usage_hint
 
 

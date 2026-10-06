@@ -1,0 +1,10 @@
+> model: `imported_model`
+> effort: low
+> instructions: The scoped code is <imported_code>. Copy it verbatim when requested.
+
+@origin() -> str:
+  >> The scoped code is [code: str].
+  = `code`
+
+> export:
+  origin

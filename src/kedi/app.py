@@ -38,7 +38,7 @@ def _build_runtime_adapter(
     """Create the adapter instance used for eval/test/program execution."""
     model = model or _DEFAULT_ADAPTER_MODELS.get(adapter)
     if adapter == "pydantic":
-        return PydanticAdapter(model=model)
+        return PydanticAdapter(model=model, defer_model_check=True)
     if adapter == "dspy":
         from .agent_adapter.adapters import DSPyAdapter
 

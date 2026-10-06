@@ -1,0 +1,5 @@
+> use: record_delivery
+> approval: allow
+>> Record the complete supplied delivery code <delivery_code> with record_delivery exactly once.
+Do not look up other information. No output capture is requested.
+= done

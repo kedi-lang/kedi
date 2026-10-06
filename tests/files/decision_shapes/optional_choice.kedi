@@ -1,0 +1,6 @@
+```
+from typing import Annotated, Literal
+```
+
+>> The team responsible for <evidence> is [team: Annotated[Literal["billing", "access"] | None, "Choose billing for charges or invoices, access for sign-in problems, and None when neither team applies."]].
+= `dict(team=team)`

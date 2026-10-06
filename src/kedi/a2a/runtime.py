@@ -81,6 +81,7 @@ class A2AServedProgram:
         owns_adapter: bool = True,
         source_fingerprint: str = "",
         model_identity: str = "",
+        session_tools: Callable[[ArtifactManager], tuple[Any, ...]] | None = None,
     ) -> None:
         if max_concurrency < 1 or max_pending_tasks < 1 or max_sessions < 1:
             raise ValueError("A2A concurrency, pending-task, and session limits must be positive")
@@ -97,6 +98,7 @@ class A2AServedProgram:
         self.adapter = adapter
         self._execution_adapter = cast(SupportsSubagentExecution, adapter)
         self.tools = tools
+        self._session_tools = session_tools
         self.max_input_chars = max_input_chars
         self.max_response_bytes = max_response_bytes
         self._owns_adapter = owns_adapter
@@ -254,7 +256,7 @@ class A2AServedProgram:
                 surface = AgentSurface(
                     agent=self.adapter,
                     profile=self.profile,
-                    tool_specs=self.tools,
+                    tool_specs=self._tools_for_session(artifacts),
                     conversation_state=conversation,
                     artifact_manager=artifacts,
                 )
@@ -370,6 +372,10 @@ class A2AServedProgram:
             evicted.close()
         return session
 
+    def _tools_for_session(self, artifacts: ArtifactManager) -> tuple[Any, ...]:
+        # Tool closures must share the session's store, including after hydration.
+        return self._session_tools(artifacts) if self._session_tools is not None else self.tools
+
     def _new_session(self) -> _ServedSession:
         artifacts = ArtifactManager(
             durable_root=(self._persistence.artifact_root if self._persistence else None)
@@ -377,13 +383,19 @@ class A2AServedProgram:
         conversation = (
             ConversationState(artifacts=artifacts) if self.profile.history is True else None
         )
-        surface = AgentSurface(
-            agent=self.adapter,
-            profile=self.profile,
-            tool_specs=self.tools,
-            conversation_state=conversation,
-            artifact_manager=artifacts,
-        )
+        try:
+            surface = AgentSurface(
+                agent=self.adapter,
+                profile=self.profile,
+                tool_specs=self._tools_for_session(artifacts),
+                conversation_state=conversation,
+                artifact_manager=artifacts,
+            )
+        except BaseException:
+            if conversation is not None:
+                conversation.close()
+            artifacts.close()
+            raise
         return _ServedSession(
             surface=surface,
             lock=asyncio.Lock(),
@@ -479,6 +491,9 @@ def prepare_a2a_program(
             owns_adapter=owns_adapter,
             source_fingerprint=source_fingerprint,
             model_identity=selected_model,
+            session_tools=lambda artifacts: runtime._resolve_agent_tool_specs(
+                profile, concrete_adapter, artifact_manager=artifacts
+            ),
         )
     except BaseException as exc:
         _cleanup_failed_prepare(

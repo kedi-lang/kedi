@@ -1,0 +1,21 @@
+> artifacts:
+  enabled: false
+
+~Receipt(scope: Literal["original", "revised"], receipt: str)
+
+> profile: worker:
+  > output: Receipt
+  > use:
+    checkpoint
+    read_checkpoint
+  > instructions:
+    Call checkpoint exactly once for an original task and return its private receipt.
+    After a scope change or recovery, use read_checkpoint instead; never repeat checkpoint.
+    Return the latest requested scope and the bare receipt without any extra text.
+
+> profile: manager:
+  > subagent: worker
+  > max_agents: 2
+
+> use: manager
+= ready

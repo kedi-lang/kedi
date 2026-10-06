@@ -34,10 +34,11 @@ class ArtifactRef(BaseModel, Generic[T]):
     sensitive: bool = False
     usage_hint: str = (
         "Copy this exact ref_id into artifact tools; never use a source or tool name as an ID. "
-        "Use read_artifact for a known literal or bounded inspection; use run_artifact_code for "
-        "filtering, aggregation, joins, or multi-artifact transformations. A read with "
-        "complete=false is partial; follow its continuation only when more content is relevant. "
-        "Release when done."
+        "Use read_artifact for a known literal (pattern) or bounded inspection; if available, "
+        "query_artifact searches keywords. Locate relevant sections before paging. Use "
+        "run_artifact_code for filtering, aggregation, joins, or multi-artifact transformations. "
+        "A read with complete=false is partial; follow its continuation when sequential coverage "
+        "is needed. Answer once evidence is sufficient; release is optional."
     )
 
 

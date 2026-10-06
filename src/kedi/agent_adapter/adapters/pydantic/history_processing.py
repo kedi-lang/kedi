@@ -48,12 +48,12 @@ class PydanticHistoryProcessingCapability(AbstractCapability[Any]):
         ctx: RunContext[Any],
         request_context: ModelRequestContext,
     ) -> ModelRequestContext:
-        del ctx
         outcome = await self.runner.process(
             request_context.messages,
             model_id=_model_id(request_context),
         )
-        request_context.messages = outcome.messages
+        request_context.messages = outcome.messages.copy()
+        ctx.messages[:] = outcome.messages
 
         directive = self.runner.prepare_transport()
         if not directive.rewritten:

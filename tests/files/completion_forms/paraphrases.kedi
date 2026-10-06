@@ -1,0 +1,6 @@
+> loop [description]: `descriptions`:
+  >> This is the complete shipment description <description>.
+  Count all units and subtract damaged units; the usable quantity is [usable: int].
+> map:
+  `record_result(description, usable)`
+= done

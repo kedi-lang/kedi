@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,20 +72,57 @@ class A2ARemoteTaskSnapshot:
 
 
 def structured_output_request(schema: dict[str, Any]) -> dict[str, Any]:
-    return {
-        KEDI_STRUCTURED_OUTPUT_METADATA_KEY: {
-            "version": KEDI_STRUCTURED_OUTPUT_VERSION,
-            "schema": schema,
-        }
+    encoded = encode_structured_json(schema)
+    request: dict[str, Any] = {
+        "version": KEDI_STRUCTURED_OUTPUT_VERSION,
+        "schemaJson": encoded,
+        "resultEncoding": "json-utf8",
     }
+    # Legacy peers read Struct numbers as doubles. Never send them rounded constraints.
+    if json.loads(encoded, parse_int=float) == schema:
+        request["schema"] = schema
+    return {KEDI_STRUCTURED_OUTPUT_METADATA_KEY: request}
 
 
 def structured_output_schema(metadata: dict[str, Any]) -> dict[str, Any] | None:
     value = metadata.get(KEDI_STRUCTURED_OUTPUT_METADATA_KEY)
     if not isinstance(value, dict) or value.get("version") != KEDI_STRUCTURED_OUTPUT_VERSION:
         return None
-    schema = value.get("schema")
+    if "schemaJson" in value:
+        encoded = value["schemaJson"]
+        if not isinstance(encoded, str):
+            raise ValueError("Kedi structured output schemaJson must be a JSON string")
+        if len(encoded.encode("utf-8")) > DEFAULT_A2A_MAX_SCHEMA_BYTES:
+            raise ValueError("Kedi structured output schema exceeds its byte limit")
+        schema = decode_structured_json(encoded)
+    else:
+        schema = value.get("schema")
     return schema if isinstance(schema, dict) else None
+
+
+def structured_output_encoding(metadata: dict[str, Any]) -> str:
+    value = metadata.get(KEDI_STRUCTURED_OUTPUT_METADATA_KEY, {})
+    encoding = value.get("resultEncoding", "protobuf-value")
+    if encoding not in ("json-utf8", "protobuf-value"):
+        raise ValueError("Unsupported Kedi structured output resultEncoding")
+    return encoding
+
+
+def encode_structured_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def decode_structured_json(value: str | bytes) -> Any:
+    def reject_constant(constant: str) -> Any:
+        raise ValueError(f"Non-finite JSON number: {constant}")
+
+    def finite_float(number: str) -> float:
+        result = float(number)
+        if not math.isfinite(result):
+            raise ValueError("JSON number exceeds finite float range")
+        return result
+
+    return json.loads(value, parse_constant=reject_constant, parse_float=finite_float)
 
 
 def response_size(value: Any) -> int:

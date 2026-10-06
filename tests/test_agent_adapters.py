@@ -1089,14 +1089,6 @@ def test_langchain_completed_message_text_handles_scalar_and_empty_content() -> 
 def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_langchain_modules(monkeypatch)
 
-    class FakeToolStrategy:
-        def __init__(self, schema: dict[str, Any]) -> None:
-            self.schema = schema
-
-    structured_output = ModuleType("langchain.agents.structured_output")
-    setattr(structured_output, "ToolStrategy", FakeToolStrategy)
-    monkeypatch.setitem(sys.modules, "langchain.agents.structured_output", structured_output)
-
     seen: dict[str, Any] = {}
 
     class FakeAgent:
@@ -1151,8 +1143,8 @@ def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) 
     assert result["final_result"] == {"value": 9}
     assert "recursion_limit" not in seen["payload"]
     assert "usage_limits" not in seen["payload"]
-    assert seen["config"]["recursion_limit"] == 17
-    assert isinstance(seen["agent_kwargs"]["response_format"], FakeToolStrategy)
+    assert seen["config"]["recursion_limit"] == 21
+    assert seen["agent_kwargs"]["response_format"] == {"type": "object"}
     assert seen["agent_kwargs"]["system_prompt"] == "child system"
     assert adapter.telemetry_model_name() is None
     assert usages == [

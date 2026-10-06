@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +22,7 @@ from kedi.agent_adapter.adapters.pydantic.compat import (
 from kedi.agent_adapter.models import model_template_prompt_mode
 from kedi.agent_adapter.request import KediTemplatePromptBuilder
 from kedi.agent_profile import AgentProfile
+from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
 
 
@@ -148,6 +151,31 @@ class DecisionClient:
 
     async def aclose(self):
         pass
+
+
+@pytest.mark.parametrize("surface", ["pydantic", "langchain"])
+def test_claim_description_reaches_decision_question(surface) -> None:
+    client = DecisionClient()
+    adapter = (
+        PydanticAdapter(TypeSafeModel(client=client))
+        if surface == "pydantic"
+        else LangChainAdapter(TypeSafeChatModel(client=client))
+    )
+    engine = SequentialEngine()
+    runtime = compile_program(
+        parse_program("> if: Ankara is the capital of Turkey\n  = `True`\n= `False`\n"),
+        adapter=adapter,
+        engine=engine,
+    )
+    try:
+        assert runtime.run_main() is True
+        assert len(client.calls) == 1
+        _, questions = client.calls[0]
+        assert "Whether the claim is established" in questions["response"].instructions
+        assert "False if contradicted or unknown" in questions["response"].instructions
+    finally:
+        asyncio.run(runtime.aclose())
+        engine.shutdown()
 
 
 @pytest.mark.parametrize("surface", ["pydantic", "langchain"])

@@ -114,7 +114,8 @@ def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
             return None
 
     class FakePydanticAdapter:
-        def __init__(self, *, model: str) -> None:
+        def __init__(self, *, model: str, defer_model_check: bool) -> None:
+            assert defer_model_check is True
             seen.append(("pydantic", model))
 
         def produce_sync(self) -> None:
@@ -198,7 +199,9 @@ def _patch_optimizer_services(
     )
     monkeypatch.setattr(app, "parse_program", lambda *args, **kwargs: program)
     monkeypatch.setattr(app, "compile_program", lambda *args, **kwargs: object())
-    monkeypatch.setattr(app, "PydanticAdapter", lambda *, model: ("pydantic", model))
+    monkeypatch.setattr(
+        app, "PydanticAdapter", lambda *, model, defer_model_check: ("pydantic", model)
+    )
     monkeypatch.setattr(
         OptimizerConfig,
         "from_cli_options",

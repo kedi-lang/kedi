@@ -7,6 +7,7 @@ from threading import Barrier, Lock
 from typing import Annotated, Any, get_args, get_origin
 
 import pytest
+from pydantic import TypeAdapter
 
 import kedi
 from kedi.agent_adapter import AgentAdapter
@@ -822,9 +823,11 @@ def test_template_if_renders_native_segments_and_uses_annotated_bool() -> None:
     )
     assert get_origin(output_type) is Annotated
     assert get_args(output_type)[0] is bool
-    assert "current context" in get_args(output_type)[1]
-    assert "authoritative" in get_args(output_type)[1]
-    assert "reliable existing knowledge" in get_args(output_type)[1]
+    schema = TypeAdapter(output_type).json_schema()
+    assert schema["type"] == "boolean"
+    assert "current context" in schema["description"]
+    assert "authoritative" in schema["description"]
+    assert "reliable existing knowledge" in schema["description"]
     assert "result" not in runtime._globals_env
 
 

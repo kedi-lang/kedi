@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from threading import RLock
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping, Protocol, runtime_checkable
 
 from .invocation import InvocationUsage
 
@@ -16,10 +17,85 @@ _DEFAULT_CUMULATIVE_INPUT_TOKENS = 1_000_000
 _DEFAULT_REQUEST_LIMIT = 128
 _REQUEST_OVERHEAD_TOKENS = 2_048
 _LIMITS_OVERRIDE: ContextVar[ModelRequestBudgetLimits | None]
+HISTORY_USAGE_KEY = "history_usage_checkpoint"
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryUsageCheckpoint:
+    """Measured replay size bound to one exact, successfully captured history."""
+
+    state_key: str
+    digest: str
+    tokens: int
+
+
+def capture_history_usage(
+    state: dict[str, Any],
+    state_key: str,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    trailing_messages: Any = (),
+) -> None:
+    state.pop(HISTORY_USAGE_KEY, None)
+    if any(type(value) is not int or value <= 0 for value in (input_tokens, output_tokens)):
+        return
+    state[HISTORY_USAGE_KEY] = HistoryUsageCheckpoint(
+        state_key,
+        hashlib.sha256(_portable_bytes(state[state_key])).hexdigest(),
+        input_tokens + output_tokens + estimate_content_tokens(trailing_messages),
+    )
+
+
+def measured_history_tokens(state: Mapping[str, Any], state_key: str) -> int | None:
+    checkpoint = state.get(HISTORY_USAGE_KEY)
+    if (
+        isinstance(checkpoint, HistoryUsageCheckpoint)
+        and checkpoint.state_key == state_key
+        and checkpoint.digest == hashlib.sha256(_portable_bytes(state.get(state_key))).hexdigest()
+    ):
+        return checkpoint.tokens
+    return None
+
+
+def encode_history_usage_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(state)
+    checkpoint = result.get(HISTORY_USAGE_KEY)
+    if isinstance(checkpoint, HistoryUsageCheckpoint):
+        result[HISTORY_USAGE_KEY] = asdict(checkpoint)
+    return result
+
+
+def decode_history_usage_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(state)
+    if HISTORY_USAGE_KEY not in result:
+        return result
+    value = result[HISTORY_USAGE_KEY]
+    if not isinstance(value, dict) or set(value) != {"state_key", "digest", "tokens"}:
+        raise ValueError("Invalid stored history usage checkpoint")
+    key, digest, tokens = value["state_key"], value["digest"], value["tokens"]
+    if (
+        key not in ("pydantic_messages", "langchain_messages")
+        or key not in result
+        or not isinstance(digest, str)
+        or type(tokens) is not int
+        or tokens <= 0
+        or digest != hashlib.sha256(_portable_bytes(result[key])).hexdigest()
+    ):
+        raise ValueError("Stored history usage checkpoint does not match native history")
+    result[HISTORY_USAGE_KEY] = HistoryUsageCheckpoint(key, digest, tokens)
+    return result
 
 
 class ModelRequestBudgetError(RuntimeError):
     """Raised before another model request can exceed a host safety ceiling."""
+
+
+@runtime_checkable
+class SupportsHistoryTokenEstimate(Protocol):
+    def estimate_history_tokens(self, state: Mapping[str, Any]) -> int:
+        """Estimate replayed model content, excluding framework-only metadata."""
+        ...
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -112,12 +188,19 @@ class ModelRequestBudget:
         *,
         context: Iterable[Any] = (),
         resume_state: Mapping[str, Any] | None = None,
+        history_tokens: int | None = None,
     ) -> ModelRequestReservation:
+        if history_tokens is not None and (
+            not isinstance(history_tokens, int)
+            or isinstance(history_tokens, bool)
+            or history_tokens < 0
+        ):
+            raise ValueError("history_tokens must be a nonnegative integer")
         estimated_tokens = estimate_request_tokens(
             prompt,
             *context,
-            resume_state,
-        )
+            resume_state if history_tokens is None else None,
+        ) + (history_tokens or 0)
         from kedi.artifacts.telemetry import model_context_preflight_span
 
         with model_context_preflight_span(
@@ -187,8 +270,12 @@ class ModelRequestBudget:
 def estimate_request_tokens(*values: Any) -> int:
     """Conservatively estimate tokens without relying on a provider tokenizer."""
 
-    byte_count = sum(len(_portable_bytes(value)) for value in values if value is not None)
-    return _REQUEST_OVERHEAD_TOKENS + byte_count
+    return _REQUEST_OVERHEAD_TOKENS + estimate_content_tokens(*values)
+
+
+def estimate_content_tokens(*values: Any) -> int:
+    """Byte-based upper estimate for visible content, without request overhead."""
+    return sum(len(_portable_bytes(value)) for value in values if value is not None)
 
 
 def _portable_bytes(value: Any) -> bytes:

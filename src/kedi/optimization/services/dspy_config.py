@@ -2,75 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, cast
 
 import dspy
 from dspy import LM
-from dspy.adapters.chat_adapter import ChatAdapter
-from dspy.adapters.json_adapter import (
-    JSONAdapter,
-    _get_structured_outputs_response_format,
-)
+from dspy.adapters.json_adapter import JSONAdapter
 
 from ...agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ...model_normalization import normalize_for_litellm
 from ...reporter import CliReporter, Reporter
 from ..config import OptimizerConfig
-
-logger = logging.getLogger(__name__)
-
-
-class AdaptiveJSONAdapter(JSONAdapter):
-    """JSONAdapter that caches structured output failures per model.
-
-    First call for a given model tries structured output normally.
-    If it fails, the model name is remembered and all subsequent calls
-    go straight to json_object mode -- no retry overhead, no log spam.
-    Models where structured output succeeds keep using it every time.
-    """
-
-    _failed_models: set[str] = set()
-
-    def __call__(
-        self,
-        lm: Any,
-        lm_kwargs: dict[str, Any],
-        signature: Any,
-        demos: list[dict[str, Any]],
-        inputs: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        result = self._json_adapter_call_common(
-            lm,
-            lm_kwargs,
-            signature,
-            demos,
-            inputs,
-            lambda *a, **kw: ChatAdapter.__call__(self, *a, **kw),
-        )
-        if result:
-            return result
-
-        if lm.model in AdaptiveJSONAdapter._failed_models:
-            lm_kwargs["response_format"] = {"type": "json_object"}
-            return ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
-
-        try:
-            structured_model = _get_structured_outputs_response_format(
-                signature,
-                self.use_native_function_calling,
-            )
-            lm_kwargs["response_format"] = structured_model
-            return ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
-        except Exception:
-            AdaptiveJSONAdapter._failed_models.add(lm.model)
-            logger.info(
-                "Model '%s' failed structured output on first attempt; "
-                "using json_object mode for all future calls.",
-                lm.model,
-            )
-            lm_kwargs["response_format"] = {"type": "json_object"}
-            return ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
 
 
 class DSPyConfigurationService:
@@ -169,9 +110,9 @@ class DSPyConfigurationService:
         dspy.settings.configure(
             lm=main_lm,
             cache=False,
-            adapter=AdaptiveJSONAdapter(),
+            adapter=JSONAdapter(),
         )
-        self._reporter.emit("   ✅ Main LM configured (AdaptiveJSONAdapter)")
+        self._reporter.emit("   ✅ Main LM configured (JSONAdapter)")
 
         # Verify the configuration was applied
         if hasattr(dspy.settings, "lm") and dspy.settings.lm:

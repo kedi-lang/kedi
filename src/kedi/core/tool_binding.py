@@ -10,6 +10,7 @@ from kedi.errors import KediExecutionError
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.request import InstructionPart
+    from kedi.artifacts import ArtifactManager
     from kedi.core.runtime import KediRuntime
 
 
@@ -64,11 +65,18 @@ def _resolve_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> tuple[
     )
 
 
-def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> tuple[Any, ...]:
+def _resolve_agent_tool_specs(
+    self: KediRuntime,
+    profile: Any,
+    adapter: Any,
+    *,
+    artifact_manager: ArtifactManager | None = None,
+) -> tuple[Any, ...]:
     """Resolve explicit Kedi tools plus the opt-in project-local skill tools."""
     from kedi.agent_adapter.telemetry import adapter_shortname
 
     adapter_name = adapter_shortname(adapter)
+    artifacts = self.artifacts if artifact_manager is None else artifact_manager
     specs = list(self._resolve_tool_specs(profile, adapter))
 
     skills = self._skills_settings(profile)
@@ -156,7 +164,7 @@ def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> 
                 "Active adapter does not support Kedi artifact references and tools"
             )
         management_specs = artifact_tool_specs(
-            self.artifacts,
+            artifacts,
             artifact_policy,
             query_artifact=getattr(adapter, "query_artifact", False),
         )
@@ -176,7 +184,7 @@ def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> 
         specs = [
             with_artifact_result(
                 spec,
-                manager=self.artifacts,
+                manager=artifacts,
                 policy=artifact_policy,
             )
             for spec in specs

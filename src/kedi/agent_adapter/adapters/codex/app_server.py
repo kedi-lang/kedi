@@ -10,7 +10,7 @@ import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from contextvars import Context
 from dataclasses import dataclass, field
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread, current_thread
@@ -20,7 +20,7 @@ from kedi.agent_adapter.events import AgentMessagePhase, AgentMessageResolver
 from kedi.agent_adapter.execution import OwnedAsyncLoop
 from kedi.agent_adapter.subagents.control import current_live_input, current_live_revision
 
-from .live import ensure_turn_current, run_cancellable_binding, run_cancellable_turn
+from .live import TurnBindings, ensure_turn_current, run_cancellable_binding, run_cancellable_turn
 
 JsonObject = dict[str, Any]
 AwaitResult = Callable[[Context, Awaitable[Any]], Any]
@@ -69,6 +69,7 @@ class _ToolBinding:
     fn: Callable[..., Any]
     context: Context
     await_result: AwaitResult
+    lifetime: TurnBindings | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class _ApprovalBinding:
     handler: ServerApprovalHandler
     context: Context
     await_result: AwaitResult
+    lifetime: TurnBindings | None = None
 
 
 @dataclass(frozen=True)
@@ -290,11 +292,13 @@ class CodexAppServerClient:
         thread = _required_object(thread_response, "thread")
         resolved_thread_id = _required_string(thread, "id")
         resolve_awaitable = await_result if await_result is not None else self._await_sync_result
+        lifetime = TurnBindings()
         bindings = {
             name: _ToolBinding(
                 fn=fn,
                 context=tool_context.copy(),
                 await_result=resolve_awaitable,
+                lifetime=lifetime,
             )
             for name, fn in tools.items()
         }
@@ -307,6 +311,7 @@ class CodexAppServerClient:
                         approval_context if approval_context is not None else tool_context
                     ).copy(),
                     await_result=resolve_awaitable,
+                    lifetime=lifetime,
                 )
             if event_resolver is not None:
                 self._thread_event_resolvers[resolved_thread_id] = event_resolver
@@ -408,9 +413,12 @@ class CodexAppServerClient:
                 self._thread_event_resolvers.pop(resolved_thread_id, None)
                 if turn_id is not None:
                     self._turns.pop(turn_id, None)
-            if not retain_thread or (created_thread and not completed):
-                with suppress(CodexAppServerError, TimeoutError):
-                    self.delete_thread(resolved_thread_id)
+            try:
+                lifetime.close()
+            finally:
+                if not retain_thread or (created_thread and not completed):
+                    with suppress(CodexAppServerError, TimeoutError):
+                        self.delete_thread(resolved_thread_id)
 
     def delete_thread(self, thread_id: str) -> None:
         self.request("thread/delete", {"threadId": thread_id})
@@ -980,11 +988,14 @@ def _invoke_binding(
 ) -> Any:
     context = binding.context.copy()
     callable_ = binding.fn if isinstance(binding, _ToolBinding) else binding.handler
-    result = context.run(callable_, *args, **kwargs)
-    if not inspect.isawaitable(result):
-        return result
-    awaitable = cast(Awaitable[Any], result)
-    return binding.await_result(context, awaitable)
+    with binding.lifetime.binding() if binding.lifetime is not None else nullcontext():
+        result = context.run(callable_, *args, **kwargs)
+        if not inspect.isawaitable(result):
+            return result
+        awaitable = cast(Awaitable[Any], result)
+        if binding.lifetime is not None:
+            awaitable = binding.lifetime.resolve(awaitable)
+        return binding.await_result(context, awaitable)
 
 
 def _await_result_in_loop(loop: asyncio.AbstractEventLoop) -> AwaitResult:

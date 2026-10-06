@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -196,7 +197,9 @@ def test_pydantic_capability_handles_explicit_and_unknown_model_ids_without_cach
             model_request_parameters=ModelRequestParameters(),
         )
         with runner.run_scope(None):
-            return await capability.before_model_request(cast("Any", None), request)
+            return await capability.before_model_request(
+                cast("Any", SimpleNamespace(messages=list(request.messages))), request
+            )
 
     first = asyncio.run(run("explicit-model", object()))
     second = asyncio.run(run(None, object()))
@@ -389,7 +392,9 @@ def test_explicit_response_id_stays_disabled_after_first_rewrite() -> None:
                     ),
                     model_request_parameters=ModelRequestParameters(),
                 )
-                updated = await capability.before_model_request(cast("Any", None), request)
+                updated = await capability.before_model_request(
+                    cast("Any", SimpleNamespace(messages=list(request.messages))), request
+                )
                 assert updated.model_settings is not None
                 assert updated.model_settings.get("openai_previous_response_id") is None
 

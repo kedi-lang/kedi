@@ -52,7 +52,9 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
     else:
         kwargs["func"] = _langchain_sync_tool_function(tool)
     native_tool = StructuredTool.from_function(**kwargs)
-    native_tool.metadata = tool.metadata
+    native_tool.metadata = (
+        {**metadata, "kedi_sequential": True} if tool.sequential else tool.metadata
+    )
     return native_tool
 
 
@@ -62,20 +64,23 @@ def _langchain_projection_tools(projection: CodeModeProjection) -> list[Any]:
     return [_langchain_tool_from_spec(cast(ToolSpec, tool)) for tool in projection.tools]
 
 
+def _langchain_tool_parameters_schema(tool: Any) -> dict[str, Any]:
+    args_schema = getattr(tool, "args_schema", None)
+    if isinstance(args_schema, Mapping):
+        return dict(args_schema)
+    model_json_schema = getattr(args_schema, "model_json_schema", None)
+    return (
+        cast(dict[str, Any], model_json_schema())
+        if callable(model_json_schema)
+        else {"type": "object", "properties": {}}
+    )
+
+
 def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
     name = getattr(tool, "name", None)
     if not isinstance(name, str) or not name:
         raise TypeError("LangChain CodeMode tools must expose a non-empty name")
-    args_schema = getattr(tool, "args_schema", None)
-    if isinstance(args_schema, Mapping):
-        json_schema = dict(args_schema)
-    else:
-        model_json_schema = getattr(args_schema, "model_json_schema", None)
-        json_schema = (
-            model_json_schema()
-            if callable(model_json_schema)
-            else {"type": "object", "properties": {}}
-        )
+    json_schema = _langchain_tool_parameters_schema(tool)
 
     async def invoke(**arguments: Any) -> Any:
         ainvoke = getattr(tool, "ainvoke", None)
@@ -101,6 +106,7 @@ def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
         description=description if isinstance(description, str) else name,
         json_schema=json_schema,
         metadata=dict(metadata) if isinstance(metadata, Mapping) else {"source": "langchain"},
+        sequential=isinstance(metadata, Mapping) and metadata.get("kedi_sequential") is True,
         risk="mutating",
         risk_resolver=_langchain_external_tool_risk,
     )

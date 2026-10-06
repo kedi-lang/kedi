@@ -214,7 +214,7 @@ def test_jev_claim_with_tools_has_an_explicit_output_purpose():
 
     assert runtime.run_main() == "yes"
     state, questions = client.calls[0]
-    assert "tool" in questions
+    assert "lookup" in questions["__typesafe_route"].criteria
     assert "instructions" in state
     assert "current context" in state["instructions"]
     assert "time-sensitive" in state["instructions"]

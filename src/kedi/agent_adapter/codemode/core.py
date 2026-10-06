@@ -9,17 +9,24 @@ import json
 import keyword
 import re
 import secrets
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic_core import to_jsonable_python
-from pydantic_monty import AsyncMonty, AsyncMontySession, CollectString, MontyError
+from pydantic_monty import (
+    AsyncMonty,
+    AsyncMontySession,
+    CollectString,
+    MontyCrashedError,
+    MontyError,
+)
 
 from kedi.errors import KediExecutionError
 from kedi.run_budget import RunBudgetExceeded
 
+from ..tools.dispatch import SequentialDispatchGate as _SequentialDispatchGate
 from ..tools.records import ToolResultHandoff, defer_tool_handoff
 from .errors import (
     CodeModeBoundaryError,
@@ -45,12 +52,13 @@ CodeMode is enabled. Application tools are available only through three control 
 
 The sandbox supports ordinary literals, indexing and slicing, arithmetic, comparisons, boolean
 logic, if/elif/else, for/while, range/enumerate/zip, comprehensions, sorting, filtering, grouping,
-f-strings, and helper functions. Read mapping values with `mapping[key]`; mapping methods such as
-`.get()` are unavailable. Tool functions are async; call them with `await`. Chain dependent calls by
+f-strings, `mapping[key]`, mapping methods such as `.get()`, and helper functions.
+Tool functions are async; call them with `await`. Chain dependent calls by
 passing prior results directly: `user = await find_user(name="Ada")`, then
 `orders = await list_orders(user_id=user["id"])`. For independent calls, first `import asyncio`, then
-use `await asyncio.gather(...)`. No third-party packages, host filesystem, environment, network, eval,
-exec, generators, or unrestricted OS access are available. Return only the value needed by the agent.
+use `await asyncio.gather(...)`. No third-party packages, host filesystem, environment, network,
+generators, or unrestricted OS access are available. Prefer direct expressions over dynamic code.
+Return only the value needed by the agent.
 Treat `execute_code` calls as persistent notebook cells: assign reusable outputs to variables and
 continue from those variables in later calls. Never repeat a successful application tool call merely
 to inspect, reformat, or recompute its result; printing or returning a variable does not consume it.
@@ -59,52 +67,6 @@ locate progress, correct the error, and continue from variables that were alread
 """
 
 ToolInvoker = Callable[[str, dict[str, Any]], Awaitable[Any]]
-
-
-class _SequentialDispatchGate:
-    """Run sequential tools exclusively without serializing unrelated calls."""
-
-    def __init__(self) -> None:
-        self._condition = asyncio.Condition()
-        self._active_parallel = 0
-        self._exclusive = False
-        self._waiting_exclusive = 0
-
-    @asynccontextmanager
-    async def enter(self, *, sequential: bool) -> AsyncIterator[None]:
-        if sequential:
-            async with self._condition:
-                self._waiting_exclusive += 1
-                try:
-                    await self._condition.wait_for(
-                        lambda: not self._exclusive and self._active_parallel == 0
-                    )
-                except BaseException:
-                    self._waiting_exclusive -= 1
-                    self._condition.notify_all()
-                    raise
-                self._waiting_exclusive -= 1
-                self._exclusive = True
-            try:
-                yield
-            finally:
-                async with self._condition:
-                    self._exclusive = False
-                    self._condition.notify_all()
-            return
-
-        async with self._condition:
-            await self._condition.wait_for(
-                lambda: not self._exclusive and self._waiting_exclusive == 0
-            )
-            self._active_parallel += 1
-        try:
-            yield
-        finally:
-            async with self._condition:
-                self._active_parallel -= 1
-                if self._active_parallel == 0:
-                    self._condition.notify_all()
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,9 +493,12 @@ class CodeModeSession:
                     accepted = True
                 except asyncio.CancelledError:
                     await self._cancel_host_tasks()
+                    await self.reset()
                     raise
                 except MontyError as exc:
                     await self._cancel_host_tasks()
+                    if isinstance(exc, MontyCrashedError):
+                        await self.reset()
                     if host_error is not None:
                         if isinstance(
                             host_error, (KediExecutionError, RunBudgetExceeded, CodeModeResultError)

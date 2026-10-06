@@ -5,14 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManager
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 from pydantic_ai import UsageLimits
 
 import kedi.agent_adapter.adapters.langchain.adapter as langchain_adapter_module
 import kedi.agent_adapter.adapters.langchain.messages as langchain_messages_module
 from kedi.agent_adapter.adapters import LangChainAdapter
-from kedi.agent_adapter.adapters.langchain.runtime import LangChainRunMiddleware
+from kedi.agent_adapter.adapters.langchain.runtime import (
+    LangChainRunMiddleware,
+    langchain_run_scope,
+)
 from kedi.agent_adapter.compaction.archive import cache_epoch_key
 
 
@@ -110,3 +113,63 @@ def test_native_run_recursion_configuration_is_preserved(config, limits, explici
     )
     assert callbacks.handlers == []
     assert len(seen[0]["callbacks"].handlers) == 1
+
+
+@pytest.mark.parametrize(
+    "metadata,reason",
+    [
+        (
+            {"status": "incomplete", "incomplete_details": {"reason": "max_messages"}},
+            "max_messages",
+        ),
+        ({"status": "failed"}, "failed"),
+        ({"finish_reason": "length"}, "length"),
+        ({"stop_reason": "max_tokens"}, "max_tokens"),
+        ({"finish_reason": "content_filter"}, "content_filter"),
+        (
+            {"status": "incomplete", "incomplete_details": {"reason": "Authorization: secret"}},
+            "unknown",
+        ),
+    ],
+)
+def test_incomplete_model_result_reports_cause_and_accounts_usage(metadata, reason):
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+
+    middleware = LangChainRunMiddleware(archive=None, tool_retries=0)
+    request = SimpleNamespace(
+        messages=[HumanMessage("question")], model_settings={}, model=object()
+    )
+
+    async def handler(_):
+        return SimpleNamespace(
+            result=[
+                AIMessage(
+                    content="partial",
+                    response_metadata=metadata,
+                    usage_metadata={"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+                )
+            ]
+        )
+
+    async def run():
+        with langchain_run_scope(None) as state:
+            with pytest.raises(UnexpectedModelBehavior, match=rf"incomplete \(reason: {reason}\)"):
+                await middleware.awrap_model_call(request, handler)
+            assert state.native_usage.requests == 1
+            assert state.usage.input_tokens == 10
+            assert state.usage.output_tokens == 3
+
+    asyncio.run(run())
+
+
+def test_completion_check_uses_latest_message_and_preserves_valid_output():
+    from kedi.agent_adapter.adapters.langchain.runtime import _check_model_completion
+
+    _check_model_completion([])
+    _check_model_completion([HumanMessage("question")])
+    _check_model_completion(
+        [
+            AIMessage(content="old partial", response_metadata={"status": "incomplete"}),
+            AIMessage(content="ready", response_metadata={"finish_reason": "stop"}),
+        ]
+    )

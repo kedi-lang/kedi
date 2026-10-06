@@ -177,5 +177,8 @@ def test_history_capability_allows_absent_model_settings():
         model_settings=None,
         model_request_parameters=ModelRequestParameters(),
     )
-    assert asyncio.run(capability.before_model_request(None, request)) is request
+    assert (
+        asyncio.run(capability.before_model_request(SimpleNamespace(messages=[]), request))
+        is request
+    )
     assert capability.get_serialization_name() is None

@@ -261,7 +261,10 @@ def test_gepa_optimizer_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     optimizer._save_prompts_immediately("p", {"s": "prompt"})
 
 
-def test_gepa_optimizer_fake_compile_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("reflection", [None, SimpleNamespace(model="test-reflector")])
+def test_gepa_optimizer_fake_compile_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reflection
+) -> None:
     import kedi.optimization.gepa as gepa_module
     import kedi.optimization.gepa_session as gepa_session_module
 
@@ -280,6 +283,7 @@ def test_gepa_optimizer_fake_compile_paths(tmp_path: Path, monkeypatch: pytest.M
         settings=SimpleNamespace(lm=None),
     )
     monkeypatch.setattr(gepa_session_module, "dspy", fake_dspy)
+    monkeypatch.setattr(gepa_module, "build_reflection_lm", lambda *args: reflection)
 
     source = tmp_path / "source.kedi"
     source.write_text("= ok\n", encoding="utf-8")

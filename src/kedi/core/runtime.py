@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.agent_profile import AgentProfile
     from kedi.agent_surface import AgentSurface
+    from kedi.artifacts import ArtifactManager
     from kedi.lang.ast import EvalSuite, TestSuite
 
 DEFAULT_LOOP_ITERATION_LIMIT = 10_000
@@ -606,9 +607,13 @@ class KediRuntime:
         """
         return _tool_binding._resolve_tool_specs(self, profile, adapter)
 
-    def _resolve_agent_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
+    def _resolve_agent_tool_specs(
+        self, profile: Any, adapter: Any, *, artifact_manager: ArtifactManager | None = None
+    ) -> tuple[Any, ...]:
         """Resolve explicit Kedi tools plus the opt-in project-local skill tools."""
-        return _tool_binding._resolve_agent_tool_specs(self, profile, adapter)
+        return _tool_binding._resolve_agent_tool_specs(
+            self, profile, adapter, artifact_manager=artifact_manager
+        )
 
     async def _delegate_task(
         self,

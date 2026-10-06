@@ -401,6 +401,27 @@ def test_codemode_executes_hydrated_tools_and_preserves_state() -> None:
     asyncio.run(run())
 
 
+def test_codemode_replaces_session_after_worker_timeout() -> None:
+    async def run() -> None:
+        session = CodeModeSession(CodeModeLimits(request_timeout=0.5))
+
+        async def invoke(name: str, arguments: dict[str, Any]) -> Any:
+            raise AssertionError("No host tool should be invoked")
+
+        try:
+            assert await session.execute_code(code="previous = 7\nprevious", invoke=invoke) == 7
+            result = await session.execute_code(code="while True:\n    pass", invoke=invoke)
+            assert "error" in result
+            assert session._monty_session is None
+            assert await session.execute_code(code="2 + 3", invoke=invoke) == 5
+            missing = await session.execute_code(code="previous", invoke=invoke)
+            assert "NameError" in missing["error"]
+        finally:
+            await session.close()
+
+    asyncio.run(run())
+
+
 def test_codemode_chains_dependent_tools_and_bounds_parallel_fanout() -> None:
     async def run() -> None:
         session = CodeModeSession(CodeModeLimits(max_nested_calls=8, max_concurrent_calls=2))

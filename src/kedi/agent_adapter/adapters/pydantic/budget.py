@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, Mapping
 
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
@@ -11,6 +11,14 @@ from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
+
+from kedi.agent_adapter.history_provenance import LINEAGE_STATE_KEY, HistoryLineage
+from kedi.agent_adapter.request_budget import (
+    HISTORY_USAGE_KEY,
+    HistoryUsageCheckpoint,
+    estimate_content_tokens,
+    measured_history_tokens,
+)
 
 from kedi.run_budget import (
     RunBudgetExceeded,
@@ -22,6 +30,49 @@ from kedi.run_budget import (
 _MODEL_ADMISSION: ContextVar[Callable[[Sequence[ModelMessage]], None] | None] = ContextVar(
     "kedi_pydantic_model_admission", default=None
 )
+
+
+def estimate_history_tokens(state: Mapping[str, Any]) -> int:
+    from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest
+
+    try:
+        messages = ModelMessagesTypeAdapter.validate_python(state.get("pydantic_messages", []))
+    except (TypeError, ValueError):
+        return estimate_content_tokens(state)
+    serialized = ModelMessagesTypeAdapter.dump_python(messages, mode="json", exclude_none=True)
+    projected = []
+    opaque_tokens = 0
+    instructions = None
+    for message, raw in zip(messages, serialized, strict=True):
+        if isinstance(message, ModelRequest) and message.instructions is not None:
+            # Pydantic sends current instructions, not all previous instruction snapshots.
+            instructions = message.instructions
+        output_tokens = message.usage.output_tokens if isinstance(message, ModelResponse) else 0
+        hidden = False
+        parts = []
+        for part in raw["parts"]:
+            part = {key: value for key, value in part.items() if key != "timestamp"}
+            if part.get("part_kind") == "thinking" and part.get("signature") and output_tokens > 0:
+                part["signature"] = "[provider continuation]"
+                hidden = True
+            parts.append(part)
+        if hidden:
+            # All output tokens bound the hidden reasoning; ciphertext is not tokenized text.
+            opaque_tokens += output_tokens
+        projected.append({"kind": raw["kind"], "parts": parts})
+    # Provenance is retained for inspection, never sent to the model. Unknown
+    # extension state still takes the conservative estimation path.
+    extra = {
+        key: value
+        for key, value in state.items()
+        if key != "pydantic_messages"
+        and not (key == LINEAGE_STATE_KEY and isinstance(value, HistoryLineage))
+        and not (key == HISTORY_USAGE_KEY and isinstance(value, HistoryUsageCheckpoint))
+    }
+    measured = measured_history_tokens(state, "pydantic_messages")
+    if measured is not None:
+        return measured + estimate_content_tokens(extra)
+    return estimate_content_tokens(projected, instructions, extra) + opaque_tokens
 
 
 @contextmanager

@@ -10,6 +10,7 @@ from .protocol import (
     A2ARemoteTaskError,
     A2ARemoteTaskSnapshot,
     A2ATransportError,
+    decode_structured_json,
 )
 
 _TERMINAL_TASK_STATES = frozenset(
@@ -146,6 +147,23 @@ class _ResponseAccumulator:
                 and KEDI_STRUCTURED_OUTPUT_EXTENSION_URI not in artifact.extensions
             ):
                 continue
+            raw = [
+                part.raw
+                for part in artifact.parts
+                if part.WhichOneof("content") == "raw" and part.media_type == "application/json"
+            ]
+            if raw:
+                try:
+                    if len(raw) != 1:
+                        raise ValueError("Multiple structured JSON parts")
+                    return decode_structured_json(raw[0])
+                except (ValueError, RecursionError) as exc:
+                    raise A2ARemoteTaskError(
+                        "Remote Kedi A2A agent returned an invalid structured JSON artifact",
+                        task_id=self.task_id,
+                        context_id=self.context_id,
+                        state=self.state,
+                    ) from exc
             for part in artifact.parts:
                 if part.WhichOneof("content") == "data":
                     return MessageToDict(part.data)

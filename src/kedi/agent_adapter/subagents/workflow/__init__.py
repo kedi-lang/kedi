@@ -137,7 +137,14 @@ def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSp
     salvage: dict[str, dict[str, Any]] = {}
     in_flight: dict[str, asyncio.Task[dict[str, Any]]] = {}
 
-    async def run_workflow(*, code: str) -> object:
+    async def run_workflow(*, code: str = "", **unsupported: Any) -> object:
+        # Explicit-schema native tools can forward unvalidated keyword arguments.
+        if unsupported:
+            raise WorkflowTypeError(
+                "run_workflow accepts only the code argument; unsupported arguments: "
+                + ", ".join(sorted(unsupported))
+                + ". Pass final_schema to a child call inside code, not to run_workflow."
+            )
         if _active_workflow.get():
             raise WorkflowRuntimeError(
                 "Dynamic workflows do not nest; return to the parent workflow first"
@@ -219,7 +226,7 @@ def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSp
                     with monty.checkout(
                         limits={
                             "max_memory": WORKFLOW_MEMORY_LIMIT,
-                            "max_duration_secs": WORKFLOW_CPU_SECONDS,
+                            "max_feed_duration_secs": WORKFLOW_CPU_SECONDS,
                         },
                         type_check=True,
                         type_check_stubs=_type_check_stubs(descriptions),

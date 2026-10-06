@@ -558,16 +558,23 @@ def _lineage_adapter() -> Any:
 
 
 def _checkpoint_lane_state(adapter_shortname: str, state: dict[str, Any]) -> dict[str, Any]:
+    from .request_budget import HISTORY_USAGE_KEY, encode_history_usage_state
+
     native_key = {
         "pydantic": "pydantic_messages",
         "langchain": "langchain_messages",
     }.get(adapter_shortname)
     if native_key is None:
         raise ValueError(f"A2A durable history does not support adapter {adapter_shortname!r}")
-    allowed = {native_key, "history_processor_origins", "history_processor_rewritten"}
+    allowed = {
+        native_key,
+        "history_processor_origins",
+        "history_processor_rewritten",
+        HISTORY_USAGE_KEY,
+    }
     if state.keys() - allowed:
         raise ValueError("A2A native history has unsupported continuation fields")
-    result = dict(state)
+    result = encode_history_usage_state(state)
     if native_key in result:
         if adapter_shortname == "pydantic":
             from pydantic_ai.messages import ModelMessagesTypeAdapter
@@ -593,6 +600,8 @@ def _checkpoint_lane_state(adapter_shortname: str, state: dict[str, Any]) -> dic
 
 
 def _restore_lane_state(adapter_shortname: str, state: Any) -> dict[str, Any]:
+    from .request_budget import decode_history_usage_state
+
     if not isinstance(state, dict):
         raise ValueError("A2A native history state must be an object")
     result = _checkpoint_lane_state(adapter_shortname, state)
@@ -600,4 +609,4 @@ def _restore_lane_state(adapter_shortname: str, state: Any) -> dict[str, Any]:
         result["history_processor_origins"] = _lineage_adapter().validate_python(
             result["history_processor_origins"]
         )
-    return result
+    return decode_history_usage_state(result)

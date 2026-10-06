@@ -10,6 +10,8 @@ from tempfile import NamedTemporaryFile
 from threading import Lock
 from typing import Any
 
+from kedi.agent_adapter.request_budget import decode_history_usage_state, encode_history_usage_state
+
 from . import DelegationResult, SubagentTurn
 from .runs import SubagentRun
 
@@ -69,7 +71,7 @@ class SubagentStateStore:
                     profile_name=value["profile_name"],
                     active_run_id=value.get("active_run_id"),
                     turns=[SubagentTurn(**turn) for turn in value.get("turns", ())],
-                    adapter_state=dict(value.get("adapter_state", {})),
+                    adapter_state=decode_history_usage_state(value.get("adapter_state", {})),
                 )
                 for conversation_id, value in conversation_values.items()
             }
@@ -93,7 +95,7 @@ class SubagentStateStore:
                     "profile_name": conversation.profile_name,
                     "active_run_id": conversation.active_run_id,
                     "turns": [asdict(turn) for turn in conversation.turns],
-                    "adapter_state": conversation.adapter_state,
+                    "adapter_state": encode_history_usage_state(conversation.adapter_state),
                 }
                 for conversation_id, conversation in conversations.items()
             },

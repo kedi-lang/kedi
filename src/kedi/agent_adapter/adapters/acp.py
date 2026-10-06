@@ -3,18 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import shlex
 import subprocess
 from collections import deque
 from collections.abc import Mapping, Sequence
-from concurrent.futures import Future
+from concurrent.futures import CancelledError as FutureCancelledError, Future
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from threading import Lock, RLock, Thread
+from threading import Event, Lock, RLock, Thread, current_thread
+from time import monotonic
 from typing import Any, Iterator, cast
 
 from ...agent_profile import AgentProfile
+from ...agent_profile.errors import AgentProfileOverrideUnsupported, AgentToolOverrideUnsupported
 from ...agent_profile.settings import ACP_AGENT_SETTING_KEYS, acp_agent_settings
 from ...resolved_types import ResolvedKediType
 from ..events import AgentMessageResolver, agent_event_run
@@ -77,13 +80,33 @@ class ACPClient:
         timeout: float,
         event_resolver: AgentMessageResolver | None = None,
     ) -> str:
-        return await asyncio.to_thread(
-            self.run_prompt_sync,
-            prompt=prompt,
-            cwd=cwd,
-            timeout=timeout,
-            event_resolver=event_resolver,
+        cancelled = Event()
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                self.run_prompt_sync,
+                prompt=prompt,
+                cwd=cwd,
+                timeout=timeout,
+                event_resolver=event_resolver,
+                _cancelled=cancelled,
+            )
         )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            # Cancellation of to_thread does not stop its worker. Drain the ACP
+            # cancellation handshake before releasing this call's session.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                worker.exception()
+            raise
 
     def run_prompt_sync(
         self,
@@ -92,6 +115,7 @@ class ACPClient:
         cwd: str,
         timeout: float,
         event_resolver: AgentMessageResolver | None = None,
+        _cancelled: Event | None = None,
     ) -> str:
         session_id = self._new_session(cwd)
         state = _SessionState(
@@ -100,14 +124,23 @@ class ACPClient:
         )
         self._register_session(session_id, state)
         try:
-            self.request(
+            if _cancelled is not None and _cancelled.is_set():
+                raise FutureCancelledError()
+            cancel_kwargs = {"_cancelled": _cancelled} if _cancelled is not None else {}
+            response = self.request(
                 "session/prompt",
                 {
                     "sessionId": session_id,
                     "prompt": [{"type": "text", "text": prompt}],
                 },
                 timeout=timeout,
+                **cancel_kwargs,
             )
+            if not isinstance(response, dict) or response.get("stopReason") != "end_turn":
+                reason = response.get("stopReason") if isinstance(response, dict) else None
+                if reason not in {"max_tokens", "max_turn_requests", "refusal", "cancelled"}:
+                    reason = "invalid_stop_reason"
+                raise ACPProtocolError(f"ACP prompt did not complete: {reason}")
             with self._state_lock:
                 result = "".join(state.messages)
             if event_resolver is not None:
@@ -126,6 +159,7 @@ class ACPClient:
         params: JsonObject | None = None,
         *,
         timeout: float | None = None,
+        _cancelled: Event | None = None,
     ) -> JsonObject | None:
         self._ensure_started(initialize=method != "initialize")
         future: Future[JsonObject | None] = Future()
@@ -137,21 +171,79 @@ class ACPClient:
             self._write(
                 {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
             )
-            return future.result(timeout=timeout or self._request_timeout)
+            deadline = monotonic() + (timeout or self._request_timeout)
+            try:
+                while True:
+                    if _cancelled is not None and _cancelled.is_set():
+                        raise FutureCancelledError()
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError()
+                    try:
+                        return future.result(
+                            timeout=min(remaining, 0.05) if _cancelled is not None else remaining
+                        )
+                    except TimeoutError:
+                        if monotonic() >= deadline:
+                            raise
+            except (TimeoutError, FutureCancelledError):
+                if method == "session/prompt" and params is not None:
+                    with suppress(ACPDisconnected):
+                        self._write(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "session/cancel",
+                                "params": {"sessionId": params["sessionId"]},
+                            }
+                        )
+                        try:
+                            future.result(timeout=5)
+                        except TimeoutError:
+                            # An unresponsive agent cannot safely retain ownership
+                            # of a cancelled call. Closing also fails sibling calls.
+                            self.close()
+                        except Exception:
+                            pass
+                raise
         finally:
             with self._state_lock:
                 self._pending.pop(request_id, None)
 
     def close(self) -> None:
-        self._closed = True
-        self._fail_all(ACPDisconnected("ACP client is closed."))
-        process = self._process
-        if process is not None and process.poll() is None:
-            process.terminate()
-            with suppress(Exception):
+        with self._start_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._fail_all(ACPDisconnected("ACP client is closed."))
+            process = self._process
+            if process is None:
+                return
+            # EOF lets stdio bridges shut down their own subprocesses first.
+            with self._write_lock, suppress(OSError, ValueError):
+                if process.stdin is not None:
+                    process.stdin.close()
+            with suppress(subprocess.TimeoutExpired, TimeoutError):
+                process.wait(timeout=3)
+            if os.name == "posix":
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+            elif process.poll() is None:
+                process.terminate()
+            with suppress(subprocess.TimeoutExpired, TimeoutError):
                 process.wait(timeout=1)
-            if process.poll() is None:
+            if os.name == "posix":
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            elif process.poll() is None:
                 process.kill()
+            with suppress(subprocess.TimeoutExpired, TimeoutError):
+                process.wait(timeout=1)
+            for thread in (self._reader, self._stderr_reader):
+                if thread is not None and thread is not current_thread():
+                    thread.join(timeout=1)
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
@@ -174,6 +266,7 @@ class ACPClient:
                 encoding="utf-8",
                 env={**os.environ, **self._env} if self._env is not None else None,
                 cwd=self._cwd,
+                start_new_session=os.name == "posix",
             )
             self._reader = Thread(target=self._read_stdout, daemon=True)
             self._stderr_reader = Thread(target=self._read_stderr, daemon=True)
@@ -248,19 +341,29 @@ class ACPClient:
                 self._stderr_tail.append(line.rstrip())
 
     def _handle_message(self, message: JsonObject) -> None:
+        if "id" in message and "method" in message:
+            # Requests from the agent have a separate ID space from our requests.
+            # No host capabilities are advertised; permissions fail closed.
+            reply: JsonObject = {"jsonrpc": "2.0", "id": message["id"]}
+            if message["method"] == "session/request_permission":
+                reply["result"] = {"outcome": {"outcome": "cancelled"}}
+            else:
+                reply["error"] = {"code": -32601, "message": "Client method not supported"}
+            self._write(reply)
+            return
         if "id" in message:
             request_id = message["id"]
             if not isinstance(request_id, int):
                 return
             with self._state_lock:
                 future = self._pending.get(request_id)
-            if future is None or future.done():
-                return
-            if "error" in message:
-                future.set_exception(ACPProtocolError(str(message["error"])))
-            else:
-                result = message.get("result")
-                future.set_result(cast(JsonObject | None, result))
+                if future is None or future.done():
+                    return
+                if "error" in message:
+                    future.set_exception(ACPProtocolError(str(message["error"])))
+                else:
+                    result = message.get("result")
+                    future.set_result(cast(JsonObject | None, result))
             return
         if message.get("method") == "session/update":
             self._handle_session_update(cast(JsonObject, message.get("params") or {}))
@@ -291,10 +394,9 @@ class ACPClient:
 
     def _fail_all(self, exc: BaseException) -> None:
         with self._state_lock:
-            pending = tuple(self._pending.values())
-        for future in pending:
-            if not future.done():
-                future.set_exception(exc)
+            for future in self._pending.values():
+                if not future.done():
+                    future.set_exception(exc)
 
     def _disconnect_message(self) -> str:
         with self._state_lock:
@@ -356,10 +458,12 @@ class ACPAdapter(HookRegistrationMixin):
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
+        if tools:
+            raise AgentToolOverrideUnsupported("ACPAdapter does not support Kedi tool registration")
         return null_tool_scope()
 
     def register_tool(self, tool: Any) -> None:
-        return None
+        raise AgentToolOverrideUnsupported("ACPAdapter does not support Kedi tool registration")
 
     @property
     def scoped_tools(self) -> tuple[Any, ...]:
@@ -398,7 +502,9 @@ class ACPAdapter(HookRegistrationMixin):
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
         with agent_event_run(self.shortname) as resolver:
-            call_kwargs = {"event_resolver": resolver} if resolver is not None else {}
+            call_kwargs: dict[str, Any] = (
+                {"event_resolver": resolver} if resolver is not None else {}
+            )
             result = await client.run_prompt(
                 prompt=prompt,
                 cwd=cwd,
@@ -413,7 +519,9 @@ class ACPAdapter(HookRegistrationMixin):
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
         with agent_event_run(self.shortname) as resolver:
-            call_kwargs = {"event_resolver": resolver} if resolver is not None else {}
+            call_kwargs: dict[str, Any] = (
+                {"event_resolver": resolver} if resolver is not None else {}
+            )
             result = client.run_prompt_sync(
                 prompt=prompt,
                 cwd=cwd,
@@ -429,6 +537,15 @@ class ACPAdapter(HookRegistrationMixin):
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+        if profile.model is not None or profile.effort is not None:
+            raise AgentProfileOverrideUnsupported(
+                "ACPAdapter does not support model or effort overrides; "
+                "configure the child agent's command or environment instead"
+            )
+        if profile.mcp_servers:
+            raise AgentProfileOverrideUnsupported("ACPAdapter does not support Kedi MCP projection")
+        if profile.tools or profile.tool_bindings:
+            raise AgentToolOverrideUnsupported("ACPAdapter does not support Kedi tool registration")
         token = self._profile_stack_var.set((*self._profile_stack_var.get(), profile))
         try:
             yield

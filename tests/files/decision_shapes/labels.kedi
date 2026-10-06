@@ -1,0 +1,5 @@
+> import: decisions:
+  ChoiceCriteria
+
+>> The issues established by <evidence> are [labels: list[Annotated[Literal["billing", "technical", "shipping"], `ChoiceCriteria({"billing": "An incorrect charge or invoice is reported", "technical": "A software crash or malfunction is reported", "shipping": "A missing, damaged, or late delivery is reported"})`]]].
+= `labels`

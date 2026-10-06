@@ -21,6 +21,29 @@ _T = TypeVar("_T")
 _RUN_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "kedi_run_deadline", default=None
 )
+_ASYNC_OWNER_LOOP: contextvars.ContextVar[asyncio.AbstractEventLoop | None] = (
+    contextvars.ContextVar("kedi_async_owner_loop", default=None)
+)
+
+
+def current_async_owner_loop() -> asyncio.AbstractEventLoop | None:
+    """Return the host loop borrowed by synchronous worker-thread execution."""
+    return _ASYNC_OWNER_LOOP.get()
+
+
+@contextmanager
+def use_async_owner_loop() -> Iterator[None]:
+    """Route worker-thread sync calls to an async host's existing event loop.
+
+    Enter this in the host coroutine, then run synchronous Kedi code with
+    asyncio.to_thread. The host still owns and closes its clients and loop.
+    """
+    loop = asyncio.get_running_loop()
+    token = _ASYNC_OWNER_LOOP.set(loop)
+    try:
+        yield
+    finally:
+        _ASYNC_OWNER_LOOP.reset(token)
 
 
 class RunDeadlineExceeded(TimeoutError):
@@ -93,16 +116,35 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
 
 
 async def _resolve_deadline(awaitable: Awaitable[_T]) -> _T:
+    from .cancellation import RunCancelled, current_run_cancellations
+
     deadline = _RUN_DEADLINE.get()
-    if deadline is None:
+    owners = current_run_cancellations()
+    if deadline is None and not owners:
         return await awaitable
     task = asyncio.ensure_future(awaitable)
+    for owner in owners:
+        owner.register(task)
     try:
-        return await asyncio.wait_for(task, timeout=max(0.0, deadline - time.monotonic()))
+        result = (
+            await task
+            if deadline is None
+            else await asyncio.wait_for(task, timeout=max(0.0, deadline - time.monotonic()))
+        )
+        if any(owner.cancelled for owner in owners):
+            raise RunCancelled("adapter execution was interrupted")
+        return result
+    except asyncio.CancelledError as exc:
+        if any(owner.cancelled for owner in owners):
+            raise RunCancelled("adapter execution was interrupted") from exc
+        raise
     except asyncio.TimeoutError as exc:
         if task.cancelled():
             raise RunDeadlineExceeded("adapter execution deadline elapsed") from exc
         raise
+    finally:
+        for owner in owners:
+            owner.unregister(task)
 
 
 @contextmanager
@@ -131,6 +173,18 @@ def run_sync(awaitable: Awaitable[_T]) -> _T:
     is executed on its own loop in a dedicated worker thread.
     """
 
+    owner = current_async_owner_loop()
+    if owner is not None:
+        if owner is _running_loop() or owner.is_closed() or not owner.is_running():
+            # The awaitable has not been scheduled. Close a newly-created
+            # coroutine so rejecting an invalid bridge does not leak it.
+            if isinstance(awaitable, Coroutine):
+                awaitable.close()
+            raise RuntimeError(
+                "The async owner loop must be running in another thread; "
+                "run synchronous Kedi code with asyncio.to_thread"
+            )
+        return asyncio.run_coroutine_threadsafe(_resolve_deadline(awaitable), owner).result()
     try:
         asyncio.get_running_loop()
     except RuntimeError:

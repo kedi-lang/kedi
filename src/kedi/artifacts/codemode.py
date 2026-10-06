@@ -96,7 +96,7 @@ class ArtifactCodeRuntime:
         from pydantic_monty import ResourceLimits
 
         limits = ResourceLimits(
-            max_duration_secs=self.limits.max_duration_seconds,
+            max_feed_duration_secs=self.limits.max_duration_seconds,
             max_memory=self.limits.max_memory_bytes,
             max_recursion_depth=self.limits.max_recursion_depth,
         )
@@ -363,7 +363,7 @@ def _compact_monty_error(exc: Exception) -> str:
     message = str(exc).strip() or type(exc).__name__
     first_line = message.splitlines()[0]
     diagnostic = f"artifact code failed: {first_line[:500]}"
-    if any(first_line == f"NameError: name '{name}' is not defined" for name in ("eval", "exec")):
+    if first_line.startswith("NameError:"):
         diagnostic += f". {ARTIFACT_COMPUTE_GUIDANCE}"
     return diagnostic
 

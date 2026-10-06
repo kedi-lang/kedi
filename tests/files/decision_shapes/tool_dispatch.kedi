@@ -1,0 +1,24 @@
+```
+from typing import Literal
+
+effects = []
+
+def queue_billing():
+    effects.append("billing")
+    return "billing-queued"
+
+def queue_access():
+    effects.append("access")
+    return "access-queued"
+```
+
+>> The team responsible for <evidence> is [team: Annotated[Literal["billing", "access"], "Choose billing for charges or invoices and access for sign-in problems."]].
+
+@dispatch() -> str:
+  > if: `team == "billing"`:
+    = `queue_billing()`
+  > else:
+    = `queue_access()`
+
+[receipt: str] = <dispatch()>
+= `dict(receipt=receipt, effects=effects)`

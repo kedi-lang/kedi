@@ -13,6 +13,8 @@ from typing import (
     cast,
 )
 
+from pydantic import Field
+
 from kedi.core.expressions import (
     CallExpr,
     ComputedExpr,
@@ -245,7 +247,7 @@ def _evaluate_claim(self: KediRuntime, claim: str) -> bool:
             )
             claim_output_type = cast(
                 type[Any],
-                Annotated[bool, _CLAIM_OUTPUT_DESCRIPTION],
+                Annotated[bool, Field(description=_CLAIM_OUTPUT_DESCRIPTION)],
             )
 
             def produce_claim(request: AgentRunRequest) -> bool:

@@ -272,6 +272,7 @@ class A2APersistence:
         owner = context.user.user_name
         pending = self._pending.get(task.id)
         admitted = self._admissions.get(task.id)
+        previous = None
         try:
             if pending is not None and (pending.owner, pending.context_id) != (
                 owner,
@@ -334,6 +335,10 @@ class A2APersistence:
                         row.revision += 1
                         row.checkpoint = pending.checkpoint
         except BaseException as exc:
+            # The SDK mutates its cached task before save. Roll back that view too,
+            # or its failure handler mistakes a rejected completion for a terminal task.
+            if previous is not None:
+                task.CopyFrom(previous)
             if pending is not None:
                 self._pending.pop(task.id, None)
                 if not pending.future.done():

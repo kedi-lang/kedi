@@ -857,7 +857,8 @@ def test_reset_config_restores_default_config(monkeypatch: pytest.MonkeyPatch) -
     adapter = ApiAdapter()
     seen_models: list[str | None] = []
 
-    def fake_adapter(model: str | None) -> ApiAdapter:
+    def fake_adapter(model: str | None, *, defer_model_check: bool) -> ApiAdapter:
+        assert defer_model_check is True
         seen_models.append(model)
         return adapter
 
@@ -1283,7 +1284,8 @@ def test_configure_builds_default_adapter_lazily(
     adapter = ApiAdapter()
     seen_models: list[str | None] = []
 
-    def fake_adapter(model: str | None) -> ApiAdapter:
+    def fake_adapter(model: str | None, *, defer_model_check: bool) -> ApiAdapter:
+        assert defer_model_check is True
         seen_models.append(model)
         return adapter
 
@@ -1348,7 +1350,8 @@ def test_configure_explicit_model_overrides_env(
     adapter = ApiAdapter()
     seen_models: list[str | None] = []
 
-    def fake_adapter(model: str | None) -> ApiAdapter:
+    def fake_adapter(model: str | None, *, defer_model_check: bool) -> ApiAdapter:
+        assert defer_model_check is True
         seen_models.append(model)
         return adapter
 

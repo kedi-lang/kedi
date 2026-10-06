@@ -21,12 +21,25 @@ def _capture_conversation_messages(
 ) -> None:
     if conversation is None:
         return
-    from pydantic_ai.messages import ModelMessagesTypeAdapter
+    from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
+    from kedi.agent_adapter.request_budget import capture_history_usage
 
     conversation.result_state["pydantic_messages"] = ModelMessagesTypeAdapter.dump_python(
         result.all_messages(),
         mode="json",
     )
+    messages = result.all_messages()
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, ModelResponse):
+            capture_history_usage(
+                conversation.result_state,
+                "pydantic_messages",
+                input_tokens=message.usage.input_tokens,
+                output_tokens=message.usage.output_tokens,
+                trailing_messages=conversation.result_state["pydantic_messages"][index + 1 :],
+            )
+            break
     if isinstance(conversation, AdapterConversationContext):
         conversation.mark_completed()
     if isinstance(conversation, AdapterConversationContext) and any(

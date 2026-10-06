@@ -83,6 +83,8 @@ def _run_kwargs(
     model_settings = pydantic_model_settings(self.active_profile.settings)
     if self.active_profile.effort is not None:
         model_settings["thinking"] = pydantic_effort_value(self.active_profile.effort)
+        # OpenAI-specific defaults otherwise take precedence over unified thinking.
+        model_settings["openai_reasoning_effort"] = None
     if model_settings:
         existing_settings = run_kwargs.get("model_settings")
         if callable(existing_settings):

@@ -129,7 +129,6 @@ class _KediHookCapability(AbstractCapability[Any]):
             with track_tool_call(call.tool_call_id) as tracker:
                 self._records[call.tool_call_id] = tracker
                 result = await handler(args)
-                tracker.ready()
                 return result
         except (
             ApprovalRequired,
@@ -240,6 +239,9 @@ class _KediHookCapability(AbstractCapability[Any]):
         self.adapter._consume_hook_started(call.tool_call_id)
         tracker = self._records.pop(call.tool_call_id, None)
         try:
+            # Pydantic 2.54 runs after_tool_execute inside wrap_tool_execute.
+            if tracker is not None:
+                tracker.ready()
             await dispatch_post_tool_use(
                 tool,
                 final_arguments,

@@ -165,7 +165,11 @@ def _lazy_adapter(
     metadata = adapter_factory(shortname)
 
     def factory() -> AgentAdapter[Any]:
-        return build_adapter(shortname, model, **dict(adapter_kwargs))
+        options = dict(adapter_kwargs)
+        if shortname == "pydantic":
+            # The program's lexical model may replace this unused default.
+            options.setdefault("defer_model_check", True)
+        return build_adapter(shortname, model, **options)
 
     return LazyAdapter(
         factory,

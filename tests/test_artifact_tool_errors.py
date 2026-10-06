@@ -219,7 +219,7 @@ def test_pydantic_compute_error_guides_one_successful_correction(
         nonlocal calls
         calls += 1
         if calls == 1:
-            code = "eval('1 + 1')"
+            code = "sum_values([1, 2])"
         elif calls == 2:
             retries = [
                 part for msg in messages for part in msg.parts if isinstance(part, RetryPromptPart)
@@ -264,7 +264,7 @@ def test_langchain_compute_error_preserves_guidance_and_accepts_correction(
                 "name": spec.name,
                 "type": "tool_call",
                 "id": "bad-compute",
-                "args": {"code": "exec('x = 1')", "artifact_refs": [ref_id]},
+                "args": {"code": "sum_values([1, 2])", "artifact_refs": [ref_id]},
             }
         )
         assert error.status == "error"

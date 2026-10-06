@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gc
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import TypeAlias
 
@@ -36,8 +37,10 @@ TOOL_RESULT = TypeAdapter(dict[str, JsonValue])
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("abandon", ["cancel", "timeout"])
+@pytest.mark.parametrize("observe", [False, True])
 async def test_abandoned_parent_wait_retrieves_later_failure_without_hiding_task_error(
     abandon: str,
+    observe: bool,
 ) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -67,7 +70,11 @@ async def test_abandoned_parent_wait_retrieves_later_failure_without_hiding_task
     unhandled: list[str] = []
     loop.set_exception_handler(lambda _loop, context: unhandled.append(str(context.get("message"))))
     try:
-        with pytest.raises(KediExecutionError, match="review backend failed"):
+        with (
+            nullcontext()
+            if observe
+            else pytest.raises(KediExecutionError, match="review backend failed")
+        ):
             async with runtime.subagents(parent="manager") as scope:
                 job = await scope.start("worker", task="Review the original scope.")
                 await asyncio.wait_for(entered.wait(), 2)
@@ -82,14 +89,23 @@ async def test_abandoned_parent_wait_retrieves_later_failure_without_hiding_task
                         await coordinator.wait(job.task_id, timeout=0.01)
                 assert coordinator.status(job.task_id) == "running"
                 release.set()
-                with pytest.raises(KediExecutionError, match="review backend failed"):
-                    await job.wait()
+                if observe:
+                    with pytest.raises(KediExecutionError, match="review backend failed"):
+                        await job.wait()
+                else:
+
+                    async def wait_for_failure():
+                        while coordinator.status(job.task_id) == "running":
+                            await asyncio.sleep(0)
+
+                    await asyncio.wait_for(wait_for_failure(), 2)
         gc.collect()
         await asyncio.sleep(0)
         assert unhandled == []
     finally:
         release.set()
         loop.set_exception_handler(previous_handler)
+        await runtime.aclose()
 
 
 def responding_adapter(name: str, respond: Respond) -> PydanticAdapter | LangChainAdapter:

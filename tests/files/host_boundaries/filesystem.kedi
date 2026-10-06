@@ -1,0 +1,10 @@
+> import: filesystem:
+  read_text_file
+
+> artifacts:
+  enabled: false
+> approval: `approve`
+> use: read_text_file
+
+[answer] << <instruction>
+= <answer>

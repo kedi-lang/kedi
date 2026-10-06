@@ -89,7 +89,7 @@ def _execute_conversation_call(
         SchemaOutput,
         TypedOutput,
     )
-    from kedi.agent_adapter.request_budget import ModelRequestBudget
+    from kedi.agent_adapter.request_budget import ModelRequestBudget, SupportsHistoryTokenEstimate
     from kedi.agent_adapter.telemetry import (
         agent_call_span,
         model_call_span,
@@ -195,10 +195,17 @@ def _execute_conversation_call(
             ),
             turn_sequence=request.metadata.turn_sequence,
         ) as agent_telemetry:
+            history_estimator = adapter
             reservation = budget.reserve(
                 request.prompt.content,
                 context=request_context(request),
                 resume_state=resume_state,
+                history_tokens=(
+                    history_estimator.estimate_history_tokens(resume_state)
+                    if resume_state is not None
+                    and isinstance(history_estimator, SupportsHistoryTokenEstimate)
+                    else None
+                ),
             )
             try:
                 artifact_scope = (

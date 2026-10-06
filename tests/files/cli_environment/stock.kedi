@@ -1,0 +1,13 @@
+```
+import json
+import os
+from pathlib import Path
+path = Path(__file__)
+path = path.with_name("stock.txt")
+notice = path.read_text()
+```
+
+> model: `os.environ["KEDI_TEST_MODEL"]`
+> effort: high
+>> The stock notice is <notice>. Its receipt is [receipt: str], and its usable count is [usable: int], calculated after removing damaged units.
+= `json.dumps(dict(receipt=receipt, usable=usable, environment=os.environ["KEDI_TEST_MARKER"]))`

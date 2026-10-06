@@ -23,6 +23,15 @@ from kedi.artifacts import (
 from kedi.lang import compile_program, parse_program
 
 
+def test_clip_without_highlights_uses_identifier_components_or_stable_fallback():
+    from kedi.artifacts.query import _clip_start
+
+    text = "background " * 30 + "requestTimeout=30"
+    start = _clip_start(text, text, "|", ["timeout"], 40)
+    assert "requestTimeout=30" in text[start : start + 40]
+    assert _clip_start(text, text, "|", ["unrelated"], 40) == 0
+
+
 @pytest.fixture(params=["memory", "file"])
 def stored(request, tmp_path):
     manager = ArtifactManager(session_id="lexical-query")
@@ -115,6 +124,43 @@ def test_small_output_budget_keeps_match_and_does_not_fragment_index(stored):
         assert small["returned_chars"] == 30
         item = small["matches"][0]
         assert text[item["offset"] : item["end_offset"]] == item["content"]
+
+
+def test_clipping_preserves_relevant_cluster_after_common_matches(stored):
+    manager, policy = stored
+    rows = [
+        f"Archive row {i}: inventory inspection complete; no posting, adjustment, receipt or current shipment is contained in this historical note."
+        for i in range(160)
+    ]
+    evidence = (
+        "CURRENT revision 0: delivered 2 crates with 4 units per crate; "
+        "0 delivered units were rejected. Dispatched 3 units. "
+        "The receipt for this CURRENT revision is shipment-confirmed."
+    )
+    rows.insert(2, "OBSOLETE revision 0: deliver 999 units; dispatch none; receipt obsolete.")
+    rows.insert(91, evidence)
+    text = "\n".join(rows)
+    ref = manager.artifactize(text, policy=policy).ref.ref_id
+    result = manager.query(
+        ref,
+        "CURRENT entry revision 0 receipt crates units rejected dispatched preceding receipt",
+        max_chars=900,
+    )
+    item = result["matches"][0]
+    assert evidence in item["content"]
+    assert result["returned_chars"] <= 900
+    assert text[item["offset"] : item["end_offset"]] == item["content"]
+
+
+@pytest.mark.parametrize("query", ["run request timeout", "run requestTimeout"])
+def test_clipping_keeps_identifier_components_and_stemmed_matches(stored, query):
+    manager, policy = stored
+    text = "Running normally. " * 45 + "Running requestTimeout is 42 seconds." + " padding" * 100
+    ref = manager.artifactize(text, policy=policy).ref.ref_id
+    result = manager.query(ref, query, max_chars=80)
+    item = result["matches"][0]
+    assert "Running requestTimeout is 42 seconds." in item["content"]
+    assert text[item["offset"] : item["end_offset"]] == item["content"]
 
 
 @pytest.mark.parametrize(

@@ -187,6 +187,8 @@ def pydantic_tool_from_spec(
         )
     native_tool.kedi_spec = tool
     native_tool.metadata = tool.metadata
+    if tool.return_schema is not None:
+        native_tool.function_schema.return_schema = tool.return_schema
     return native_tool
 
 

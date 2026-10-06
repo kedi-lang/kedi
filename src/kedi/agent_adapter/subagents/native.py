@@ -14,7 +14,11 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
-from kedi.agent_adapter.execution import OwnedAsyncLoop, _resolve_deadline
+from kedi.agent_adapter.execution import (
+    OwnedAsyncLoop,
+    _resolve_deadline,
+    current_async_owner_loop,
+)
 from kedi.agent_adapter.subagents import DelegationResult
 from kedi.agent_adapter.subagents.attempts import track_delegation_attempt
 from kedi.agent_adapter.subagents.budget import DelegationBudget
@@ -71,14 +75,24 @@ class SubagentTask:
         self._owner._check_owner()
         self._owner._bind_execution_loop()
         if self._result is None:
-            raw = await self._owner.runtime._wait_subagent(self.run_id)
-            # Another waiter may have published the result while this one was suspended.
-            if self._result is None:
-                result = _result_value(raw)
-                if self._output_adapter is not None:
-                    output = self._output_adapter.validate_python(result.output, strict=True)
-                    result = replace(result, output=output)
-                self._result = result
+            try:
+                raw = await self._owner.runtime._wait_subagent(self.run_id)
+                # Another waiter may have published the result while this one was suspended.
+                if self._result is None:
+                    result = _result_value(raw)
+                    if self._output_adapter is not None:
+                        output = self._output_adapter.validate_python(result.output, strict=True)
+                        result = replace(result, output=output)
+                    self._result = result
+            except asyncio.CancelledError:
+                # Cancelling a waiter is not the same as observing a cancelled child.
+                if self._owner.runtime._subagent_status(self.run_id) == "cancelled":
+                    self._owner._observed.add(self.run_id)
+                raise
+            except Exception:
+                if self._owner.runtime._subagent_status(self.run_id) != "running":
+                    self._owner._observed.add(self.run_id)
+                raise
         self._owner._observed.add(self.run_id)
         return self._result
 
@@ -248,7 +262,9 @@ class NativeSubagentOwner:
     ) -> Future[_T]:
         with self._state_lock:
             if self._loop is None and self._execution_loop is None:
-                self._loop = OwnedAsyncLoop()
+                self._execution_loop = current_async_owner_loop()
+                if self._execution_loop is None:
+                    self._loop = OwnedAsyncLoop()
             owned_loop = self._loop
             loop = self._execution_loop
         if owned_loop is not None:
@@ -256,6 +272,8 @@ class NativeSubagentOwner:
         assert loop is not None
         if loop.is_closed():
             raise KediExecutionError("Subagent owner event loop is closed")
+        if not loop.is_running():
+            raise KediExecutionError("Subagent owner event loop is not running")
         try:
             current = asyncio.get_running_loop()
         except RuntimeError:
@@ -330,8 +348,10 @@ class NativeSubagentOwner:
 
     def close_sync(self, primary_error: BaseException | None = None) -> None:
         try:
-            if self._loop is not None:
-                self._loop.run(self.close(primary_error), enforce_deadline=False)
+            if self._loop is not None or self._execution_loop is not None:
+                self.runtime._engine.wait(
+                    self.submit(lambda: self.close(primary_error), enforce_deadline=False)
+                )
             else:
                 self._closed = True
         finally:

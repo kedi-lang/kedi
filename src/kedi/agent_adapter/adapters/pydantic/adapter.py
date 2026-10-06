@@ -8,6 +8,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Iterator,
+    Literal,
     Mapping,
     Sequence,
     cast,
@@ -39,6 +40,7 @@ from pydantic_ai.tools import (
 )
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai.workspaces import WorkspaceBackend, WorkspaceRef
 
 from kedi.agent_adapter.adapters.pydantic import hooks as _hooks
 from kedi.agent_adapter.adapters.pydantic import messages as _messages
@@ -399,6 +401,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         finally:
             self._subagent_conversation_var.reset(token)
 
+    @staticmethod
+    def estimate_history_tokens(state: Mapping[str, Any]) -> int:
+        from .budget import estimate_history_tokens
+
+        return estimate_history_tokens(state)
+
     @asynccontextmanager
     async def responses_session(self) -> AsyncGenerator[None]:
         """Own one Responses connection across sequential runs in the current task."""
@@ -564,6 +572,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         infer_name: bool = True,
         toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        workspace: WorkspaceBackend | WorkspaceRef | Literal["new"] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, OutputDataT]]: ...
 
@@ -589,6 +598,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         infer_name: bool = True,
         toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        workspace: WorkspaceBackend | WorkspaceRef | Literal["new"] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, RunOutputDataT]]: ...
 
@@ -613,6 +623,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         infer_name: bool = True,
         toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        workspace: WorkspaceBackend | WorkspaceRef | Literal["new"] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, Any]]:
         """Apply active Kedi state to every native Pydantic AI run surface."""
@@ -639,6 +650,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 "infer_name": False,
                 "toolsets": toolsets,
                 "capabilities": capabilities,
+                "workspace": workspace,
                 "spec": spec,
             },
         )

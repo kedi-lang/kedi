@@ -262,8 +262,12 @@ async def resolve_tool_approval_async(
                 handler = policy.handler
                 if isinstance(handler, SupportsAsyncApprovalResolution):
                     result = handler.resolve_async(request)
-                else:
+                elif inspect.iscoroutinefunction(handler) or inspect.iscoroutinefunction(
+                    getattr(handler, "__call__", None)
+                ):
                     result = handler(request)
+                else:
+                    result = await _run_sync_handler(handler, request)
                 if inspect.isawaitable(result):
                     result = await result
                 decision = _validated_decision(result)
@@ -272,6 +276,37 @@ async def resolve_tool_approval_async(
             raise
         record_decision(telemetry, decision)
         return decision
+
+
+async def _run_sync_handler(
+    handler: ApprovalHandler, request: ApprovalRequest
+) -> ApprovalDecision | Awaitable[ApprovalDecision]:
+    from ..cancellation import RunCancellation, use_run_cancellation
+    from ..execution import use_async_owner_loop
+
+    cancellation = RunCancellation()
+    # A Kedi handler can make a nested model call. Keep the model's owner loop
+    # responsive and retain worker ownership until cancellation has unwound it.
+    with use_async_owner_loop(), use_run_cancellation(cancellation):
+        worker = asyncio.create_task(asyncio.to_thread(handler, request))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancellation.cancel()
+            # Repeated owner cancellation must not detach cleanup in the worker.
+            while True:
+                try:
+                    result = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    if worker.cancelled():
+                        break
+                except BaseException:
+                    break
+                else:
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    break
+            raise
 
 
 async def _resolve_awaitable(result: Awaitable[ApprovalDecision]) -> ApprovalDecision:

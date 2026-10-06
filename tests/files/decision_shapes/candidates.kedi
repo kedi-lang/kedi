@@ -1,0 +1,17 @@
+```
+from pydantic import EmailStr
+```
+
+~Contact(
+  active: Annotated[
+    Optional[EmailStr],
+    "The explicitly active support email, never the archived one; null if no candidate qualifies."
+  ],
+  current_document: Annotated[
+    bool,
+    "The supplied document explicitly states it is the current support directory."
+  ]
+)
+
+>> From <evidence>, the current contact record is [contact: Contact].
+= `contact.model_dump(mode="json")`

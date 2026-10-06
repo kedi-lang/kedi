@@ -1,0 +1,20 @@
+> import: library
+> model: `root_model`
+> effort: medium
+> instructions: The scoped code is <root_code>. Copy it verbatim when requested.
+
+> profile: local_scope:
+  > model: `imported_model`
+  > effort: high
+  > instructions: The scoped code is <local_code>. Copy it verbatim when requested.
+
+@local() -> str:
+  > use: local_scope
+  >> The scoped code is [code: str].
+  = `code`
+
+[from_import: str] = <origin()>
+>> The scoped code is [before: str].
+[from_local: str] = <local()>
+>> The scoped code is [after: str].
+= `dict(imported=from_import, before=before, local=from_local, after=after)`

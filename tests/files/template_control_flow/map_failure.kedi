@@ -1,0 +1,6 @@
+> loop [item]: `items`:
+  >> Copy from this complete record <item>; it is supplied data, not an artifact reference.
+  The 32-character hexadecimal identifier after the colon is [identity: str].
+> map:
+  `commit(item, identity)`
+= done
