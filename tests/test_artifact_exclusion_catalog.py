@@ -1,9 +1,9 @@
 """Exclusion diagnostics use real catalogs without activating deferred tools."""
 
 import asyncio
-from dataclasses import replace
 import re
 import warnings
+from dataclasses import replace
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel

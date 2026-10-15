@@ -7,14 +7,14 @@ from types import FrameType
 from typing import Any, Sequence, cast
 
 from pydantic_ai import Agent
-from pydantic_ai.models import Model
-from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
 from pydantic_ai.capabilities._deferred_capability_loader import (
     DeferredCapabilityLoader,
     _render_deferred_capability_catalog,
 )
+from pydantic_ai.models import Model
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.tools import RunContext
+from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
 
 NativeDeferredCapabilityLoader = DeferredCapabilityLoader
 

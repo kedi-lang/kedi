@@ -11,8 +11,8 @@ from .definitions import (
     ProfileArtifactsMember,
     ProfileBudgetMember,
     ProfileCodeModeMember,
-    ProfileDefinition,
     ProfileDeferMember,
+    ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
     ProfileHooksMember,
@@ -31,7 +31,6 @@ from .definitions import (
 )
 
 if TYPE_CHECKING:
-    from .capture import CapturedAgentProfile
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
         ProfileAdapterEntry,
@@ -53,6 +52,8 @@ if TYPE_CHECKING:
         ProfileSystemEntry,
         Program,
     )
+
+    from .capture import CapturedAgentProfile
 
 
 def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
@@ -361,6 +362,7 @@ def capture_procedure_profiles(
         UseDirectiveStmt,
     )
 
+    from .capture import CapturedAgentProfile
     from .directives import (
         eval_adapter_directive,
         eval_agent_directive,
@@ -378,7 +380,6 @@ def capture_procedure_profiles(
         eval_skills_directive,
         eval_system_directive,
     )
-    from .capture import CapturedAgentProfile
     from .profile import AgentProfile
     from .use_resolution import eval_use_directive, use_contains_capability
 

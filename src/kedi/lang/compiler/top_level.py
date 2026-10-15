@@ -23,8 +23,8 @@ from kedi.agent_profile.directives import (
     eval_skills_directive,
     eval_system_directive,
 )
-from kedi.agent_profile.use_resolution import eval_use_directive
 from kedi.agent_profile.telemetry import merge_profile_with_telemetry, record_profile_transition
+from kedi.agent_profile.use_resolution import eval_use_directive
 from kedi.debugging import checkpoint
 from kedi.lang.ast import (
     AdapterDirectiveStmt,

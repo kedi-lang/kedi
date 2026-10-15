@@ -4,19 +4,18 @@ from dataclasses import replace
 import pytest
 
 from kedi import Capability
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, McpServerSpec
-from kedi.agent_profile.capture import CapturedAgentProfile
 from kedi.agent_profile.capabilities import (
     AppliedCapability,
     capability_subagent_policy,
     capability_tool_policy,
     deferred_boundaries,
 )
-from kedi.agent_profile.hooks import HookSettings
-from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.agent_profile.capture import CapturedAgentProfile
 from kedi.agent_profile.definitions import (
-    ProfileDefinition,
     ProfileDeferMember,
+    ProfileDefinition,
     ProfileHooksMember,
     ProfileModelMember,
     ProfileSubagentMember,
@@ -25,6 +24,7 @@ from kedi.agent_profile.definitions import (
     ProfileUseMember,
 )
 from kedi.agent_profile.evaluation import _bound_capability_tool, eval_profile_definition
+from kedi.agent_profile.hooks import HookSettings
 from kedi.agent_profile.use_resolution import use_contains_capability
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -299,8 +299,8 @@ def test_empty_capability_instruction_does_not_emit_an_empty_fragment(runtime):
 
 
 def test_captured_budget_directive_updates_active_execution_ledger():
-    from tests.test_capability_capture import CapabilityAdapter
     from kedi.run_budget import current_run_budget
+    from tests.test_capability_capture import CapabilityAdapter
 
     observed = []
 

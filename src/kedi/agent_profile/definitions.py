@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from .profile import WorkflowMode
 
 if TYPE_CHECKING:
-    from .capability import Capability
     from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.lang.ast import (
         AgentConnectionField,
@@ -19,6 +18,8 @@ if TYPE_CHECKING:
         TemplateLine,
         TypeExpr,
     )
+
+    from .capability import Capability
 
 
 @dataclass(frozen=True, kw_only=True)

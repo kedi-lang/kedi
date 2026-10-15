@@ -6,11 +6,11 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from kedi.agent_profile.instructions import CapabilityInstruction
 from kedi.agent_profile.capabilities import AppliedCapability, deferred_capabilities
-from kedi.agent_profile.profile import AgentProfile
 from kedi.agent_profile.definitions import ProfileDefinition, ProfileSystemMember
+from kedi.agent_profile.instructions import CapabilityInstruction
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.agent_profile.profile import AgentProfile
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import TemplateLine, TextSegment

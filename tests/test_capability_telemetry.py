@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import re
+from dataclasses import replace
 
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
-import pytest
 
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
 from kedi.agent_profile.telemetry import capability_trace_id

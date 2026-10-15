@@ -8,15 +8,15 @@ from lsprotocol import types as lsp
 from tree_sitter import Language, Parser, Query, QueryCursor
 
 from kedi.agent_profile.capabilities import CAPABILITY_DIRECTIVES
-from kedi.lsp.features.completion import compute_completion
-from kedi.lsp.features.capability_state import _profile_adapter_state
-from kedi.lsp.features.document import compute_document_symbols
 from kedi.lang import parse_program
+from kedi.lsp.features.capability_state import _profile_adapter_state
+from kedi.lsp.features.completion import compute_completion
+from kedi.lsp.features.document import compute_document_symbols
 from kedi.lsp.features.semantic_tokens import SEMANTIC_TOKEN_TYPES, compute_semantic_tokens_full
 from tests.lsp_helpers import (
     decode_semantic_tokens,
-    diagnostics_for,
     definition_at,
+    diagnostics_for,
     hover_text_at,
     position_of,
     references_at,
@@ -175,7 +175,7 @@ def test_legacy_use_tool_list_produces_adapter_diagnostic():
 
 
 def test_symbol_generation_tolerates_defer_entry_without_location():
-    from kedi.lang.ast import ProfileDefStmt, ProfileDeferEntry
+    from kedi.lang.ast import ProfileDeferEntry, ProfileDefStmt
     from kedi.lsp.features.document import _profile_def_symbol
 
     symbol = _profile_def_symbol(

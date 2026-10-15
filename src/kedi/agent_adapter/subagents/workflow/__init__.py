@@ -27,8 +27,8 @@ from kedi.agent_profile.capabilities import capability_subagent_policy
 
 from ....telemetry import TelemetrySpan, current_span
 from ....telemetry import span as telemetry_span
-from ...telemetry import current_tool_call_name
 from ...hooks.tool_wrapper import with_hook_lifecycle
+from ...telemetry import current_tool_call_name
 from ...tools.specs import ToolSpec
 from .. import validate_final_schema
 from ..attempts import attempt_status_from_run, track_delegation_attempt

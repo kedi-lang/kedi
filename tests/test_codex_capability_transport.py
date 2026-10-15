@@ -1,21 +1,21 @@
 """Endpoint-specific model profiles must stay local to the owning run."""
 
-from contextlib import asynccontextmanager
 import re
+from contextlib import asynccontextmanager
 
 import pytest
 from pydantic import BaseModel
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolAvailabilityDeltaPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolAvailabilityDeltaPart, ToolCallPart
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from kedi import Capability
 from kedi.agent_adapter import PydanticAdapter
+from kedi.agent_adapter.adapters.pydantic.budget import BudgetedModel
 from kedi.agent_adapter.adapters.pydantic.compat import (
     _transport_profile_model,
     transport_model_scope,
 )
-from kedi.agent_adapter.adapters.pydantic.budget import BudgetedModel
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.run_budget import RunBudget, RunBudgetExceeded, run_budget_scope
 
@@ -208,6 +208,7 @@ async def test_http_and_other_provider_profiles_are_not_changed():
 
 def test_unrelated_websocket_model_does_not_require_the_optional_helper(monkeypatch):
     import builtins
+
     from pydantic_ai.models.test import TestModel
 
     class OtherWebSocketModel(TestModel):

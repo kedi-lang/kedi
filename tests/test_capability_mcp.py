@@ -1,19 +1,20 @@
 """MCP ownership is independent of the host policy and exposed tool spelling."""
 
 import asyncio
-from dataclasses import replace
 import re
+from dataclasses import replace
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from mcp.server.fastmcp import FastMCP
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
+from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.hooks import PreToolUseDecision
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.capabilities import (
@@ -23,7 +24,6 @@ from kedi.agent_profile.capabilities import (
 )
 from kedi.agent_profile.hooks import HookSettings
 from kedi.agent_profile.mcp import McpServerSpec
-from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.errors import KediExecutionError
 
 

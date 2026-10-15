@@ -15,10 +15,10 @@ from pydantic_ai.models.function import FunctionModel
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
 from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.hooks import HookDeniedError, PreToolUseDecision
-from kedi.agent_adapter.hooks.tool_wrapper import dispatch_pre_tool_use, dispatch_post_tool_use
+from kedi.agent_adapter.hooks.tool_wrapper import dispatch_post_tool_use, dispatch_pre_tool_use
 from kedi.agent_adapter.subagents.ownership import with_subagent_ownership
 from kedi.agent_adapter.subagents.runs import SubagentRunRegistry
-from kedi.agent_adapter.tools.specs import ToolSpec, tool_capability_policy, tool_approval_policy
+from kedi.agent_adapter.tools.specs import ToolSpec, tool_approval_policy, tool_capability_policy
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.capabilities import AppliedCapability
 from kedi.agent_profile.definitions import ProfileDefinition, ProfileSystemMember

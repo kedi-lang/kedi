@@ -85,9 +85,9 @@ def test_activation_errors_are_correctable_but_arbitrary_codemode_errors_are_not
 
 @pytest.mark.asyncio
 async def test_codemode_resolves_argument_sensitive_ownership_before_execution():
-    from kedi.agent_adapter.codemode.tool_specs import CodeModeToolSpecBridge
-    from kedi.agent_adapter.codemode import CodeModeLimits
     from kedi.agent_adapter.approvals.policy import ApprovalPolicy
+    from kedi.agent_adapter.codemode import CodeModeLimits
+    from kedi.agent_adapter.codemode.tool_specs import CodeModeToolSpecBridge
     from kedi.agent_profile.capabilities import CapabilityToolPolicy
 
     observed = []
@@ -128,10 +128,10 @@ def test_hook_argument_edit_preserves_ownership_for_same_capability():
 
 @pytest.mark.asyncio
 async def test_owned_dynamic_child_validates_and_returns_structured_result():
-    from tests.test_subagents import _dynamic_workflow_tool
+    from kedi.agent_adapter.approvals.policy import ApprovalPolicy
     from kedi.agent_profile.compile import build_capture_env
     from kedi.agent_profile.evaluation import eval_profile_definition
-    from kedi.agent_adapter.approvals.policy import ApprovalPolicy
+    from tests.test_subagents import _dynamic_workflow_tool
 
     adapter, runtime, _ = _dynamic_workflow_tool()
     try:

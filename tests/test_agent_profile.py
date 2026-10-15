@@ -6,7 +6,6 @@ import pytest
 
 import kedi.agent_adapter.registry as adapter_registry
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
-from kedi.agent_adapter.request import KediTemplatePromptBuilder
 from kedi.agent_adapter.registry import (
     AdapterFactory,
     adapter_capabilities,
@@ -14,6 +13,7 @@ from kedi.agent_adapter.registry import (
     build_adapter,
     known_adapter_shortnames,
 )
+from kedi.agent_adapter.request import KediTemplatePromptBuilder
 from kedi.agent_profile import (
     A2AConnection,
     AgentProfile,

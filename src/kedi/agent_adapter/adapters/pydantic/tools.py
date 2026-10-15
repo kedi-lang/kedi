@@ -47,8 +47,8 @@ from kedi.agent_adapter.tools.execution import (
     resolve_tool_arguments_async,
     with_required_before_output,
 )
-from kedi.agent_adapter.tools.retry import tool_body
 from kedi.agent_adapter.tools.records import track_tool_call
+from kedi.agent_adapter.tools.retry import tool_body
 from kedi.agent_adapter.tools.scope import (
     current_required_tool_calls,
 )
@@ -495,6 +495,7 @@ async def _handle_deferred_tool_calls(
     self: PydanticAdapter[Any, Any], _context: Any, requests: Any
 ) -> Any:
     from kedi.agent_profile.activation import capability_activation_scope
+
     from .user_capabilities import _DeferredCapabilityGraph
 
     graph = _DeferredCapabilityGraph(self.active_profile, self.scoped_tool_specs)

@@ -11,8 +11,8 @@ if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import ProcedureDef, UseDirectiveStmt
 
-    from .definitions import ProfileDefinition
     from .capability import Capability
+    from .definitions import ProfileDefinition
 
 
 def eval_use_directive(

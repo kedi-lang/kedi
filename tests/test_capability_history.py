@@ -17,11 +17,11 @@ from pydantic_ai.messages import (
 
 from kedi.agent_adapter import HistoryProcessingValidationError
 from kedi.agent_adapter.adapters.pydantic.history_processing import PydanticHistoryMessageCodec
-from kedi.agent_adapter.compaction.pydantic_codec import PydanticHistoryCodec
 from kedi.agent_adapter.compaction import (
     PydanticArtifactHistoryProcessor,
     PydanticHistoryArchiveSettings,
 )
+from kedi.agent_adapter.compaction.pydantic_codec import PydanticHistoryCodec
 from kedi.agent_adapter.history_processing import HistoryProcessorRunner
 from kedi.agent_adapter.tools.scope import artifact_admission_scope
 from kedi.artifacts import ArtifactManager, ArtifactPolicy

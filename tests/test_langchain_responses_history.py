@@ -17,14 +17,13 @@ from kedi.agent_adapter.adapters.langchain.runtime import (
     LangChainRunMiddleware,
     langchain_run_scope,
 )
-from kedi.agent_adapter.conversation import AdapterConversationContext
-from kedi.agent_adapter.subagents import SubagentConversationContext
-
 from kedi.agent_adapter.compaction import (
     HistoryArchiveSettings,
     LangChainArtifactHistoryProcessor,
     LangChainHistoryCodec,
 )
+from kedi.agent_adapter.conversation import AdapterConversationContext
+from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.tools.scope import artifact_admission_scope
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
 

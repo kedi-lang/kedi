@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import re
 import asyncio
-from hashlib import sha256
+import re
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from threading import Lock
 
 import pytest
@@ -19,14 +19,14 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 
-from kedi.agent_adapter.adapters import PydanticAdapter
-from kedi.lang import compile_program, parse_program
-from kedi.agent_adapter.hooks import PreToolUseDecision
 from kedi import Capability
-from kedi.agent_profile import AgentProfile
-from kedi.agent_profile.activation import capability_activation_scope, require_subagent_activation
+from kedi.agent_adapter.adapters import PydanticAdapter
+from kedi.agent_adapter.hooks import PreToolUseDecision
 from kedi.agent_adapter.tools.errors import CapabilityActivationError
 from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.activation import capability_activation_scope, require_subagent_activation
+from kedi.lang import compile_program, parse_program
 
 
 def native_id(instructions: str, name: str) -> str:

@@ -9,9 +9,9 @@ from threading import Event
 
 import pytest
 
+from kedi.agent_profile import AgentProfile, block_agent_profile_scope
 from kedi.agent_profile.compile import profile_stmt_to_definition
 from kedi.agent_profile.evaluation import eval_profile_definition
-from kedi.agent_profile import AgentProfile, block_agent_profile_scope
 from kedi.agent_profile.scope import current_block_agent_profile
 from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError

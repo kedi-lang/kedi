@@ -9,7 +9,6 @@ from kedi.agent_adapter.tools.errors import CapabilityActivationError
 from .capabilities import deferred_boundaries
 from .profile import AgentProfile
 
-
 _active_capabilities: ContextVar[frozenset[str]] = ContextVar(
     "kedi_active_capabilities", default=frozenset()
 )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from hashlib import sha256
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Sequence
 
 from pydantic_ai.capabilities import (
@@ -18,15 +18,15 @@ from pydantic_ai.tools import RunContext, ToolDefinition
 from pydantic_ai.toolsets import AbstractToolset, ToolsetTool, WrapperToolset
 
 from kedi.agent_adapter.tools.specs import ToolSpec
-from kedi.agent_profile.capabilities import AppliedCapability, deferred_boundaries
-from kedi.agent_profile.activation import available_subagents, capability_activation_scope
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.activation import available_subagents, capability_activation_scope
+from kedi.agent_profile.capabilities import AppliedCapability, deferred_boundaries
 from kedi.agent_profile.telemetry import capability_attributes
 from kedi.errors import KediExecutionError
 from kedi.telemetry import current_span, span
 
-from .tools import _approval_required_toolset, pydantic_toolset_from_specs
 from .compat import NativeDeferredCapabilityLoader, native_deferred_catalog
+from .tools import _approval_required_toolset, pydantic_toolset_from_specs
 
 if TYPE_CHECKING:
     from .adapter import PydanticAdapter

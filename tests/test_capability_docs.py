@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
+import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
-import pytest
 
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.lang import compile_program, parse_program

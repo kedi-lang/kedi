@@ -21,6 +21,7 @@ from ..approvals.policy import (
     resolve_tool_approval,
     resolve_tool_approval_async,
 )
+from .records import current_tool_call_tracker
 from .scope import (
     RequiredToolCalls,
     _defer_artifact_admission,
@@ -28,7 +29,6 @@ from .scope import (
     current_artifact_admission,
 )
 from .specs import ToolSpec
-from .records import current_tool_call_tracker
 
 _RISK_ORDER: dict[ToolRisk, int] = {
     "read_only": 0,

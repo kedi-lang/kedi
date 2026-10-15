@@ -6,7 +6,6 @@ from dataclasses import replace
 from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
-from ...agent_profile.scope import current_block_agent_profile, replace_block_agent_profile_scope
 from ...agent_profile.directives import (
     eval_adapter_directive,
     eval_agent_directive,
@@ -24,8 +23,9 @@ from ...agent_profile.directives import (
     eval_skills_directive,
     eval_system_directive,
 )
-from ...agent_profile.use_resolution import eval_use_directive
+from ...agent_profile.scope import current_block_agent_profile, replace_block_agent_profile_scope
 from ...agent_profile.telemetry import merge_profile_with_telemetry
+from ...agent_profile.use_resolution import eval_use_directive
 from ...core import KediRuntime
 from ...core.expressions import ValueEnv
 from ...debugging import checkpoint

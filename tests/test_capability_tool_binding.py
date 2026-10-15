@@ -207,8 +207,8 @@ def test_unrelated_profile_tool_override_is_not_blocked_by_a_capability():
 def test_capability_subagent_binding_survives_registry_replacement():
     from kedi.agent_adapter.subagents.ownership import with_subagent_ownership
     from kedi.agent_profile import AgentProfile
-    from kedi.agent_profile.evaluation import eval_profile_definition
     from kedi.agent_profile.definitions import ProfileSystemMember
+    from kedi.agent_profile.evaluation import eval_profile_definition
 
     runtime = compile_program(
         parse_program(

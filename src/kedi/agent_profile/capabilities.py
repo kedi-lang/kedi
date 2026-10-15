@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, field, replace
 from hashlib import sha256
 from inspect import unwrap
-import json
 from typing import TYPE_CHECKING
 
 from ..agent_adapter.approvals.policy import ApprovalPolicy

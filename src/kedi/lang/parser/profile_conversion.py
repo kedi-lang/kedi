@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from tree_sitter import Node
 
 from kedi.agent_profile.capabilities import CAPABILITY_DIRECTIVES
-
 from kedi.lang.ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
@@ -13,8 +12,8 @@ from kedi.lang.ast import (
     ProfileArtifactsEntry,
     ProfileBudgetEntry,
     ProfileCodeModeEntry,
-    ProfileDefStmt,
     ProfileDeferEntry,
+    ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,
     ProfileHooksEntry,
