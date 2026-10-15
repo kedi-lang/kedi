@@ -31,29 +31,73 @@ from kedi.agent_adapter.request import (
     request_diagnostics,
 )
 from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.capabilities import CapabilityToolPolicy
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.core.expressions import _type_display_name
 
 
-def test_prompt_builders_preserve_existing_wire_text() -> None:
+def test_prompt_builders_separate_completion_instructions_from_context() -> None:
     template = KediTemplatePromptBuilder(
         template="Summarize Kedi. Return [summary].",
         output_fields=("summary",),
     ).build()
     assert template.content == (
-        "Fill each unescaped [name] or [name: type] output field with only that field's "
-        "replacement value; never return the completed template as a field value. "
-        "Escaped square brackets are literal text, not output fields; for example, "
-        "\\[ok\\] represents the literal text [ok]. "
-        "A replacement value may itself contain delimiters; include them when the template "
-        "explicitly requests them. Preserve literal values already present in the template "
-        "exactly; do not replace or invent them. The template must remain grammatically "
-        "and semantically coherent after substitution.\n"
         "Fields to be substituted into the template string for final construction: (summary)."
         "\n\nThe template string:\nSummarize Kedi. Return [summary]."
     )
     assert ClaimPromptBuilder(claim="Kedi is typed").build().content == "Claim: Kedi is typed"
     assert RawPromptBuilder(content="hello").build().content == "hello"
+
+
+def test_deferred_tool_contract_preserves_ownership_and_changes_lane_identity() -> None:
+    tool = ToolSpec(name="lookup", fn=lambda: "done")
+    deferred = replace(
+        tool,
+        deferred_capability="fixture::reader",
+        capability_policy=CapabilityToolPolicy(owners=("fixture::reader",)),
+    )
+    assembler = RunRequestAssembler()
+    kwargs = dict(
+        prompt=RawPromptBuilder(content="Read a document.").build(),
+        instructions=(),
+        conversation=None,
+        output=TextOutput(),
+        run_id="fixture",
+        turn_sequence=0,
+        call_kind="invoke",
+    )
+    eager_request = assembler.assemble(tool_specs=(tool,), **kwargs)
+    deferred_request = assembler.assemble(tool_specs=(deferred,), **kwargs)
+    definition = deferred_request.tool_definitions[0]
+    assert definition.capability_owners == ("fixture::reader",)
+    assert definition.deferred_capability == "fixture::reader"
+    assert (
+        request_diagnostics(eager_request).tool_contract_digest
+        != request_diagnostics(deferred_request).tool_contract_digest
+    )
+    adapter = object()
+    profile = AgentProfile()
+    assert conversation_lane_identity(adapter, profile, (tool,)) != conversation_lane_identity(
+        adapter, profile, (deferred,)
+    )
+    assert conversation_lane_identity(adapter, profile, (deferred,)) == conversation_lane_identity(
+        adapter, profile.merge(AgentProfile(system="Reset.")), (deferred,)
+    )
+
+
+def test_template_instructions_are_stable_across_fields_and_context() -> None:
+    first = KediTemplatePromptBuilder(template="The city is [city].", output_fields=("city",))
+    second = KediTemplatePromptBuilder(template="The year is [year: int].", output_fields=("year",))
+    assert first.instruction_parts() == second.instruction_parts()
+    (part,) = first.instruction_parts()
+    assert part.identity == "template.instructions"
+    assert part.source == "runtime"
+    assert part.content.startswith("<TemplateInstructions>\nFill each unescaped")
+    assert part.content.endswith("\n</TemplateInstructions>")
+    assert "<ToolCallInstructions>" not in part.content
+    assert "The city" not in part.content
+    assert part.content not in first.build().content
 
 
 def test_output_type_display_name_supports_plain_and_annotated_types() -> None:

@@ -235,6 +235,8 @@ def _bind_imported_profile(
     bound_profiles: dict[str, ProfileDefinition] | None = None,
 ) -> AgentProfile | ProfileDefinition:
     """Attach imported private dependencies to one profile without exporting them."""
+    from kedi.agent_profile.use_resolution import python_capability_for_use
+
     if isinstance(profile, AgentProfile):
         return profile
 
@@ -259,8 +261,15 @@ def _bind_imported_profile(
     )
     bound_profiles[profile.name] = bound
     profile_bindings: dict[str, ProfileDefinition] = {}
+    capability_bindings = dict(profile.capability_bindings)
     for used_name in self._profile_use_names(profile):
         if used_name in tool_bindings:
+            continue
+        capability = capability_bindings.get(used_name) or python_capability_for_use(
+            imported_rt, used_name, {}
+        )
+        if capability is not None:
+            capability_bindings[used_name] = capability
             continue
         used_profile = imported_rt._profile_registry.get(used_name)
         if isinstance(used_profile, ProfileDefinition):
@@ -283,6 +292,7 @@ def _bind_imported_profile(
     bound = replace(
         bound,
         profile_bindings=profile_bindings,
+        capability_bindings=capability_bindings,
         subagent_bindings=subagent_bindings,
     )
     bound_profiles[profile.name] = bound
@@ -296,11 +306,17 @@ def _imported_tool_spec(
         kedi_procedure_tool_spec,
         python_callable_tool_spec,
     )
-    from kedi.agent_profile.use_resolution import procedure_def_for_tool, python_callable_for_tool
+    from kedi.agent_profile.use_resolution import (
+        procedure_def_for_tool,
+        python_callable_for_tool,
+        python_capability_for_use,
+    )
 
     proc = procedure_def_for_tool(imported_rt, tool_name)
     if proc is not None:
         return kedi_procedure_tool_spec(imported_rt, proc)
+    if python_capability_for_use(imported_rt, tool_name, {}) is not None:
+        return None
     tool_fn = python_callable_for_tool(imported_rt, tool_name)
     return None if tool_fn is None else python_callable_tool_spec(tool_name, tool_fn)
 
@@ -320,7 +336,17 @@ def _profile_tool_names(
 
 
 def _profile_use_names(self: ProgramCompiler, profile: ProfileDefinition) -> tuple[str, ...]:
-    return tuple(member.name for member in profile.members if member.kind == "use")
+    return tuple(
+        name
+        for member in profile.members
+        for name in (
+            (member.name,)
+            if member.kind == "use"
+            else member.tool_names
+            if member.kind == "tools"
+            else ()
+        )
+    )
 
 
 def _profile_subagent_names(

@@ -561,7 +561,7 @@ def test_hover_on_profile_composed_inside_profile_resolves_profile() -> None:
 """
     body = hover_text_at(src, "main.kedi", "readonlyfs", occurrence=2)
     assert "**Agent profile** `> profile: readonlyfs:`" in body
-    assert "System instructions: configured" in body
+    assert "Instructions: configured" in body
 
 
 def test_hover_on_unknown_profile_use_target_reports_missing_tool() -> None:
@@ -723,7 +723,7 @@ def test_hover_on_multiline_use_tools() -> None:
     >> answer [x]
 """
     body = hover_text_at(src, "tools.kedi", "use")
-    assert "Registers Kedi procedures as agent tools" in body
+    assert "Procedures register tools, profiles override configuration" in body
     assert "web_fetch" in body
 
 

@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
+from ...agent_profile.scope import current_block_agent_profile, replace_block_agent_profile_scope
 from ...agent_profile.directives import (
     eval_adapter_directive,
     eval_agent_directive,
@@ -24,6 +25,7 @@ from ...agent_profile.directives import (
     eval_system_directive,
 )
 from ...agent_profile.use_resolution import eval_use_directive
+from ...agent_profile.telemetry import merge_profile_with_telemetry
 from ...core import KediRuntime
 from ...core.expressions import ValueEnv
 from ...debugging import checkpoint
@@ -457,8 +459,18 @@ class StatementExecutor:
 
     def execute(self, proc: ProcedureDef, closure_env: dict[str, Any]) -> Any:
         """Execute procedure statements until the first evaluated return."""
+        from kedi.agent_profile.capture import CapturedAgentProfile
+
         from .type_system import pop_type_env, push_type_env
 
+        captured = proc.captured_agent_profile
+        if isinstance(captured, CapturedAgentProfile):
+            captured = captured.resolve()
+        active = captured if isinstance(captured, AgentProfile) else self.rt.default_agent_profile
+        # An unbound model still uses the invoking agent's model, as for imported
+        # helpers. This is not permission to inherit its instructions or tools.
+        if active.model is None:
+            active = replace(active, model=current_block_agent_profile().model)
         last_return: Any = None
         type_scope = push_type_env(self.rt)
 
@@ -471,8 +483,6 @@ class StatementExecutor:
         if len(parent_stack) >= 2:
             type_scope.update(parent_stack[-2])
 
-        captured = proc.captured_agent_profile
-        active = captured if isinstance(captured, AgentProfile) else self.rt.default_agent_profile
         profile_registry = self.rt._profile_registry
 
         try:
@@ -530,7 +540,7 @@ class StatementExecutor:
                 active = updated
                 continue
 
-            with block_agent_profile_scope(active):
+            with replace_block_agent_profile_scope(active):
                 result = self._execute_body_statement(
                     stmt,
                     proc,
@@ -587,7 +597,9 @@ class StatementExecutor:
                 ledger.set_budget(patch.run_budget)
             return active.merge(patch)
         if isinstance(stmt, SystemDirectiveStmt):
-            return active.merge(eval_system_directive(self.rt, stmt, closure_env))
+            return merge_profile_with_telemetry(
+                active, eval_system_directive(self.rt, stmt, closure_env)
+            )
         if isinstance(stmt, McpDirectiveStmt):
             return active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, SettingsDirectiveStmt):
@@ -607,7 +619,7 @@ class StatementExecutor:
             ledger = current_run_budget()
             if ledger is not None and patch.run_budget is not None:
                 ledger.set_budget(patch.run_budget)
-            return active.merge(patch)
+            return merge_profile_with_telemetry(active, patch)
         return None
 
     def _execute_body_statement(

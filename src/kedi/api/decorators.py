@@ -204,6 +204,7 @@ def _decorate_kedi_program(
                 adapter=active_adapter,
                 runtime_globals=runtime_globals,
                 engine=_execution_engine(config),
+                default_agent_profile=profile,
                 conversation_state=conversation,
                 loop_iteration_limit=config.loop_iteration_limit,
             )

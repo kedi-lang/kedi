@@ -292,8 +292,8 @@ def skill_instructions(*, store: SkillStore | None = None) -> str:
     """Return the compact system instruction accompanying the skill tools."""
     names = store.list_skills(limit=MAX_SKILL_LIST_LIMIT) if store is not None else None
     instructions: dict[str, Any] = {
-        "availability": "Skills are focused task instructions available on demand.",
-        "discovery": (
+        "Availability": "Skills are focused task instructions available on demand.",
+        "Discovery": (
             "The available names below are an inventory, not the skill instructions. "
             "Read a relevant skill before answering a project-specific task it covers. "
             "Use list_skills only to refresh discovery; no listing or reading is needed "
@@ -301,15 +301,16 @@ def skill_instructions(*, store: SkillStore | None = None) -> str:
             if names is not None
             else "Use list_skills when a task may benefit from a reusable procedure."
         ),
-        "reading": ("Use read_skill with a listed skill name before following that skill."),
-        "scope": (
+        "Reading": ("Use read_skill with a listed skill name before following that skill."),
+        "Scope": (
             "A skill applies only to the current task. Do not claim to have read one unless "
             "read_skill returned its contents."
         ),
     }
     if names is not None:
-        instructions["available_skills"] = names
+        instructions["AvailableSkills"] = names
     return format_as_xml(
         instructions,
-        root_tag="SKILL_INSTRUCTIONS",
+        root_tag="SkillInstructions",
+        item_tag="Skill",
     )

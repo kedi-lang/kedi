@@ -20,6 +20,7 @@ from kedi.agent_adapter.tools.errors import correctable_tool_error
 from kedi.agent_adapter.tools.execution import arguments_target_secret_file
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.capabilities import capability_mcp_policy
 
 
 def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
@@ -76,7 +77,7 @@ def _langchain_tool_parameters_schema(tool: Any) -> dict[str, Any]:
     )
 
 
-def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
+def _langchain_tool_spec_from_native(tool: Any, profile: AgentProfile | None = None) -> ToolSpec:
     name = getattr(tool, "name", None)
     if not isinstance(name, str) or not name:
         raise TypeError("LangChain CodeMode tools must expose a non-empty name")
@@ -100,6 +101,7 @@ def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
     invoke.__name__ = name
     description = getattr(tool, "description", None)
     metadata = getattr(tool, "metadata", None)
+    server_identity = metadata.get("kedi_mcp_server") if isinstance(metadata, Mapping) else None
     return ToolSpec(
         fn=invoke,
         name=name,
@@ -109,6 +111,11 @@ def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
         sequential=isinstance(metadata, Mapping) and metadata.get("kedi_sequential") is True,
         risk="mutating",
         risk_resolver=_langchain_external_tool_risk,
+        capability_policy=(
+            capability_mcp_policy(profile, server_identity)
+            if profile is not None and isinstance(server_identity, str)
+            else None
+        ),
     )
 
 

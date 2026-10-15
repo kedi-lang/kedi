@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .capability import Capability
 from .codemode import (
     CODEMODE_LIMIT_FIELDS,
     CODEMODE_SETTING_FIELDS,
@@ -90,6 +91,7 @@ __all__ = [
     "A2AConnectionError",
     "A2ACredentialError",
     "AgentProfile",
+    "Capability",
     "AgentProfileOverrideUnsupported",
     "AgentToolOverrideUnsupported",
     "AgentSubagentUnsupported",

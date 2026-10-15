@@ -200,12 +200,12 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             stmt = self._walk_artifacts_directive(child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
-        elif t == "profile_directive":
+        elif t in {"profile_directive", "capability_directive"}:
             stmt = self._walk_profile_directive(child)
             if stmt.name in prog.profile_defs:
                 self._error(
                     child,
-                    f"Duplicate profile definition: {stmt.name!r}",
+                    f"Duplicate {stmt.kind} definition: {stmt.name!r}",
                     code="K-PROFILE-DUP",
                 )
             else:

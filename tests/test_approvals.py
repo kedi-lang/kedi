@@ -89,6 +89,7 @@ def test_approval_telemetry_records_states_without_arguments() -> None:
     assert recorded.name == "await approval write_file"
     assert recorded.attributes == {
         "kedi.operation.name": "await_approval",
+        "gen_ai.tool.name": "write_file",
         "kedi.approval.tool.name": "write_file",
         "kedi.approval.risk": "sensitive",
         "kedi.approval.mechanism": "python_handler",

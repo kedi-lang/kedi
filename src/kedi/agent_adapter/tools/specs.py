@@ -14,11 +14,13 @@ from typing import (
 )
 
 from ..approvals.policy import (
+    ApprovalPolicy,
     ToolRisk,
 )
 from .retry import ToolRetryPolicy
 
 if TYPE_CHECKING:
+    from kedi.agent_profile.capabilities import CapabilityToolPolicy
     from kedi.lang.ast import ProcedureDef
 
 
@@ -45,6 +47,35 @@ class ToolSpec:
     sequential: bool = False
     result_admitter: ToolResultAdmitter | None = field(default=None, repr=False, compare=False)
     retry_policy: ToolRetryPolicy = field(default_factory=ToolRetryPolicy)
+    approval: ApprovalPolicy | None = None
+    capability_policy: CapabilityToolPolicy | None = None
+    capability_policy_resolver: (
+        Callable[[Mapping[str, Any]], CapabilityToolPolicy | None] | None
+    ) = field(default=None, repr=False, compare=False)
+    deferred_capability: str | None = None
+
+
+def tool_capability_policy(
+    tool: ToolSpec, arguments: Mapping[str, Any]
+) -> CapabilityToolPolicy | None:
+    if tool.capability_policy_resolver is not None:
+        return tool.capability_policy_resolver(arguments)
+    return tool.capability_policy
+
+
+def tool_approval_policy(
+    tool: ToolSpec, default: ApprovalPolicy | None, arguments: Mapping[str, Any] | None = None
+) -> ApprovalPolicy | None:
+    """Resolve local policy without weakening separately applied approval ceilings."""
+
+    if tool.approval is not None:
+        return tool.approval
+    policy = (
+        tool.capability_policy if arguments is None else tool_capability_policy(tool, arguments)
+    )
+    if policy is not None and policy.approval is not None:
+        return policy.approval
+    return default
 
 
 def tool_has_artifact_boundary(tool: ToolSpec) -> bool:

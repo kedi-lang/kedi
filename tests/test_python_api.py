@@ -36,7 +36,7 @@ from kedi.agent_adapter import (
 )
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
-from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
+from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION, KediTemplatePromptBuilder
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
 from kedi.artifacts import artifact_instructions
 from kedi.errors import KediExecutionError
@@ -44,6 +44,9 @@ from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
 T = TypeVar("T")
+TEMPLATE_INSTRUCTIONS = (
+    KediTemplatePromptBuilder(template="", output_fields=()).instruction_parts()[0].content
+)
 
 
 class Person(BaseModel):
@@ -896,7 +899,9 @@ def test_query_profile_arguments_apply_for_one_call(adapter: ApiAdapter) -> None
     assert current_block_agent_profile() == AgentProfile.empty()
     assert answer() == "ok"
     assert adapter.instructions == [
-        f"Use terse prose.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+        f"{TEMPLATE_INSTRUCTIONS}\n\nUse terse prose.\n\n"
+        f"<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n"
+        f"{artifact_instructions()}"
     ]
     assert adapter.settings == [{"temperature": 0.2}]
     assert adapter.tools == [
@@ -1046,14 +1051,6 @@ def test_bind_file_exposes_kedi_source_as_python_callable(
 
     assert summarize("Kedi") == "short summary"
     assert adapter.templates == [
-        "Fill each unescaped [name] or [name: type] output field with only that field's "
-        "replacement value; never return the completed template as a field value. "
-        "Escaped square brackets are literal text, not output fields; for example, "
-        "\\[ok\\] represents the literal text [ok]. "
-        "A replacement value may itself contain delimiters; include them when the template "
-        "explicitly requests them. Preserve literal values already present in the template "
-        "exactly; do not replace or invent them. The template must remain grammatically "
-        "and semantically coherent after substitution.\n"
         "Fields to be substituted into the template string for final construction: (summary).\n\n"
         "The template string:\n"
         "Summarize Kedi. Return [summary]."
@@ -1151,7 +1148,9 @@ def test_bind_file_profile_arguments_apply_for_one_call(
 
     assert answer() == "ok"
     assert adapter.instructions == [
-        f"Use terse prose.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+        f"{TEMPLATE_INSTRUCTIONS}\n\nUse terse prose.\n\n"
+        f"<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n"
+        f"{artifact_instructions()}"
     ]
     assert adapter.settings == [{"temperature": 0.2}]
     assert adapter.tools == [

@@ -1,7 +1,24 @@
+import asyncio
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messages_to_dict
+from langchain.agents.middleware.types import ModelRequest
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+    messages_to_dict,
+)
+from langchain_openai import ChatOpenAI
+
+from kedi.agent_adapter.adapters.langchain.runtime import (
+    LangChainRunMiddleware,
+    langchain_run_scope,
+)
+from kedi.agent_adapter.conversation import AdapterConversationContext
+from kedi.agent_adapter.subagents import SubagentConversationContext
 
 from kedi.agent_adapter.compaction import (
     HistoryArchiveSettings,
@@ -100,3 +117,77 @@ def test_exact_archival_handles_responses_calls_without_removing_open_tail():
         assert messages == original
     finally:
         manager.close()
+
+
+@pytest.mark.parametrize("subagent", [False, True])
+@pytest.mark.parametrize("next_instructions", ["original", "changed", None, "legacy"])
+def test_instruction_contract_controls_continuation_without_mutating_model(
+    subagent, next_instructions
+):
+    model = ChatOpenAI(
+        model="gpt-5.2",
+        api_key="fixture",
+        use_responses_api=True,
+        use_previous_response_id=True,
+        model_kwargs={"previous_response_id": "resp_old"},
+    )
+    conversation = (
+        SubagentConversationContext(conversation_id="test")
+        if subagent
+        else AdapterConversationContext()
+    )
+    middleware = LangChainRunMiddleware(archive=None, tool_retries=0, conversation=conversation)
+    seen = []
+
+    async def handler(request):
+        seen.append(request)
+        return SimpleNamespace(result=[AIMessage(content="done")])
+
+    async def run():
+        with langchain_run_scope(None) as state:
+            await middleware.awrap_model_call(
+                ModelRequest(
+                    model=model,
+                    messages=[HumanMessage(content="first")],
+                    system_message=SystemMessage(content="original"),
+                ),
+                handler,
+            )
+            if next_instructions != "legacy":
+                conversation.resume_state["langchain_instruction_digest"] = state.instruction_digest
+        conversation.resume_state["langchain_messages"] = messages_to_dict(
+            [HumanMessage(content="prior")]
+        )
+        previous = deepcopy(conversation.resume_state)
+        with langchain_run_scope(None) as state:
+            for _ in range(2):
+                await middleware.awrap_model_call(
+                    ModelRequest(
+                        model=model,
+                        messages=[HumanMessage(content="followup")],
+                        system_message=(
+                            SystemMessage(content=next_instructions) if next_instructions else None
+                        ),
+                        model_settings={"previous_response_id": "resp_old"},
+                    ),
+                    handler,
+                )
+            assert state.instructions_changed is (next_instructions != "original")
+        assert conversation.resume_state == previous
+        assert conversation.result_state == {}
+        if not subagent:
+            assert not conversation.cache_prefix_changed
+
+    asyncio.run(run())
+    assert model.use_previous_response_id is True
+    assert model.model_kwargs == {"previous_response_id": "resp_old"}
+    assert seen[0].model is model
+    if next_instructions == "original":
+        assert seen[1].model is model
+        assert seen[2].model is model
+    else:
+        assert seen[1].model.use_previous_response_id is False
+        assert seen[2].model.use_previous_response_id is True
+        for request in seen[1:]:
+            assert "previous_response_id" not in request.model.model_kwargs
+            assert "previous_response_id" not in request.model_settings

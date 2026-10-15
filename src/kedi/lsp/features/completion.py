@@ -6,6 +6,7 @@ from typing import List, Optional
 from lsprotocol import types as lsp
 
 from kedi.agent_profile import CODEMODE_SETTING_FIELDS
+from kedi.agent_profile.capabilities import CAPABILITY_DIRECTIVES
 from kedi.lang.ast import (
     AwaitStmt,
     LoopStmt,
@@ -50,8 +51,10 @@ _DIRECTIVE_COMPLETIONS = {
     "auto": "Generate a procedure implementation from its specification",
     "budget": "Limit model requests and tool attempts",
     "case": "Define an evaluation case",
+    "capability": "Define composable tools, guidance, and owned tool policies",
     "codemode": "Let the agent call tools through Python code",
     "data": "Supply evaluation or optimization data",
+    "defer": "Load this capability on demand; defaults to false",
     "effort": "Set the model reasoning effort",
     "else": "Run the alternative branch of a condition",
     "export": "Expose module definitions to importers",
@@ -80,7 +83,7 @@ _DIRECTIVE_COMPLETIONS = {
     "task_group": "Group subagent tasks for structured execution",
     "test_data": "Supply held-out evaluation data",
     "tool": "Describe a procedure's tool metadata and retry policy",
-    "use": "Apply an agent profile or expose procedures as tools",
+    "use": "Apply a profile, add a capability, or expose a tool",
     "workflow": "Select direct delegation or code-based subagent orchestration",
 }
 
@@ -187,6 +190,7 @@ def compute_completion(
     if re.fullmatch(r"\s*>\s*(?:await(?:\s+\[\w+\])?|send|interrupt)\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=False)
     directive_prefix = re.fullmatch(r"\s*(>\s*)[A-Za-z_]*", before_cursor)
+    in_capability = bool(re.match(r">\s*capability\s*:", _enclosing_header(source, pos) or ""))
     if directive_prefix:
         in_procedure_header = _inside_direct_procedure_body(source, pos)
         start = len(before_cursor) - len(before_cursor.lstrip())
@@ -212,9 +216,16 @@ def compute_completion(
                 sort_text=f"0-{name}",
             )
             for name, description in _DIRECTIVE_COMPLETIONS.items()
-            if name != "tool" or in_procedure_header
+            if (name != "tool" or in_procedure_header)
+            and (not in_capability or name in CAPABILITY_DIRECTIVES)
+            and (name != "defer" or in_capability)
         ]
-    if before_cursor.lstrip().startswith(">") and not re.search(r"[<\[][^>\]]*$", before_cursor):
+    use_target = re.fullmatch(r"\s*>\s*use\s*:\s*([A-Za-z_]\w*)", before_cursor)
+    if (
+        before_cursor.lstrip().startswith(">")
+        and not use_target
+        and not re.search(r"[<\[][^>\]]*$", before_cursor)
+    ):
         return []
 
     items: dict[str, lsp.CompletionItem] = {}
@@ -291,8 +302,10 @@ def compute_completion(
             f"Kedi procedure ({parameters})",
             insert_text=procedure.name,
         )
-    for name in _merged_profile_defs(prog, imported_surface):
-        add(name, lsp.CompletionItemKind.Struct, "agent profile")
+    for name, profile in _merged_profile_defs(prog, imported_surface).items():
+        if use_target and in_capability and profile.kind != "capability":
+            continue
+        add(name, lsp.CompletionItemKind.Struct, f"agent {profile.kind}")
     for name in imported_surface.values:
         add(name, lsp.CompletionItemKind.Variable, "imported value")
     for name in sorted(_prelude_defined_names(prog.prelude)):
@@ -327,6 +340,13 @@ def compute_completion(
             if isinstance(segment, OutputSegment) and not isinstance(statement, TaskStmt):
                 add(segment.name, lsp.CompletionItemKind.Variable, "template output")
 
+    if use_target:
+        items = {
+            name: item
+            for name, item in items.items()
+            if item.kind in (lsp.CompletionItemKind.Function, lsp.CompletionItemKind.Struct)
+            or item.detail == "Python binding"
+        }
     return sorted(items.values(), key=lambda item: item.label.lower())
 
 

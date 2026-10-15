@@ -483,6 +483,8 @@ UseProfileStmt = UseDirectiveStmt
 @dataclass
 class ProfileDefStmt(Stmt):
     name: str = ""
+    kind: Literal["profile", "capability"] = "profile"
+    defer_members: List["ProfileDeferEntry"] = field(default_factory=list)
     agent_members: List["ProfileAgentEntry"] = field(default_factory=list)
     adapter_members: List["ProfileAdapterEntry"] = field(default_factory=list)
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
@@ -504,8 +506,16 @@ class ProfileDefStmt(Stmt):
     workflow_members: List["ProfileWorkflowEntry"] = field(default_factory=list)
     use_targets: List[str] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
+    use_members: List[UseDirectiveStmt] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileDeferEntry:
+    enabled: bool = False
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

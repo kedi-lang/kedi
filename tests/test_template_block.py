@@ -317,7 +317,7 @@ def test_raw_invoke_uses_profile_tools_system_and_parallel_engine() -> None:
     assert rt.run_main() == "response:Hello"
     assert adapter.model_calls == ["raw-model"]
     assert adapter.instruction_calls == [
-        f"Keep it short.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+        f"Keep it short.\n\n<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n{artifact_instructions()}"
     ]
     assert adapter.tool_calls == [
         (

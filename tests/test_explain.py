@@ -151,8 +151,8 @@ def test_profile_resolution_uses_runtime_member_order_and_redacts_settings() -> 
             "> use: combined\n>> Answer is [answer: str].\n"
         )
     )
-    # Runtime profile definitions apply use-members after their own settings.
-    assert report.calls[0].model.value == "base-model"
+    # Runtime profile definitions apply nested use and local members in source order.
+    assert report.calls[0].model.value == "local-model"
     assert dict(report.calls[0].configuration)["settings"].value == "configured (value withheld)"
     assert "secret-never-render" not in render_explain(report)
 

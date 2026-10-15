@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..approvals.policy import ApprovalPolicy
 from ..approvals.reason import accepts_tool_reason, reason_schema, split_tool_reason
-from ..hooks.tool_wrapper import with_hook_lifecycle
+from ..hooks.tool_wrapper import new_tool_call_id, with_hook_lifecycle
 from ..tools.execution import resolve_tool_arguments_async
+from ..tools.records import track_tool_call
 from ..tools.scope import defer_artifact_admission
-from ..tools.specs import ToolResultAdmitter, ToolSpec
+from ..tools.specs import ToolResultAdmitter, ToolSpec, tool_capability_policy
 from .core import CodeModeLimits, CodeModeSession, CodeModeTool, codemode_instructions
 
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
+ToolApprovalResolver = Callable[[ToolSpec], Sequence[ApprovalPolicy | None]]
 
 SEARCH_TOOLS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -102,12 +104,14 @@ class CodeModeToolSpecBridge:
         adapter_shortname: str,
         tool_reason: bool = False,
         preload_tools: Sequence[str] = (),
+        policy_resolver: ToolApprovalResolver | None = None,
     ) -> None:
         self._tools = {tool.name: tool for tool in tools}
         if len(self._tools) != len(tools):
             duplicates = _duplicate_tool_names(tools)
             raise ValueError("Duplicate CodeMode tool names: " + ", ".join(duplicates))
         self._policies = tuple(policies)
+        self._policy_resolver = policy_resolver
         self._adapter_shortname = adapter_shortname
         self._tool_reason = tool_reason
         self._session = CodeModeSession(limits)
@@ -204,17 +208,26 @@ class CodeModeToolSpecBridge:
         reason = None
         if self._tool_reason and accepts_tool_reason(tool):
             final_arguments, reason = split_tool_reason(arguments)
-        for policy in self._policies:
-            final_arguments = await resolve_tool_arguments_async(
-                tool,
-                final_arguments,
-                policy=policy,
-                adapter_shortname=self._adapter_shortname,
-                reason=reason,
-                tool_reason_enabled=self._tool_reason,
-            )
+        if tool.capability_policy_resolver is not None:
+            tool = replace(tool, capability_policy=tool_capability_policy(tool, final_arguments))
+        policies = self._policies
+        if self._policy_resolver is not None:
+            policies += tuple(self._policy_resolver(tool))
+        call_id = new_tool_call_id()
+        with track_tool_call(call_id):
+            for policy in policies:
+                final_arguments = await resolve_tool_arguments_async(
+                    tool,
+                    final_arguments,
+                    policy=policy,
+                    adapter_shortname=self._adapter_shortname,
+                    reason=reason,
+                    tool_reason_enabled=self._tool_reason,
+                )
         with defer_artifact_admission():
-            wrapped = with_hook_lifecycle(tool, adapter_shortname=self._adapter_shortname)
+            wrapped = with_hook_lifecycle(
+                tool, adapter_shortname=self._adapter_shortname, tool_call_id=call_id
+            )
             result = wrapped.fn(**final_arguments)
             if inspect.isawaitable(result):
                 result = await result
@@ -229,6 +242,7 @@ def codemode_projection(
     adapter_shortname: str,
     tool_reason: bool = False,
     preload_tools: Sequence[str] = (),
+    policy_resolver: ToolApprovalResolver | None = None,
 ) -> CodeModeProjection:
     if limits is None:
         return CodeModeProjection(tools=tuple(tools))
@@ -239,6 +253,7 @@ def codemode_projection(
         adapter_shortname=adapter_shortname,
         tool_reason=tool_reason,
         preload_tools=preload_tools,
+        policy_resolver=policy_resolver,
     )
     return CodeModeProjection(tools=bridge.control_tools, bridge=bridge)
 

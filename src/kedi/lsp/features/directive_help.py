@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from kedi.agent_profile.profile import AgentProfile
 from kedi.agent_profile.settings import (
     ACP_AGENT_SETTING_KEYS,
     CLAUDE_AGENT_SETTING_KEYS,
@@ -68,13 +69,15 @@ def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
     if stmt.tool_names:
         tools = ", ".join(f"`{name}`" for name in stmt.tool_names)
         return (
-            f"`> use:`\n\nRegisters Kedi procedures as agent tools: {tools}.\n\n"
-            "Inner `> use:` directives override outer tools in the current scope."
+            f"`> use:`\n\nApplies these targets in order: {tools}.\n\n"
+            "Procedures register tools, profiles override configuration, and capabilities "
+            "contribute tools and guidance."
         )
     return (
         f"`> use: {stmt.name}`\n\n"
         "Configures the current scope for subsequent agent calls. A procedure target is "
-        "registered as an agent tool; a profile target applies its agent configuration."
+        "registered as an agent tool; a profile target applies its agent configuration; "
+        "a capability contributes tools and guidance without replacing the host instructions."
     )
 
 
@@ -360,6 +363,10 @@ def _artifacts_field_markdown(field: ArtifactsField) -> str:
     value = _artifacts_field_value_preview(field)
     descriptions = {
         "enabled": "Enable artifact creation and agent-facing artifact tools.",
+        "exclude_tools": (
+            "Exact exposed tool names exempt from automatic artifact conversion. "
+            "Inline output limits, approval, and tracing still apply."
+        ),
         "query_artifacts": (
             "Expose the bounded lexical `query_artifact` tool: `enabled` or `disabled`. "
             "Defaults to `disabled`; an explicit scoped value overrides the adapter default."
@@ -660,7 +667,7 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         member.template_lines or member.backtick_code is not None or member.plain_value is not None
         for member in profile.system_members
     ):
-        summary.append("System instructions: configured")
+        summary.append("Instructions: configured")
     explicit_tools = (*profile.use_targets, *profile.tool_names)
     if explicit_tools:
         targets = ", ".join(f"`{name}`" for name in explicit_tools)
@@ -675,14 +682,28 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         summary.append(f"Artifact settings: {artifact_field_count}")
     if profile.output_members:
         summary.append(f"Subagent output: `{profile.output_members[-1].type_annotation}`")
-    workflow_mode = profile.workflow_members[-1].mode if profile.workflow_members else "delegate"
-    summary.append(f"Subagent workflow: `{workflow_mode}`")
+    if profile.kind == "capability":
+        entry = profile.defer_members[-1] if profile.defer_members else None
+        loading = (
+            f"`{entry.backtick_code}`"
+            if entry is not None and entry.backtick_code is not None
+            else "on demand"
+            if entry is not None and entry.enabled
+            else "eager (default)"
+        )
+        summary.append(f"Loading: {loading}")
+        summary.append("Guidance is additive; approval and hooks affect owned tools only.")
+    else:
+        workflow_mode = (
+            profile.workflow_members[-1].mode if profile.workflow_members else "delegate"
+        )
+        summary.append(f"Subagent workflow: `{workflow_mode}`")
 
-    text = f"**Agent profile** `> profile: {profile.name}:`"
+    text = f"**Agent {profile.kind}** `> {profile.kind}: {profile.name}:`"
     if profile.docstring:
         text += f"\n\n{profile.docstring}"
     else:
-        text += "\n\nReusable agent profile."
+        text += f"\n\nReusable agent {profile.kind}."
     text += "\n\n" + "\n\n".join(summary)
     return text + "\n\nApplied when `> use:` runs."
 
@@ -701,7 +722,7 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
             + ", ".join(s.name for s in proc.optimize_spans)
             + "."
         )
-    elif proc.captured_agent_profile is not None:
+    elif isinstance(proc.captured_agent_profile, AgentProfile):
         captured = proc.captured_agent_profile
         profile_details: list[str] = []
         if captured.model is not None:

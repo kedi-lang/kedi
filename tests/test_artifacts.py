@@ -171,7 +171,7 @@ def test_artifacts_are_enabled_by_default_with_cache_stable_contract() -> None:
     assert adapter.tool_calls == [
         ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
     ]
-    assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
+    assert "<ArtifactInstructions>" in (adapter.instruction_calls[0] or "")
     runtime.artifacts.close()
 
 
@@ -218,7 +218,7 @@ def test_default_artifact_contract_is_stable_for_mcp_only_calls() -> None:
     assert adapter.tool_calls == [
         ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
     ]
-    assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
+    assert "<ArtifactInstructions>" in (adapter.instruction_calls[0] or "")
 
 
 def test_default_artifact_contract_does_not_change_between_model_turns() -> None:
@@ -1143,7 +1143,7 @@ def test_artifact_management_tools_are_registered_and_never_artifacted() -> None
     assert adapter.tool_calls == [
         ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
     ]
-    assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
+    assert "<ArtifactInstructions>" in (adapter.instruction_calls[0] or "")
     runtime.artifacts.close()
 
 
@@ -1326,6 +1326,8 @@ def test_runtime_artifact_scope_covers_pydantic_constructor_tools() -> None:
 
 
 def test_disabled_artifacts_do_not_register_management_tools() -> None:
+    from kedi.agent_adapter.request import KediTemplatePromptBuilder
+
     adapter = ArtifactRecordingAdapter()
     runtime = compile_program(
         parse_program("> artifacts:\n  enabled: false\n\n>> Give [payload].\n"),
@@ -1335,7 +1337,9 @@ def test_disabled_artifacts_do_not_register_management_tools() -> None:
     runtime.run_main()
 
     assert adapter.tool_calls == [()]
-    assert adapter.instruction_calls == [None]
+    assert adapter.instruction_calls == [
+        KediTemplatePromptBuilder(template="", output_fields=()).instruction_parts()[0].content
+    ]
     runtime.artifacts.close()
 
 

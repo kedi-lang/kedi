@@ -1,12 +1,75 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from copy import copy
 from types import FrameType
 from typing import Any, Sequence, cast
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
+from pydantic_ai.capabilities._deferred_capability_loader import (
+    DeferredCapabilityLoader,
+    _render_deferred_capability_catalog,
+)
+
+NativeDeferredCapabilityLoader = DeferredCapabilityLoader
+
+
+def _transport_profile_model(model: Model) -> Model:
+    if isinstance(model, WrapperModel):
+        inner = _transport_profile_model(model.wrapped)
+        if inner is model.wrapped:
+            return model
+        # WrapperModel forwards unknown attributes before copy reconstructs wrapped.
+        prepared = object.__new__(type(model))
+        vars(prepared).update(vars(model))
+        prepared.wrapped = inner
+        return prepared
+    if getattr(model, "responses_connection", None) != "websocket":
+        return model
+    try:
+        from codex_auth_helper.model import CodexResponsesModel
+    except ModuleNotFoundError as exc:
+        if exc.name != "codex_auth_helper":
+            raise
+        return model
+
+    if not isinstance(model, CodexResponsesModel) or not any(
+        model.profile.get(key) is not None for key in ("tool_addition_mode", "tool_deferral_mode")
+    ):
+        return model
+    # Codex's WebSocket gateway cannot consume native tool-addition contracts.
+    # Keep the transport/client and let Pydantic reveal loaded tools in its list.
+    prepared = copy(model)
+    profile = model.profile.copy()
+    profile["tool_addition_mode"] = None
+    profile["tool_deferral_mode"] = None
+    prepared.profile = profile
+    return prepared
+
+
+@contextmanager
+def transport_model_scope(agent: Agent[Any, Any], model: Model | None) -> Iterator[None]:
+    if model is None:
+        yield
+        return
+    prepared = _transport_profile_model(model)
+    if prepared is model:
+        yield
+        return
+    from .budget import budget_model
+
+    with agent.override(model=budget_model(prepared)):
+        yield
+
+
+async def native_deferred_catalog(ctx: RunContext[Any]) -> str:
+    """Keep native loader wording/identity while Kedi filters reachable entries."""
+    return await _render_deferred_capability_catalog(ctx)
 
 
 class PydanticAICompatibilityError(RuntimeError):

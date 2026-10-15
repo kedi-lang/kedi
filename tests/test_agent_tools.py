@@ -50,7 +50,7 @@ def test_eval_use_directive_multiline_returns_tools() -> None:
         UseDirectiveStmt(tool_names=["alpha", "beta"]),
         {},
         {},
-        available_procedures=set(),
+        available_procedures={"alpha", "beta"},
     )
     assert merged.tools == ("alpha", "beta")
 

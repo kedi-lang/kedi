@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 from typing import Any
+from xml.etree import ElementTree
 
 import pytest
 
@@ -254,10 +256,12 @@ def test_skills_directive_registers_skill_tools_and_instructions(
     ]
     assert adapter.instruction_calls[0] is not None
     assert "Be concise." in adapter.instruction_calls[0]
-    assert "<SKILL_INSTRUCTIONS>" in adapter.instruction_calls[0]
+    assert "<SkillInstructions>" in adapter.instruction_calls[0]
     assert "research" in adapter.instruction_calls[0]
     assert "Use concise steps." not in adapter.instruction_calls[0]
-    assert "rather than substituting a familiar answer" in adapter.instruction_calls[0]
+    assert (
+        "Use supplied task-specific facts rather than assumptions" in adapter.instruction_calls[0]
+    )
 
 
 def test_skill_inventory_is_sorted_bounded_and_does_not_read_hidden_roots(tmp_path: Path):
@@ -272,6 +276,47 @@ def test_skill_inventory_is_sorted_bounded_and_does_not_read_hidden_roots(tmp_pa
     assert text == skill_instructions(store=SkillStore(tmp_path, max_skills=1))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query_artifact", [False, True])
+async def test_runtime_instruction_xml_uses_sibling_pascal_case_sections(
+    tmp_path: Path, query_artifact
+):
+    from kedi.agent_adapter.request import KediTemplatePromptBuilder
+
+    _write_skill(tmp_path / ".agents" / "skills", "research")
+    profile = AgentProfile(
+        skills=SkillsSettings(enabled=True, cwd=tmp_path, include_registry=False),
+        artifacts=ArtifactPolicy(query_artifacts="enabled" if query_artifact else "disabled"),
+    )
+    runtime = KediRuntime(adapter=MockAdapter())
+    try:
+        parts = (
+            *KediTemplatePromptBuilder(
+                template="The city is [city].", output_fields=("city",)
+            ).instruction_parts(),
+            *runtime._agent_instruction_parts(profile, runtime.adapter),
+        )
+        root = ElementTree.fromstring(
+            "<Instructions>" + "\n".join(part.content for part in parts) + "</Instructions>"
+        )
+        assert [child.tag for child in root] == [
+            "TemplateInstructions",
+            "ToolCallInstructions",
+            "SkillInstructions",
+            "ArtifactInstructions",
+        ]
+        assert all(re.fullmatch(r"[A-Z][A-Za-z0-9]*", node.tag) for node in root.iter())
+        assert [node.text for node in root.findall("SkillInstructions/AvailableSkills/Skill")] == [
+            "research"
+        ]
+        contract = root.findtext("ArtifactInstructions/Contract")
+        assert contract is not None
+        assert ("Use query_artifact" in contract) is query_artifact
+        assert "Do not repeat the source tool" in contract
+    finally:
+        await runtime.aclose()
+
+
 def test_grounding_instruction_is_only_attached_to_evidence_enabled_profiles():
     from kedi.agent_adapter.tools.specs import ToolSpec
 
@@ -283,9 +328,11 @@ def test_grounding_instruction_is_only_attached_to_evidence_enabled_profiles():
     profile = AgentProfile(tools=("lookup",), tool_bindings={"lookup": tool})
     parts = runtime._agent_instruction_parts(profile, runtime.adapter)
     assert sum(p.identity == "grounding.instructions" for p in parts) == 1
-    assert "Stable general knowledge" in next(
-        p.content for p in parts if p.identity == "grounding.instructions"
-    )
+    grounding = next(p.content for p in parts if p.identity == "grounding.instructions")
+    assert grounding.startswith("<ToolCallInstructions>\n")
+    assert grounding.endswith("\n</ToolCallInstructions>")
+    assert "Respect explicit tool requirements and permissions" in grounding
+    assert "<TemplateInstructions>" not in grounding
 
 
 def test_skill_tool_without_artifact_boundary_returns_serializable_text(tmp_path: Path):
@@ -507,7 +554,7 @@ def test_python_api_skills_option_registers_skill_tools(
                 "run_artifact_code",
             )
         ]
-        assert "<SKILL_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
+        assert "<SkillInstructions>" in (adapter.instruction_calls[0] or "")
     finally:
         kedi.reset_config()
 

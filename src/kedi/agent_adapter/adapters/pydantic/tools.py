@@ -48,11 +48,13 @@ from kedi.agent_adapter.tools.execution import (
     with_required_before_output,
 )
 from kedi.agent_adapter.tools.retry import tool_body
+from kedi.agent_adapter.tools.records import track_tool_call
 from kedi.agent_adapter.tools.scope import (
     current_required_tool_calls,
 )
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.capabilities import capability_mcp_policy, mcp_server_identity
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.adapters.pydantic.adapter import PydanticAdapter
@@ -445,7 +447,15 @@ def _toolsets_for_run(
     self: PydanticAdapter[Any, Any], *, include_scoped_tools: bool = True
 ) -> list[Any] | None:
     toolsets: list[Any] = []
-    scoped_tools = self.scoped_tools if include_scoped_tools else ()
+    scoped_tools = (
+        tuple(
+            tool
+            for tool in self.scoped_tools
+            if not isinstance(tool, _KediPydanticTool) or tool.kedi_spec.deferred_capability is None
+        )
+        if include_scoped_tools
+        else ()
+    )
     if scoped_tools:
         toolsets.append(
             _approval_required_toolset(
@@ -484,6 +494,15 @@ def _tool_specs_for_run(
 async def _handle_deferred_tool_calls(
     self: PydanticAdapter[Any, Any], _context: Any, requests: Any
 ) -> Any:
+    from kedi.agent_profile.activation import capability_activation_scope
+    from .user_capabilities import _DeferredCapabilityGraph
+
+    graph = _DeferredCapabilityGraph(self.active_profile, self.scoped_tool_specs)
+    with capability_activation_scope(graph.active(_context)):
+        return await _resolve_deferred_approvals(self, requests)
+
+
+async def _resolve_deferred_approvals(self: PydanticAdapter[Any, Any], requests: Any) -> Any:
     approvals: dict[str, ToolApproved | ToolDenied] = {}
     for call in requests.approvals:
         try:
@@ -503,25 +522,28 @@ async def _handle_deferred_tool_calls(
         if reason_enabled and accepts_tool_reason(tool):
             arguments, _ = split_tool_reason(arguments)
         policies = self._approval_ceiling_for_current_adapter().get()
-        local_policy = self.active_profile.approval
+        from kedi.agent_adapter.tools.specs import tool_approval_policy
+
+        local_policy = tool_approval_policy(tool, self.active_profile.approval, arguments)
         if local_policy is not None or not policies:
             policies = (*policies, local_policy)
 
         approved_arguments = arguments
         for policy in policies:
             try:
-                approved_arguments = await resolve_tool_arguments_async(
-                    tool,
-                    approved_arguments,
-                    policy=policy,
-                    adapter_shortname=self.shortname,
-                    reason=(
-                        self._tool_reasons_var.get().get(call.tool_call_id)
-                        if reason_enabled
-                        else None
-                    ),
-                    tool_reason_enabled=reason_enabled,
-                )
+                with track_tool_call(call.tool_call_id):
+                    approved_arguments = await resolve_tool_arguments_async(
+                        tool,
+                        approved_arguments,
+                        policy=policy,
+                        adapter_shortname=self.shortname,
+                        reason=(
+                            self._tool_reasons_var.get().get(call.tool_call_id)
+                            if reason_enabled
+                            else None
+                        ),
+                        tool_reason_enabled=reason_enabled,
+                    )
             except ToolApprovalDenied as exc:
                 message = str(exc.args[0]) if exc.args else f"Tool {tool.name!r} was denied"
                 approvals[call.tool_call_id] = ToolDenied(message)
@@ -561,6 +583,11 @@ def _mcp_toolsets_for_profile(self: PydanticAdapter[Any, Any], profile: AgentPro
             toolsets.append(MCPToolset(spec.url, headers=spec.headers))
         else:
             raise ValueError(f"Unsupported MCP transport: {spec.transport}")
+        server_identity = mcp_server_identity(spec)
+        capability_mcp_policy(self.active_profile, server_identity)
+        toolsets[-1] = toolsets[-1].with_metadata(
+            kedi_origin="mcp", kedi_mcp_server=server_identity
+        )
     return toolsets
 
 

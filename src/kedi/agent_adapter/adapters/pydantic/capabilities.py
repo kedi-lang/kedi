@@ -41,7 +41,9 @@ from kedi.agent_adapter.tools.execution import (
     admit_current_artifact_result,
     approval_request_for_tool,
 )
+from kedi.agent_adapter.tools.scope import current_artifact_admission
 from kedi.agent_adapter.tools.specs import tool_has_artifact_boundary
+from kedi.artifacts.policy import warn_unmatched_tool_exclusions
 
 from .tools import _validate_required_tool_calls
 
@@ -84,6 +86,31 @@ class _KediArtifactCapability(AbstractCapability[Any]):
 
     def __init__(self, adapter: PydanticAdapter[Any, Any]) -> None:
         self.adapter = adapter
+        self._tool_names: set[str] = set()
+
+    async def for_run(self, ctx: RunContext[Any]) -> _KediArtifactCapability:
+        return type(self)(self.adapter)
+
+    async def prepare_tools(
+        self, ctx: RunContext[Any], tool_defs: list[ToolDefinition]
+    ) -> list[ToolDefinition]:
+        admission = current_artifact_admission()
+        if admission is not None and admission[1].enabled and admission[1].exclude_tools:
+            self._tool_names.update(tool.name for tool in tool_defs)
+        return tool_defs
+
+    async def after_run(
+        self, ctx: RunContext[Any], *, result: AgentRunResult[Any]
+    ) -> AgentRunResult[Any]:
+        admission = current_artifact_admission()
+        if admission is not None:
+            _manager, policy = admission
+            warn_unmatched_tool_exclusions(
+                policy,
+                self._tool_names,
+                incomplete=bool(set(ctx.capabilities) - ctx.active_capability_ids),
+            )
+        return result
 
     async def after_tool_execute(
         self,

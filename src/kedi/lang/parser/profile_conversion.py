@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 
 from tree_sitter import Node
 
+from kedi.agent_profile.capabilities import CAPABILITY_DIRECTIVES
+
 from kedi.lang.ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
@@ -12,6 +14,7 @@ from kedi.lang.ast import (
     ProfileBudgetEntry,
     ProfileCodeModeEntry,
     ProfileDefStmt,
+    ProfileDeferEntry,
     ProfileEffortEntry,
     ProfileHistoryEntry,
     ProfileHooksEntry,
@@ -26,6 +29,7 @@ from kedi.lang.ast import (
     ProfileSystemEntry,
     ProfileWorkflowEntry,
     Span,
+    UseDirectiveStmt,
     WorkflowMode,
 )
 from kedi.lang.parser.cst_helpers import (
@@ -45,6 +49,8 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     name_node = _field(node, "name")
     assert name_node is not None
     name = _identifier_name(self.source, name_node)
+    is_capability = node.type == "capability_directive"
+    defer_members: list[ProfileDeferEntry] = []
     members: list[ProfileModelEntry] = []
     agent_members: list[ProfileAgentEntry] = []
     adapter_members: list[ProfileAdapterEntry] = []
@@ -66,6 +72,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     workflow_members: list[ProfileWorkflowEntry] = []
     use_targets: list[str] = []
     tool_names: list[str] = []
+    use_members: list[UseDirectiveStmt] = []
     docstring: str | None = None
     docstring_loc: Span | None = None
     body_node = _field(node, "body")
@@ -76,6 +83,33 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
             docstring = _decode_block_comment_body(_src_text(self.source, comment))
             docstring_loc = self._span(comment)
         for child in body_children:
+            member_name = child.type.removesuffix("_directive")
+            if member_name == "system":
+                member_name = "instructions"
+            if (
+                is_capability
+                and child.type.endswith("_directive")
+                and member_name not in CAPABILITY_DIRECTIVES
+            ):
+                self._error(
+                    child,
+                    f"'> {member_name}:' is not allowed in a capability; configure the agent "
+                    "or a separate procedure/subagent profile instead",
+                    code="K-CAPABILITY-MEMBER",
+                )
+                continue
+            if child.type == "defer_directive":
+                value = _field(child, "value")
+                assert value is not None
+                code = _field(value, "code") if value.type == "inline_python_expr" else None
+                defer_members.append(
+                    ProfileDeferEntry(
+                        enabled=_src_text(self.source, value) == "true",
+                        backtick_code=_src_text(self.source, code) if code is not None else None,
+                        loc=self._span(child),
+                    )
+                )
+                continue
             if child.type == "agent_directive":
                 plain, code, command_plain, command_code, connection_fields = (
                     self._walk_agent_directive_parts(child)
@@ -151,6 +185,16 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
                 )
             elif child.type == "hooks_directive":
                 hooks_stmt = self._walk_hooks_directive(child)
+                if is_capability and (
+                    hooks_stmt.enabled is False
+                    or any(field.name == "user_prompt_submit" for field in hooks_stmt.fields)
+                ):
+                    self._error(
+                        child,
+                        "Capabilities may add owned tool hooks, not disable hooks or set user_prompt_submit",
+                        code="K-CAPABILITY-HOOK",
+                    )
+                    continue
                 hooks_members.append(
                     ProfileHooksEntry(
                         enabled=hooks_stmt.enabled,
@@ -235,6 +279,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
                     )
             elif child.type == "use_directive":
                 use_stmt = self._walk_use_directive(child)
+                use_members.append(use_stmt)
                 if use_stmt.tool_names:
                     tool_names.extend(use_stmt.tool_names)
                 elif use_stmt.name:
@@ -332,7 +377,12 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
                     code="K-PROFILE-OUTPUT-DUP",
                 )
             )
-    if workflow_members and workflow_members[-1].mode == "dynamic" and not subagent_members:
+    if (
+        workflow_members
+        and workflow_members[-1].mode == "dynamic"
+        and not subagent_members
+        and not use_targets
+    ):
         entry = workflow_members[-1]
         assert entry.loc is not None
         self.diagnostics.append(
@@ -345,6 +395,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
         )
     if (
         not members
+        and not defer_members
         and not agent_members
         and not adapter_members
         and not effort_members
@@ -373,6 +424,8 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
         )
     return ProfileDefStmt(
         name=name,
+        kind="capability" if is_capability else "profile",
+        defer_members=defer_members,
         agent_members=agent_members,
         adapter_members=adapter_members,
         model_members=members,
@@ -394,6 +447,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
         workflow_members=workflow_members,
         use_targets=use_targets,
         tool_names=tool_names,
+        use_members=use_members,
         docstring=docstring,
         docstring_loc=docstring_loc,
         loc=self._span(node),

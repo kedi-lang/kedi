@@ -18,7 +18,15 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
         return None
     metadata = tool.metadata or {}
     kind = metadata.get("kedi_tool_kind") or metadata.get("kind")
+    if kind == "codemode_control":
+        from ..approvals.policy import ToolApprovalDenied
+        from ..hooks.models import HookDeniedError
+
+        if isinstance(exc, (ToolApprovalDenied, HookDeniedError)):
+            return str(exc)
     original = exc.original if isinstance(exc, KediExecutionError) else exc
+    if isinstance(original, CapabilityActivationError):
+        return str(original)
     if kind == "filesystem" and isinstance(
         original, (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError)
     ):
@@ -55,3 +63,7 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
 
 class RequiredToolCallError(RuntimeError):
     """Raised when an adapter returns before a required tool completes."""
+
+
+class CapabilityActivationError(ValueError):
+    """A model called a capability-owned target before its native activation."""

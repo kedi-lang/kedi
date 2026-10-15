@@ -20,8 +20,8 @@ from ..tools.records import (
     register_tool_handoff,
     track_tool_call,
 )
-from ..tools.specs import ToolSpec
-from .dispatcher import current_hook_dispatcher
+from ..tools.specs import ToolSpec, tool_capability_policy
+from .dispatcher import HookDispatcher, HookDispatcherSnapshot, current_hook_dispatcher
 from .models import (
     HookDeniedError,
     PostToolResultFailureEvent,
@@ -37,6 +37,21 @@ def new_tool_call_id() -> str:
     return f"call_{secrets.token_urlsafe(10)}"
 
 
+def tool_hook_dispatcher(
+    tool: ToolSpec, arguments: Mapping[str, Any] | None = None
+) -> HookDispatcher | None:
+    dispatcher = current_hook_dispatcher()
+    policy = tool_capability_policy(tool, arguments or {})
+    from ..telemetry import record_tool_ownership
+
+    record_tool_ownership(tool, policy)
+    if policy is None or not policy.hook_contributions:
+        return dispatcher
+    if dispatcher is None:
+        dispatcher = HookDispatcher(HookDispatcherSnapshot.compose(None, None))
+    return dispatcher.with_tool_hooks(policy.hooks)
+
+
 async def dispatch_pre_tool_use(
     tool: ToolSpec,
     arguments: Mapping[str, Any],
@@ -50,7 +65,7 @@ async def dispatch_pre_tool_use(
     from ..history_provenance import record_history_tool_origin
 
     record_history_tool_origin(tool.name, tool_call_id)
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, canonical)
     if dispatcher is None or not dispatcher.handlers_for("pre_tool_use"):
         return canonical
     result = await dispatcher.dispatch(
@@ -79,7 +94,7 @@ def dispatch_pre_tool_use_sync(
     from ..history_provenance import record_history_tool_origin
 
     record_history_tool_origin(tool.name, tool_call_id)
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, canonical)
     if dispatcher is None or not dispatcher.handlers_for("pre_tool_use"):
         return canonical
     result = dispatcher.dispatch_sync(
@@ -105,7 +120,7 @@ async def dispatch_post_tool_use(
     origin: ToolOrigin = "kedi",
     native_tool_name: str | None = None,
 ) -> None:
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, arguments)
     if dispatcher is None or not dispatcher.handlers_for("post_tool_use"):
         return
     await dispatcher.dispatch(
@@ -133,7 +148,7 @@ def dispatch_post_tool_use_sync(
     origin: ToolOrigin = "kedi",
     native_tool_name: str | None = None,
 ) -> None:
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, arguments)
     if dispatcher is None or not dispatcher.handlers_for("post_tool_use"):
         return
     dispatcher.dispatch_sync(
@@ -163,7 +178,7 @@ async def dispatch_post_tool_use_failure(
     duration_seconds: float | None = None,
     interrupted: bool | None = None,
 ) -> None:
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, arguments)
     if dispatcher is None or not dispatcher.handlers_for("post_tool_use_failure"):
         return
     await dispatcher.dispatch(
@@ -193,7 +208,7 @@ def dispatch_post_tool_use_failure_sync(
     duration_seconds: float | None = None,
     interrupted: bool | None = None,
 ) -> None:
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, arguments)
     if dispatcher is None or not dispatcher.handlers_for("post_tool_use_failure"):
         return
     dispatcher.dispatch_sync(
@@ -222,7 +237,7 @@ async def dispatch_post_tool_result_failure(
     origin: ToolOrigin = "kedi",
     native_tool_name: str | None = None,
 ) -> None:
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, arguments)
     if dispatcher is None or not dispatcher.handlers_for("post_tool_result_failure"):
         return
     await dispatcher.dispatch(
@@ -254,7 +269,7 @@ def dispatch_post_tool_result_failure_sync(
     origin: ToolOrigin = "kedi",
     native_tool_name: str | None = None,
 ) -> None:
-    dispatcher = current_hook_dispatcher()
+    dispatcher = tool_hook_dispatcher(tool, arguments)
     if dispatcher is None or not dispatcher.handlers_for("post_tool_result_failure"):
         return
     dispatcher.dispatch_sync(
@@ -356,6 +371,7 @@ def with_hook_lifecycle(
     *,
     adapter_shortname: str,
     origin: ToolOrigin = "kedi",
+    tool_call_id: str | None = None,
 ) -> ToolSpec:
     """Wrap a final ToolSpec boundary when its adapter has no native lifecycle seam."""
 
@@ -369,7 +385,7 @@ def with_hook_lifecycle(
         @wraps(tool.fn)
         async def hooked_async_tool(*args: Any, **kwargs: Any) -> Any:
             _require_keyword_arguments(tool, args)
-            call_id = new_tool_call_id()
+            call_id = tool_call_id or new_tool_call_id()
             final_arguments = await dispatch_pre_tool_use(
                 tool,
                 kwargs,
@@ -431,7 +447,7 @@ def with_hook_lifecycle(
     @wraps(tool.fn)
     def hooked_tool(*args: Any, **kwargs: Any) -> Any:
         _require_keyword_arguments(tool, args)
-        call_id = new_tool_call_id()
+        call_id = tool_call_id or new_tool_call_id()
         final_arguments = dispatch_pre_tool_use_sync(
             tool,
             kwargs,
@@ -710,6 +726,9 @@ def _tool_event_fields(
     metadata = {
         key: value for key, value in (tool.metadata or {}).items() if not key.startswith("kedi_")
     }
+    policy = tool_capability_policy(tool, arguments)
+    if policy is not None:
+        metadata["capability_owners"] = policy.owners
     return {
         "run_id": identity.run_id if identity is not None else "unbound",
         "parent_run_id": identity.parent_run_id if identity is not None else None,
@@ -738,7 +757,16 @@ def _resolve_pre_decision(
         raise HookDeniedError(event="pre_tool_use", reason=result.reason)
     if result.decision == "edit":
         assert result.edit_arguments is not None
-        return validate_tool_arguments(tool, result.edit_arguments)
+        edited = validate_tool_arguments(tool, result.edit_arguments)
+        if tool.capability_policy_resolver is not None:
+            before = tool_capability_policy(tool, original)
+            after = tool_capability_policy(tool, edited)
+            if before != after:
+                raise HookDeniedError(
+                    event="pre_tool_use",
+                    reason="Tool argument edits cannot change capability ownership; submit a new call.",
+                )
+        return edited
     return dict(original)
 
 

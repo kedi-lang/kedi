@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..errors import KediExecutionError
@@ -11,6 +12,7 @@ from .definitions import (
     ProfileBudgetMember,
     ProfileCodeModeMember,
     ProfileDefinition,
+    ProfileDeferMember,
     ProfileEffortMember,
     ProfileHistoryMember,
     ProfileHooksMember,
@@ -29,6 +31,7 @@ from .definitions import (
 )
 
 if TYPE_CHECKING:
+    from .capture import CapturedAgentProfile
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
         ProfileAdapterEntry,
@@ -75,8 +78,15 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
         | ProfileWorkflowMember
+        | ProfileDeferMember
     ] = []
     _assert_profile_adapter_selection_is_not_mixed(stmt)
+    for entry in stmt.defer_members:
+        members.append(
+            ProfileDeferMember(
+                enabled=entry.enabled, backtick_code=entry.backtick_code, loc=entry.loc
+            )
+        )
     for entry in stmt.agent_members:
         members.append(_agent_entry_to_member(entry))
     for entry in stmt.adapter_members:
@@ -114,19 +124,37 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
     for entry in stmt.subagent_members:
         members.append(ProfileSubagentMember(name=entry.name, loc=entry.loc))
     for entry in stmt.max_agents_members:
-        members.append(ProfileMaxAgentsMember(value=entry.value))
-    for target in stmt.use_targets:
-        members.append(ProfileUseMember(name=target))
-    if stmt.tool_names:
-        members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
+        members.append(ProfileMaxAgentsMember(value=entry.value, loc=entry.loc))
+    if stmt.use_members:
+        for use in stmt.use_members:
+            if use.tool_names:
+                members.append(ProfileToolMember(tool_names=tuple(use.tool_names), loc=use.loc))
+            else:
+                members.append(ProfileUseMember(name=use.name, loc=use.loc))
+    else:
+        for target in stmt.use_targets:
+            members.append(ProfileUseMember(name=target))
+        if stmt.tool_names:
+            members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
     if len(stmt.workflow_members) > 1:
         raise KediExecutionError("profile can define only one workflow mode")
     if stmt.workflow_members:
         workflow = stmt.workflow_members[0]
-        if workflow.mode == "dynamic" and not stmt.subagent_members:
+        if workflow.mode == "dynamic" and not stmt.subagent_members and not stmt.use_targets:
             raise KediExecutionError("dynamic workflow requires at least one direct subagent")
-        members.append(ProfileWorkflowMember(mode=workflow.mode))
-    return ProfileDefinition(name=stmt.name, description=stmt.docstring, members=members)
+        members.append(ProfileWorkflowMember(mode=workflow.mode, loc=workflow.loc))
+    # Member lists remain grouped in the AST for editor consumers; evaluation
+    # must follow source order, including nested profile applications.
+    members.sort(key=lambda member: member.loc.start_byte if member.loc is not None else -1)
+    source = stmt.loc.source_path if stmt.loc is not None else None
+    return ProfileDefinition(
+        name=stmt.name,
+        loc=stmt.loc,
+        kind=stmt.kind,
+        identity=f"{source or '<program>'}::{stmt.name}",
+        description=stmt.docstring,
+        members=members,
+    )
 
 
 def _agent_entry_to_member(entry: ProfileAgentEntry) -> ProfileAgentMember:
@@ -136,6 +164,7 @@ def _agent_entry_to_member(entry: ProfileAgentEntry) -> ProfileAgentMember:
         command_plain_value=entry.command_plain_value,
         command_backtick_code=entry.command_backtick_code,
         connection_fields=tuple(entry.connection_fields),
+        loc=entry.loc,
     )
 
 
@@ -143,6 +172,7 @@ def _adapter_entry_to_member(entry: ProfileAdapterEntry) -> ProfileAdapterMember
     return ProfileAdapterMember(
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
+        loc=entry.loc,
     )
 
 
@@ -150,6 +180,7 @@ def _model_entry_to_member(entry: ProfileModelEntry) -> ProfileModelMember:
     return ProfileModelMember(
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
+        loc=entry.loc,
     )
 
 
@@ -157,6 +188,7 @@ def _effort_entry_to_member(entry: ProfileEffortEntry) -> ProfileEffortMember:
     return ProfileEffortMember(
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
+        loc=entry.loc,
     )
 
 
@@ -164,29 +196,31 @@ def _approval_entry_to_member(entry: ProfileApprovalEntry) -> ProfileApprovalMem
     return ProfileApprovalMember(
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
+        loc=entry.loc,
     )
 
 
 def _hooks_entry_to_member(entry: ProfileHooksEntry) -> ProfileHooksMember:
-    return ProfileHooksMember(enabled=entry.enabled, fields=tuple(entry.fields))
+    return ProfileHooksMember(enabled=entry.enabled, fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _history_entry_to_member(entry: ProfileHistoryEntry) -> ProfileHistoryMember:
-    return ProfileHistoryMember(enabled=entry.enabled, fields=tuple(entry.fields))
+    return ProfileHistoryMember(enabled=entry.enabled, fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _skills_entry_to_member(entry: ProfileSkillsEntry) -> ProfileSkillsMember:
-    return ProfileSkillsMember(enabled=entry.enabled, fields=tuple(entry.fields))
+    return ProfileSkillsMember(enabled=entry.enabled, fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _codemode_entry_to_member(entry: ProfileCodeModeEntry) -> ProfileCodeModeMember:
-    return ProfileCodeModeMember(enabled=entry.enabled, fields=tuple(entry.fields))
+    return ProfileCodeModeMember(enabled=entry.enabled, fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _requires_entry_to_member(entry: ProfileRequiresEntry) -> ProfileRequiresMember:
     return ProfileRequiresMember(
         requirements=tuple(entry.requirements),
         requirement_locs=dict(entry.requirement_locs),
+        loc=entry.loc,
     )
 
 
@@ -194,6 +228,7 @@ def _budget_entry_to_member(entry: ProfileBudgetEntry) -> ProfileBudgetMember:
     return ProfileBudgetMember(
         request_limit=entry.request_limit,
         tool_attempt_limit=entry.tool_attempt_limit,
+        loc=entry.loc,
     )
 
 
@@ -202,25 +237,27 @@ def _system_entry_to_member(entry: ProfileSystemEntry) -> ProfileSystemMember:
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
         template_lines=tuple(entry.template_lines),
+        loc=entry.loc,
     )
 
 
 def _mcp_entry_to_member(entry: ProfileMcpEntry) -> ProfileMcpMember:
-    return ProfileMcpMember(fields=tuple(entry.fields))
+    return ProfileMcpMember(fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _settings_entry_to_member(entry: ProfileSettingsEntry) -> ProfileSettingsMember:
-    return ProfileSettingsMember(fields=tuple(entry.fields))
+    return ProfileSettingsMember(fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _artifacts_entry_to_member(entry: ProfileArtifactsEntry) -> ProfileArtifactsMember:
-    return ProfileArtifactsMember(fields=tuple(entry.fields))
+    return ProfileArtifactsMember(fields=tuple(entry.fields), loc=entry.loc)
 
 
 def _output_entry_to_member(entry: ProfileOutputEntry) -> ProfileOutputMember:
     return ProfileOutputMember(
         type_annotation=entry.type_annotation,
         type_expr=entry.type_expr,
+        loc=entry.loc,
     )
 
 
@@ -238,12 +275,14 @@ def validate_subagent_graph(registry: dict[str, ProfileDefinition]) -> None:
         child_name: str,
     ) -> ProfileDefinition:
         bound = definition.subagent_bindings.get(child_name)
-        if bound is not None:
-            return bound
-        child = registry.get(child_name)
+        child = bound if bound is not None else registry.get(child_name)
         if child is None:
             raise KediExecutionError(
                 f"Unknown subagent profile {child_name!r} referenced by profile {definition.name!r}"
+            )
+        if child.kind != "profile":
+            raise KediExecutionError(
+                f"Subagent {child_name!r} must name a profile, not a capability"
             )
         return child
 
@@ -296,7 +335,12 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
     return env
 
 
-def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Callable[..., Any]]:
+def capture_procedure_profiles(
+    rt: KediRuntime,
+    prog: Program,
+    *,
+    captures: dict[int, CapturedAgentProfile] | None = None,
+) -> dict[int, Callable[..., Any]]:
     from kedi.lang.ast import (
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
@@ -334,9 +378,19 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Call
         eval_skills_directive,
         eval_system_directive,
     )
-    from .use_resolution import eval_use_directive
+    from .capture import CapturedAgentProfile
+    from .profile import AgentProfile
+    from .use_resolution import eval_use_directive, use_contains_capability
 
-    if not any(isinstance(item, ProcedureDef) for item in prog.ordered_toplevel):
+    last_procedure = max(
+        (
+            index
+            for index, item in enumerate(prog.ordered_toplevel)
+            if isinstance(item, ProcedureDef)
+        ),
+        default=-1,
+    )
+    if last_procedure < 0:
         return {}
 
     # Profile capture precedes compilation. These references are filled with the
@@ -351,54 +405,61 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Call
 
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
-    active = rt.default_agent_profile
+    active: AgentProfile | CapturedAgentProfile = rt.default_agent_profile
     defined_procedures: set[str] = set(rt._procedures.keys())
 
-    for item in prog.ordered_toplevel:
-        if isinstance(item, AgentDirectiveStmt):
-            active = active.merge(eval_agent_directive(rt, item, env))
-        elif isinstance(item, AdapterDirectiveStmt):
-            active = active.merge(eval_adapter_directive(rt, item, env))
-        elif isinstance(item, ModelDirectiveStmt):
-            active = active.merge(eval_model_directive(rt, item, env))
-        elif isinstance(item, EffortDirectiveStmt):
-            active = active.merge(eval_effort_directive(rt, item, env))
-        elif isinstance(item, ApprovalDirectiveStmt):
-            active = active.merge(eval_approval_directive(rt, item, env))
-        elif isinstance(item, HooksDirectiveStmt):
-            active = active.merge(eval_hooks_directive(rt, item, env).with_hook_enforcement())
-        elif isinstance(item, HistoryDirectiveStmt):
-            active = active.merge(eval_history_directive(rt, item, env))
-        elif isinstance(item, SkillsDirectiveStmt):
-            active = active.merge(eval_skills_directive(rt, item, env))
-        elif isinstance(item, CodeModeDirectiveStmt):
-            active = active.merge(eval_codemode_directive(rt, item, env))
-        elif isinstance(item, RequiresDirectiveStmt):
-            active = active.merge(eval_requires_directive(rt, item, env))
-        elif isinstance(item, BudgetDirectiveStmt):
-            active = active.merge(eval_budget_directive(rt, item, env))
-        elif isinstance(item, SystemDirectiveStmt):
-            active = active.merge(eval_system_directive(rt, item, env))
-        elif isinstance(item, McpDirectiveStmt):
-            active = active.merge(eval_mcp_directive(rt, item, env))
-        elif isinstance(item, SettingsDirectiveStmt):
-            active = active.merge(eval_settings_directive(rt, item, env))
-        elif isinstance(item, ArtifactsDirectiveStmt):
-            active = active.merge(eval_artifacts_directive(rt, item, env))
-        elif isinstance(item, UseDirectiveStmt):
-            active = active.merge(
-                eval_use_directive(
-                    rt,
-                    item,
-                    registry,
-                    env,
-                    available_procedures=defined_procedures,
-                )
+    evaluators: dict[type, Callable[..., AgentProfile]] = {
+        AgentDirectiveStmt: eval_agent_directive,
+        AdapterDirectiveStmt: eval_adapter_directive,
+        ModelDirectiveStmt: eval_model_directive,
+        EffortDirectiveStmt: eval_effort_directive,
+        ApprovalDirectiveStmt: eval_approval_directive,
+        HooksDirectiveStmt: lambda rt, stmt, env: eval_hooks_directive(
+            rt, stmt, env
+        ).with_hook_enforcement(),
+        HistoryDirectiveStmt: eval_history_directive,
+        SkillsDirectiveStmt: eval_skills_directive,
+        CodeModeDirectiveStmt: eval_codemode_directive,
+        RequiresDirectiveStmt: eval_requires_directive,
+        BudgetDirectiveStmt: eval_budget_directive,
+        SystemDirectiveStmt: eval_system_directive,
+        McpDirectiveStmt: eval_mcp_directive,
+        SettingsDirectiveStmt: eval_settings_directive,
+        ArtifactsDirectiveStmt: eval_artifacts_directive,
+    }
+
+    for item in prog.ordered_toplevel[: last_procedure + 1]:
+        if isinstance(item, ProcedureDef):
+            item.captured_agent_profile = (
+                active if isinstance(active, CapturedAgentProfile) else active.frozen_copy()
             )
-        elif isinstance(item, ProcedureDef):
-            item.captured_agent_profile = active.frozen_copy()
             defined_procedures.add(item.name)
             if not item.auto_spec and not item.ai_prompt:
                 env[item.name] = reference(item)
+            continue
+
+        pending = isinstance(active, CapturedAgentProfile)
+        if isinstance(item, UseDirectiveStmt):
+            pending = pending or use_contains_capability(
+                rt, item, registry, env, available_procedures=defined_procedures
+            )
+            evaluate = partial(
+                eval_use_directive,
+                rt,
+                item,
+                dict(registry),
+                available_procedures=set(defined_procedures),
+            )
+        else:
+            evaluator = evaluators.get(type(item))
+            if evaluator is None:
+                continue
+            evaluate = partial(evaluator, rt, item)
+        if isinstance(active, CapturedAgentProfile) or pending:
+            active = CapturedAgentProfile(active, evaluate, env)
+            if captures is not None:
+                captures[id(item)] = active
+        else:
+            active = active.merge(evaluate(dict(env)))
 
     return bindings

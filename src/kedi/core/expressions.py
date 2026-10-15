@@ -162,6 +162,7 @@ def _evaluate_value(self: KediRuntime, value: Any, env: ValueEnv) -> Any:
 def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
     import inspect
 
+    from kedi.agent_profile.capture import CapturedAgentProfile
     from kedi.lang.procedure_introspection import (
         callable_display_name,
         get_procedure_def,
@@ -175,11 +176,10 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
     local_env: ValueEnv = {name: bound.arguments[name] for name in bound.arguments}
     metadata = get_procedure_metadata(fn)
     procedure_def = get_procedure_def(fn)
-    procedure_budget = (
-        getattr(procedure_def.captured_agent_profile, "run_budget", None)
-        if procedure_def is not None and procedure_def.captured_agent_profile is not None
-        else None
-    )
+    captured = procedure_def.captured_agent_profile if procedure_def is not None else None
+    if isinstance(captured, CapturedAgentProfile):
+        captured = captured.resolve()
+    procedure_budget = getattr(captured, "run_budget", None)
     proc_span = procedure_def.loc if procedure_def is not None else None
     proc_name = metadata.name if metadata is not None else callable_display_name(fn)
     should_trace_procedure = not (fn is self._main and metadata is None)

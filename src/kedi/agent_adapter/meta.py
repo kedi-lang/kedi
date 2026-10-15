@@ -45,6 +45,8 @@ HookCapabilityEvent = Literal[
     "post_tool_result_failure",
 ]
 AdapterCapability = Literal[
+    "capabilities",
+    "deferred_tools",
     "structured_output",
     "tool_registration",
     "mcp",
@@ -145,6 +147,8 @@ class HookCapabilities:
 
 @dataclass(frozen=True)
 class AdapterCapabilities:
+    supports_capabilities: bool = False
+    supports_deferred_tools: bool = False
     supports_structured_output: bool | None = None
     supports_tool_registration: bool | None = None
     supports_mcp: bool | None = None
@@ -186,6 +190,8 @@ class AdapterCapabilities:
 
     def capability_status(self, feature: AdapterCapability) -> bool | None:
         values = {
+            "capabilities": self.supports_capabilities,
+            "deferred_tools": self.supports_deferred_tools,
             "structured_output": self.supports_structured_output,
             "tool_registration": self.supports_tool_registration,
             "mcp": self.supports_mcp,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field, fields, replace
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 from .profile import WorkflowMode
 
 if TYPE_CHECKING:
+    from .capability import Capability
     from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.lang.ast import (
         AgentConnectionField,
@@ -19,7 +22,19 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileAgentMember:
+class ProfileMember:
+    loc: Span | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileDeferMember(ProfileMember):
+    kind: Literal["defer"] = "defer"
+    enabled: bool = False
+    backtick_code: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileAgentMember(ProfileMember):
     kind: Literal["agent"] = "agent"
     plain_value: str | None = None
     backtick_code: str | None = None
@@ -29,77 +44,77 @@ class ProfileAgentMember:
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileAdapterMember:
+class ProfileAdapterMember(ProfileMember):
     kind: Literal["adapter"] = "adapter"
     plain_value: str | None = None
     backtick_code: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileModelMember:
+class ProfileModelMember(ProfileMember):
     kind: Literal["model"] = "model"
     plain_value: str | None = None
     backtick_code: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileEffortMember:
+class ProfileEffortMember(ProfileMember):
     kind: Literal["effort"] = "effort"
     plain_value: str | None = None
     backtick_code: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileApprovalMember:
+class ProfileApprovalMember(ProfileMember):
     kind: Literal["approval"] = "approval"
     plain_value: str | None = None
     backtick_code: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileHooksMember:
+class ProfileHooksMember(ProfileMember):
     kind: Literal["hooks"] = "hooks"
     enabled: bool | None = None
     fields: tuple["SettingsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileHistoryMember:
+class ProfileHistoryMember(ProfileMember):
     kind: Literal["history"] = "history"
     enabled: bool
     fields: tuple["SettingsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileSkillsMember:
+class ProfileSkillsMember(ProfileMember):
     kind: Literal["skills"] = "skills"
     enabled: bool
     fields: tuple["SettingsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileCodeModeMember:
+class ProfileCodeModeMember(ProfileMember):
     kind: Literal["codemode"] = "codemode"
     enabled: bool
     fields: tuple["SettingsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileRequiresMember:
+class ProfileRequiresMember(ProfileMember):
     kind: Literal["requires"] = "requires"
     requirements: tuple[str, ...] = ()
     requirement_locs: Mapping[str, "Span"] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileBudgetMember:
+class ProfileBudgetMember(ProfileMember):
     kind: Literal["budget"] = "budget"
     request_limit: int | None = None
     tool_attempt_limit: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileSystemMember:
+class ProfileSystemMember(ProfileMember):
     kind: Literal["system"] = "system"
     plain_value: str | None = None
     backtick_code: str | None = None
@@ -107,57 +122,56 @@ class ProfileSystemMember:
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileToolMember:
+class ProfileToolMember(ProfileMember):
     kind: Literal["tools"] = "tools"
     tool_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileUseMember:
+class ProfileUseMember(ProfileMember):
     kind: Literal["use"] = "use"
     name: str
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileMcpMember:
+class ProfileMcpMember(ProfileMember):
     kind: Literal["mcp"] = "mcp"
     fields: tuple["McpField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileSettingsMember:
+class ProfileSettingsMember(ProfileMember):
     kind: Literal["settings"] = "settings"
     fields: tuple["SettingsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileArtifactsMember:
+class ProfileArtifactsMember(ProfileMember):
     kind: Literal["artifacts"] = "artifacts"
     fields: tuple["ArtifactsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileOutputMember:
+class ProfileOutputMember(ProfileMember):
     kind: Literal["output"] = "output"
     type_annotation: str
     type_expr: "TypeExpr"
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileSubagentMember:
+class ProfileSubagentMember(ProfileMember):
     kind: Literal["subagents"] = "subagents"
     name: str
-    loc: "Span | None" = None
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileMaxAgentsMember:
+class ProfileMaxAgentsMember(ProfileMember):
     kind: Literal["max_agents"] = "max_agents"
     value: int
 
 
 @dataclass(frozen=True, kw_only=True)
-class ProfileWorkflowMember:
+class ProfileWorkflowMember(ProfileMember):
     kind: Literal["workflow"] = "workflow"
     mode: WorkflowMode
 
@@ -165,13 +179,17 @@ class ProfileWorkflowMember:
 @dataclass(frozen=True, kw_only=True)
 class ProfileDefinition:
     name: str
+    loc: Span | None = field(default=None, repr=False, compare=False)
+    kind: Literal["profile", "capability"] = "profile"
+    identity: str | None = None
     description: str | None = None
     # These bindings are compiler-owned implementation details for imported
     # profiles. Source-level profile syntax remains name based.
     tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
     profile_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
+    capability_bindings: Mapping[str, Capability] = field(default_factory=dict)
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
-    members: list[
+    members: Sequence[
         ProfileAgentMember
         | ProfileAdapterMember
         | ProfileModelMember
@@ -193,4 +211,40 @@ class ProfileDefinition:
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
         | ProfileWorkflowMember
-    ] = field(default_factory=list)
+        | ProfileDeferMember
+    ] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "members", tuple(deepcopy(self.members)))
+        for name in (
+            "tool_bindings",
+            "profile_bindings",
+            "capability_bindings",
+            "subagent_bindings",
+        ):
+            object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> ProfileDefinition:
+        # Dynamic workflows snapshot the definition graph, including mutable AST
+        # payloads. Mapping proxies need an explicit copy before being frozen again.
+        result = object.__new__(type(self))
+        memo[id(self)] = result
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.name == "tool_bindings":
+                value = {
+                    name: replace(
+                        spec,
+                        json_schema=deepcopy(spec.json_schema, memo),
+                        return_schema=deepcopy(spec.return_schema, memo),
+                        metadata=deepcopy(spec.metadata, memo),
+                    )
+                    for name, spec in value.items()
+                }
+                object.__setattr__(result, item.name, value)
+                continue
+            if isinstance(value, Mapping):
+                value = dict(value)
+            object.__setattr__(result, item.name, deepcopy(value, memo))
+        result.__post_init__()
+        return result

@@ -60,7 +60,7 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
     for member in profile.adapter_members:
         if member.loc is not None:
             members.append((member.loc.start_byte, "agent-framework", member.plain_value, None))
-    for member in profile.approval_members:
+    for member in () if profile.kind == "capability" else profile.approval_members:
         if member.loc is not None:
             members.append((member.loc.start_byte, None, member.plain_value, member.loc))
 
@@ -79,7 +79,11 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         if selected is not None:
             state = _merge_adapter_state(state, selected)
     hooks_members = sorted(
-        (member for member in profile.hooks_members if member.loc is not None),
+        (
+            member
+            for member in profile.hooks_members
+            if member.loc is not None and profile.kind != "capability"
+        ),
         key=lambda member: member.loc.start_byte if member.loc is not None else -1,
     )
     for member in hooks_members:

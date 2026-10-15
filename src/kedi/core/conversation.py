@@ -195,6 +195,9 @@ def _execute_conversation_call(
             ),
             turn_sequence=request.metadata.turn_sequence,
         ) as agent_telemetry:
+            from kedi.agent_profile.telemetry import record_capability_snapshot
+
+            record_capability_snapshot(profile)
             history_estimator = adapter
             reservation = budget.reserve(
                 request.prompt.content,

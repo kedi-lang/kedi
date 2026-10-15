@@ -572,9 +572,19 @@ def _checkpoint_lane_state(adapter_shortname: str, state: dict[str, Any]) -> dic
         "history_processor_rewritten",
         HISTORY_USAGE_KEY,
     }
+    if adapter_shortname == "langchain":
+        allowed.add("langchain_instruction_digest")
     if state.keys() - allowed:
         raise ValueError("A2A native history has unsupported continuation fields")
     result = encode_history_usage_state(state)
+    if "langchain_instruction_digest" in result:
+        digest = result["langchain_instruction_digest"]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise ValueError("A2A native history instruction digest is invalid")
     if native_key in result:
         if adapter_shortname == "pydantic":
             from pydantic_ai.messages import ModelMessagesTypeAdapter

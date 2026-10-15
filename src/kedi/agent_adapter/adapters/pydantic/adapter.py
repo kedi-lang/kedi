@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncGenerator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager, nullcontext
+from contextlib import (
+    AbstractAsyncContextManager,
+    ExitStack,
+    asynccontextmanager,
+    contextmanager,
+    nullcontext,
+)
 from contextvars import ContextVar
 from typing import (
     TYPE_CHECKING,
@@ -142,6 +148,8 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     approval_resolution: PydanticApprovalResolution
     subagent_approval_resolution: PydanticApprovalResolution | None
     capabilities = AdapterCapabilities(
+        supports_capabilities=True,
+        supports_deferred_tools=True,
         supports_structured_output=True,
         supports_tool_registration=True,
         supports_mcp=True,
@@ -671,6 +679,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 else agent_event_run(self.shortname)
             )
             with (
+                ExitStack() as model_overrides,
                 self._history_processor_runner.run_scope(
                     conversation if isinstance(conversation, AdapterConversationContext) else None,
                     reuse_existing=True,
@@ -690,6 +699,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                     self,
                     cast("Model | str | None", run_kwargs.get("model")),
                 )
+                from .compat import transport_model_scope
+
+                model_overrides.enter_context(transport_model_scope(self, selected_model))
                 if current_run_budget() is not None:
                     run_kwargs["model"] = budget_model(
                         effective_model(self, cast("Model | str | None", run_kwargs.get("model")))
@@ -718,6 +730,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
         with (
+            ExitStack() as model_overrides,
             self._history_processor_runner.run_scope(
                 conversation if isinstance(conversation, AdapterConversationContext) else None,
                 processor=self.active_history_processor,
@@ -749,6 +762,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                     agent,
                     cast("Model | str | None", run_kwargs.get("model")),
                 )
+                from .compat import transport_model_scope
+
+                model_overrides.enter_context(transport_model_scope(agent, selected_model))
                 if current_run_budget() is not None:
                     run_kwargs["model"] = budget_model(
                         effective_model(agent, cast("Model | str | None", run_kwargs.get("model")))

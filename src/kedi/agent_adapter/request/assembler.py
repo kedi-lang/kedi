@@ -108,6 +108,8 @@ def _tool_definition(tool: ToolSpec) -> ToolDefinition:
         required_before_output=metadata.get("required_before_output") is True,
         artifact_result=tool.artifact_result,
         sequential=tool.sequential,
+        capability_owners=() if tool.capability_policy is None else tool.capability_policy.owners,
+        deferred_capability=tool.deferred_capability,
     )
 
 
@@ -121,6 +123,8 @@ def _tool_definition_payload(tool: ToolDefinition) -> dict[str, object]:
         "required_before_output": tool.required_before_output,
         "artifact_result": tool.artifact_result,
         "sequential": tool.sequential,
+        "capability_owners": tool.capability_owners,
+        "deferred_capability": tool.deferred_capability,
     }
 
 

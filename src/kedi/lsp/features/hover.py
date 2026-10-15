@@ -42,6 +42,7 @@ from kedi.lang.ast import (
     ProfileArtifactsEntry,
     ProfileCodeModeEntry,
     ProfileDefStmt,
+    ProfileDeferEntry,
     ProfileEffortEntry,
     ProfileHistoryEntry,
     ProfileHooksEntry,
@@ -412,6 +413,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(span)
             return
         if isinstance(node, ProfileDefStmt):
+            for member in node.defer_members:
+                visit(member)
             for member in node.agent_members:
                 visit(member)
             for member in node.adapter_members:
@@ -833,6 +836,12 @@ def _describe_ast_node(node) -> Optional[str]:
         return _use_directive_markdown(node)
     if isinstance(node, ProfileDefStmt):
         return _profile_signature_markdown(node)
+    if isinstance(node, ProfileDeferEntry):
+        return (
+            "**`> defer:`**\n\nDefaults to `false`: tools and guidance are available when "
+            "the capability is used. `true` requires native on-demand loading before its "
+            "tools can execute. A Python expression must return a boolean."
+        )
     if isinstance(node, TextSegment):
         text = (node.text or "").strip()
         preview = text[:40] + ("…" if len(text) > 40 else "")

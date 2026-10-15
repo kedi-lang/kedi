@@ -172,7 +172,11 @@ def _dispatcher_for(
     settings = getattr(profile, "hooks", None)
     snapshot = HookDispatcherSnapshot.compose(adapter.hook_snapshot(), settings)
     identity = _run_identity()
-    if not snapshot.active:
+    owned_hooks = any(
+        tool.capability_policy is not None and tool.capability_policy.hook_contributions
+        for tool in getattr(adapter, "scoped_tool_specs", ())
+    )
+    if not snapshot.active and not getattr(profile, "capabilities", ()) and not owned_hooks:
         return None, identity
     return HookDispatcher(snapshot), identity
 

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.capture import CapturedAgentProfile, profile_capture_scope
 from kedi.agent_profile.compile import (
     build_profile_registry,
     capture_procedure_profiles,
@@ -49,6 +50,8 @@ class _PreparedProgram:
     sequence: tuple[Any, ...]
     toplevel_return: Any | None
     local_profiles: dict[str, ProfileDefinition]
+    profile_captures: dict[int, CapturedAgentProfile]
+    initial_procedures: tuple[Callable[..., Any], ...]
     import_source_path: Path | None = None
 
 
@@ -306,7 +309,8 @@ class ProgramCompiler:
         local_profiles = build_profile_registry(prog)
         self.rt._profile_registry.update(local_profiles)
         validate_subagent_graph(self.rt._profile_registry)
-        procedure_bindings = capture_procedure_profiles(self.rt, prog)
+        profile_captures: dict[int, CapturedAgentProfile] = {}
+        procedure_bindings = capture_procedure_profiles(self.rt, prog, captures=profile_captures)
 
         type_env = self.rt._type_env_stack[0]
         for typedef in prog.type_defs:
@@ -329,6 +333,13 @@ class ProgramCompiler:
             sequence=tuple(sequence),
             toplevel_return=prog.toplevel_return,
             local_profiles=local_profiles,
+            profile_captures=profile_captures,
+            initial_procedures=tuple(
+                procedure_bindings[id(proc)]
+                for proc in prog.procedures
+                if id(proc) in procedure_bindings
+                and isinstance(proc.captured_agent_profile, CapturedAgentProfile)
+            ),
             import_source_path=import_source_path,
         )
 
@@ -596,11 +607,14 @@ class ProgramCompiler:
         from kedi.debugging import execution_frame
 
         with (
+            profile_capture_scope(prepared.profile_captures.values()),
             self.rt.trace_frame(
                 KediTraceFrame(kind="program", label="top-level program", span=None)
             ),
             execution_frame(self.rt, "<program>", env),
         ):
+            for procedure in prepared.initial_procedures:
+                self.rt.procedure(procedure)
             block_result = self._execute_top_level_sequence(
                 prepared,
                 env,

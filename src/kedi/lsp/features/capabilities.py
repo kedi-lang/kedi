@@ -172,7 +172,17 @@ def _scan_capability_scope(
     if warned_approval_spans is None:
         warned_approval_spans = set()
 
+    expanded = []
     for stmt in statements:
+        if isinstance(stmt, UseDirectiveStmt) and stmt.tool_names:
+            entries = dict(_use_tool_entry_spans(prog, stmt))
+            expanded.extend(
+                UseDirectiveStmt(target=name, loc=entries.get(name, stmt.loc))
+                for name in stmt.tool_names
+            )
+        else:
+            expanded.append(stmt)
+    for stmt in expanded:
         if isinstance(stmt, AgentDirectiveStmt):
             before_selection = active
             diagnostics.extend(
@@ -318,7 +328,8 @@ def _scan_capability_scope(
                 )
             )
             if stmt.name and not stmt.tool_names and stmt.name in profile_defs:
-                selected_profile = stmt.name
+                if profile_defs[stmt.name].kind != "capability":
+                    selected_profile = stmt.name
                 active = _merge_adapter_state(
                     active,
                     profile_states.get(stmt.name, _AdapterDiagnosticState()),
@@ -752,6 +763,21 @@ def _use_capability_diagnostics(
         proc_names=proc_names,
     )
     diagnostics: list[lsp.Diagnostic] = []
+    for feature, description in (
+        ("capabilities", "composable agent capabilities"),
+        ("deferred_tools", "on-demand capability loading"),
+    ):
+        if feature in capabilities:
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    merged,
+                    feature,
+                    [target_span],
+                    description,
+                    severity=lsp.DiagnosticSeverity.Error,
+                    code="K-ADAPTER-CAPABILITY",
+                )
+            )
     diagnostics.extend(
         _newly_unsupported_requirement_diagnostics(
             state,
@@ -800,7 +826,11 @@ def _use_capability_diagnostics(
             )
         )
     if "hooks" in capabilities:
-        diagnostics.extend(_hooks_capability_diagnostics(merged, span=target_span))
+        local = merged
+        if profile.kind == "capability":
+            for member in profile.hooks_members:
+                local = _with_hooks_state(local, member)
+        diagnostics.extend(_hooks_capability_diagnostics(local, span=target_span))
     return diagnostics
 
 
@@ -816,8 +846,10 @@ def _profile_capability_usage(
         return set()
 
     capabilities: set[AdapterCapability] = set()
-    if profile.tool_names:
-        capabilities.add("tool_registration")
+    if profile.kind == "capability":
+        capabilities.add("capabilities")
+        if profile.defer_members and profile.defer_members[-1].enabled:
+            capabilities.add("deferred_tools")
     if profile.mcp_members:
         capabilities.add("mcp")
     if profile.subagent_members:
@@ -830,7 +862,7 @@ def _profile_capability_usage(
         capabilities.add("hooks")
 
     nested_active = active | {profile.name}
-    for target in profile.use_targets:
+    for target in (*profile.use_targets, *profile.tool_names):
         if target in proc_names:
             capabilities.add("tool_registration")
             continue
@@ -844,6 +876,8 @@ def _profile_capability_usage(
                     active=nested_active,
                 )
             )
+        elif target in profile.tool_names:
+            capabilities.add("tool_registration")
     return capabilities
 
 

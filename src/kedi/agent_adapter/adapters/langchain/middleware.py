@@ -32,7 +32,11 @@ from kedi.agent_adapter.tools.execution import (
     resolve_tool_arguments_async,
 )
 from kedi.agent_adapter.tools.records import attach_tool_call, track_tool_call
-from kedi.agent_adapter.tools.specs import ToolSpec, tool_has_artifact_boundary
+from kedi.agent_adapter.tools.specs import (
+    ToolSpec,
+    tool_approval_policy,
+    tool_has_artifact_boundary,
+)
 from kedi.agent_profile import AgentProfile
 
 
@@ -99,17 +103,19 @@ def _langchain_approval_middleware(
                 )
                 if approval_enabled:
                     policies = tuple(approval_ceiling)
-                    if profile.approval is not None or not policies:
-                        policies = (*policies, profile.approval)
+                    local_policy = tool_approval_policy(tool, profile.approval, final_arguments)
+                    if local_policy is not None or not policies:
+                        policies = (*policies, local_policy)
                     for policy in policies:
-                        final_arguments = await resolve_tool_arguments_async(
-                            tool,
-                            final_arguments,
-                            policy=policy,
-                            adapter_shortname="langchain",
-                            reason=reason,
-                            tool_reason_enabled=tool_reason,
-                        )
+                        with track_tool_call(call_id):
+                            final_arguments = await resolve_tool_arguments_async(
+                                tool,
+                                final_arguments,
+                                policy=policy,
+                                adapter_shortname="langchain",
+                                reason=reason,
+                                tool_reason_enabled=tool_reason,
+                            )
             except (HookDeniedError, ToolApprovalDenied) as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))
             except Exception as exc:

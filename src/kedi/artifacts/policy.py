@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+import warnings
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields, replace
 from datetime import timedelta
 from pathlib import Path
@@ -16,6 +17,7 @@ _ALL_POLICY_FIELDS = frozenset(
     {
         "enabled",
         "query_artifacts",
+        "exclude_tools",
         "store",
         "path",
         "threshold_bytes",
@@ -43,6 +45,7 @@ ARTIFACT_POLICY_INPUT_FIELDS = frozenset(
     {
         "enabled",
         "query_artifacts",
+        "exclude_tools",
         "store",
         "path",
         "threshold",
@@ -80,6 +83,28 @@ _DURATION_UNITS = {
 _NUMBER_WITH_UNIT = re.compile(r"^\s*(?P<number>(?:\d+(?:\.\d*)?|\.\d+))\s*(?P<unit>[a-zA-Z]+)\s*$")
 
 
+def warn_unmatched_tool_exclusions(
+    policy: ArtifactPolicy,
+    tool_names: Iterable[str],
+    *,
+    incomplete: bool = False,
+) -> None:
+    """Diagnose names without loading extra tools or rejecting partial catalogs."""
+    if not policy.enabled:
+        return
+    missing = sorted(set(policy.exclude_tools).difference(tool_names))
+    if not missing:
+        return
+    names = ", ".join(repr(name) for name in missing)
+    detail = (
+        "could not be verified against resolved tools; some deferred capabilities "
+        "were not activated"
+        if incomplete
+        else "did not match any resolved tool; check the exact exposed tool names"
+    )
+    warnings.warn(f"Artifact exclude_tools {names} {detail}.", UserWarning, stacklevel=2)
+
+
 @dataclass(frozen=True, kw_only=True)
 class ArtifactPolicy:
     """Normalized artifact policy with field-aware overlay semantics."""
@@ -87,6 +112,7 @@ class ArtifactPolicy:
     enabled: bool = True
     # Unset inherits the adapter default; a resolved standalone policy defaults to disabled.
     query_artifacts: Literal["enabled", "disabled"] | None = None
+    exclude_tools: tuple[str, ...] = ()
     store: ArtifactStoreKind = "memory"
     path: Path = Path(".kedi/artifacts")
     threshold_bytes: int = 100_000
@@ -104,6 +130,7 @@ class ArtifactPolicy:
     )
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "exclude_tools", _tool_names(self.exclude_tools))
         _validate_policy(self)
 
     @classmethod
@@ -137,6 +164,11 @@ class ArtifactPolicy:
     def queries_enabled(self, *, default: bool = False) -> bool:
         return default if self.query_artifacts is None else self.query_artifacts == "enabled"
 
+    def for_tool_result(self, tool_name: str) -> ArtifactPolicy:
+        """Disable conversion for an exact tool name, retaining inline safety limits."""
+
+        return replace(self, enabled=False) if tool_name in self.exclude_tools else self
+
     @property
     def is_explicit(self) -> bool:
         return bool(self._specified_fields)
@@ -145,6 +177,7 @@ class ArtifactPolicy:
         return (
             self.enabled,
             self.query_artifacts,
+            self.exclude_tools,
             self.store,
             str(self.path),
             self.threshold_bytes,
@@ -240,6 +273,8 @@ def parse_duration(
 
 
 def _normalize_policy_value(name: str, value: object) -> object:
+    if name == "exclude_tools":
+        return _tool_names(value)
     if name == "query_artifacts":
         if not isinstance(value, str) or value not in {"enabled", "disabled"}:
             raise ArtifactPolicyError("query_artifacts must be 'enabled' or 'disabled'")
@@ -267,6 +302,24 @@ def _normalize_policy_value(name: str, value: object) -> object:
     raise ArtifactPolicyError(
         f"unsupported normalized artifact policy field {name!r}"
     )  # pragma: no cover
+
+
+def _tool_names(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ArtifactPolicyError("exclude_tools must be a list or tuple of exact tool names")
+    names: list[str] = []
+    for name in value:
+        if (
+            not isinstance(name, str)
+            or not name
+            or any(character.isspace() or character in "*?[]" for character in name)
+        ):
+            raise ArtifactPolicyError(
+                "exclude_tools requires nonempty exact names without wildcards or whitespace"
+            )
+        if name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def _positive_int(value: object, *, field_name: str) -> int:

@@ -70,6 +70,8 @@ def request_diagnostics(request: AgentRunRequest) -> RequestDiagnostics:
                     tool.required_before_output,
                     tool.artifact_result,
                     tool.sequential,
+                    tool.capability_owners,
+                    tool.deferred_capability,
                 )
                 for tool in request.tool_definitions
             )

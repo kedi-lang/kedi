@@ -8,7 +8,7 @@ def artifact_instructions(*, query_artifact: bool = False) -> str:
 
     return format_as_xml(
         {
-            "contract": (
+            "Contract": (
                 "Large results may be compact artifact refs; previews are incomplete. Do not "
                 "repeat the source tool. Refs are opaque: use the exact ref_id returned by each "
                 "tool; never infer identity or order from its suffix. Unless the task explicitly "
@@ -34,5 +34,5 @@ def artifact_instructions(*, query_artifact: bool = False) -> str:
                 )
             ),
         },
-        root_tag="ARTIFACT_INSTRUCTIONS",
+        root_tag="ArtifactInstructions",
     )

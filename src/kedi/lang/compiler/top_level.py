@@ -24,6 +24,7 @@ from kedi.agent_profile.directives import (
     eval_system_directive,
 )
 from kedi.agent_profile.use_resolution import eval_use_directive
+from kedi.agent_profile.telemetry import merge_profile_with_telemetry, record_profile_transition
 from kedi.debugging import checkpoint
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
@@ -99,6 +100,15 @@ def _execute_top_level_sequence(
 
     for item in sequence:
         checkpoint(self.rt, "statement", env=env, span=item.loc)
+        capture = prepared.profile_captures.get(id(item))
+        if capture is not None:
+            previous = state.active_profile
+            patch, state.active_profile = capture.apply(previous, env)
+            record_profile_transition(previous, patch, state.active_profile)
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
+            continue
         if isinstance(item, IfStmt):
             with block_agent_profile_scope(state.active_profile):
                 condition = evaluate_condition(self.rt, item, env)
@@ -181,7 +191,14 @@ def _execute_top_level_sequence(
             continue
         if isinstance(item, ProcedureDef):
             if not item.auto_spec and not item.ai_prompt:
-                self.rt.procedure(self.proc_compiler.compile_procedure(item))
+                from kedi.agent_profile.capture import CapturedAgentProfile
+
+                definition = (
+                    replace(item, captured_agent_profile=state.active_profile.frozen_copy())
+                    if isinstance(item.captured_agent_profile, CapturedAgentProfile)
+                    else item
+                )
+                self.rt.procedure(self.proc_compiler.compile_procedure(definition))
             continue
         if isinstance(item, ProcDefStmt) and item.proc is not None:
             child = item.proc
@@ -272,8 +289,8 @@ def _execute_top_level_sequence(
                 ledger.set_budget(patch.run_budget)
             continue
         if isinstance(item, SystemDirectiveStmt):
-            state.active_profile = state.active_profile.merge(
-                eval_system_directive(self.rt, item, env)
+            state.active_profile = merge_profile_with_telemetry(
+                state.active_profile, eval_system_directive(self.rt, item, env)
             )
             continue
         if isinstance(item, McpDirectiveStmt):
@@ -299,7 +316,7 @@ def _execute_top_level_sequence(
                 env,
                 available_procedures=set(self.rt._procedures.keys()),
             )
-            state.active_profile = state.active_profile.merge(patch)
+            state.active_profile = merge_profile_with_telemetry(state.active_profile, patch)
             ledger = current_run_budget()
             if ledger is not None and patch.run_budget is not None:
                 ledger.set_budget(patch.run_budget)

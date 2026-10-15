@@ -22,9 +22,10 @@ from kedi.lang import compile_program, parse_program
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["pydantic", "langchain"])
-@pytest.mark.parametrize("case", ["scope-failure", "history-lanes"])
+@pytest.mark.parametrize("case", ["scope-failure", "history-lanes", "template-raw-template"])
 async def test_wire_requests_restore_scoped_config_and_isolate_history(backend, case):
     requests, responses, outputs, lanes, effects = [], {}, [], [], []
+    requests_by_response = {}
     codes = ["a" * 32, "b" * 32]
     state = ConversationState()
 
@@ -35,6 +36,7 @@ async def test_wire_requests_restore_scoped_config_and_isolate_history(backend, 
         code = supplied[-1] if supplied else responses[body["previous_response_id"]]
         response_id = f"resp_fixture_{len(responses)}"
         responses[response_id] = code
+        requests_by_response[response_id] = body
         return httpx.Response(
             200,
             json={
@@ -83,11 +85,17 @@ async def test_wire_requests_restore_scoped_config_and_isolate_history(backend, 
         tool_bindings={tool.name: tool},
     )
 
-    async def execute(adapter, profile):
+    async def execute(adapter, profile, *, raw=False):
         engine = SequentialEngine()
         runtime = compile_program(
             parse_program(
-                "> history: enabled\n>> The current scoped code is [code: str].\n= `code`"
+                "> history: enabled\n"
+                + (
+                    "[code] << Report the current scoped code.\n"
+                    if raw
+                    else ">> The current scoped code is [code: str].\n"
+                )
+                + "= `code`"
             ),
             adapter=adapter,
             engine=engine,
@@ -95,7 +103,8 @@ async def test_wire_requests_restore_scoped_config_and_isolate_history(backend, 
             default_agent_profile=profile,
         )
         try:
-            outputs.append(await asyncio.to_thread(runtime.run_main))
+            result = await asyncio.to_thread(runtime.run_main)
+            outputs.append(json.loads(result)["code"] if raw else result)
             lanes.append(state.adapter_state_snapshot(adapter.shortname).lane_identity)
         finally:
             await runtime.aclose()
@@ -135,12 +144,20 @@ async def test_wire_requests_restore_scoped_config_and_isolate_history(backend, 
                             assert adapter.active_profile == outer
                             await execute(adapter, adapter.active_profile)
                         assert adapter.active_profile == original
-                    else:
+                    elif case == "history-lanes":
                         for profile in (outer, outer, inner, inner):
                             await execute(adapter, profile)
                         assert lanes[0] == lanes[1] and lanes[2] == lanes[3]
                         assert lanes[0] != lanes[2]
-        selected = [0, 1, 0] if case == "scope-failure" else [0, 0, 1, 1]
+                    else:
+                        await execute(adapter, outer)
+                        await execute(adapter, outer, raw=True)
+                        await execute(adapter, outer)
+        selected = {
+            "scope-failure": [0, 1, 0],
+            "history-lanes": [0, 0, 1, 1],
+            "template-raw-template": [0, 0, 0],
+        }[case]
         assert outputs == [codes[i] for i in selected]
         assert len(requests) == len(selected)
         assert [r["reasoning"]["effort"] for r in requests] == [
@@ -150,5 +167,35 @@ async def test_wire_requests_restore_scoped_config_and_isolate_history(backend, 
             any(t.get("name") == "inner_probe" for t in r.get("tools", [])) for r in requests
         ] == [bool(i) for i in selected]
         assert effects == []
+
+        def effective_instructions(body):
+            if "instructions" in body:
+                return body["instructions"]
+            messages = [
+                m
+                for m in body.get("input", [])
+                if isinstance(m, dict) and m.get("role") in {"system", "developer"}
+            ]
+            if messages:
+                return json.dumps(messages)
+            if "previous_response_id" in body:
+                return effective_instructions(requests_by_response[body["previous_response_id"]])
+            return ""
+
+        for turn, (body, index) in enumerate(zip(requests, selected)):
+            serialized = effective_instructions(body)
+            completion = not (case == "template-raw-template" and turn == 1)
+            assert serialized.count("<TemplateInstructions>") == int(completion)
+            assert serialized.count("</TemplateInstructions>") == int(completion)
+            assert serialized.count("<ToolCallInstructions>") == int(bool(index))
+            assert serialized.count("</ToolCallInstructions>") == int(bool(index))
+            if index:
+                assert serialized.index("</TemplateInstructions>") < serialized.index(
+                    "<ToolCallInstructions>"
+                )
+            for message in body.get("input", []):
+                if isinstance(message, dict) and message.get("role") == "user":
+                    assert "<TemplateInstructions>" not in json.dumps(message)
+                    assert "Fill each unescaped" not in json.dumps(message)
     finally:
         state.close()

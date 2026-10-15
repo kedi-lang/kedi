@@ -57,5 +57,17 @@ def build_output_model(
 ) -> type[BaseModel]:
     if not output_schema:
         raise ValueError("Output schema cannot be empty.")
+    from .request.context import current_agent_run_request
+
+    request = current_agent_run_request()
+    description = (
+        "Return only the replacement values for the corresponding bracketed template "
+        "fields, excluding fixed surrounding text. Preserve full sentences when a field "
+        "requests them."
+        if request is not None
+        and request.prompt.kind == "template"
+        and any(part.identity == "template.instructions" for part in request.instructions)
+        else None
+    )
     fields = {field: output_field_definition(type_) for field, type_ in output_schema.items()}
-    return build_dynamic_model("_OutputModel", _PortableOutputModel, fields)
+    return build_dynamic_model("_OutputModel", _PortableOutputModel, fields, __doc__=description)

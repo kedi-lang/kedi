@@ -197,6 +197,23 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
 
 def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
     children: list[lsp.DocumentSymbol] = []
+    for member in profile.defer_members:
+        if member.loc is not None:
+            value = (
+                f"`{member.backtick_code}`"
+                if member.backtick_code is not None
+                else str(member.enabled).lower()
+            )
+            children.append(
+                lsp.DocumentSymbol(
+                    name=f"> defer: {value}",
+                    detail="capability activation policy",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(member.loc),
+                    selection_range=_span_to_range(member.loc),
+                    children=[],
+                )
+            )
     for member in profile.agent_members:
         if member.loc is None:
             continue
@@ -315,8 +332,8 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
             )
         )
     return lsp.DocumentSymbol(
-        name=f"> profile: {profile.name}",
-        detail="agent profile",
+        name=f"> {profile.kind}: {profile.name}",
+        detail=f"agent {profile.kind}",
         kind=lsp.SymbolKind.Interface,
         range=_span_to_range(profile.loc) if profile.loc else _empty_range(),
         selection_range=(_span_to_range(profile.loc) if profile.loc else _empty_range()),

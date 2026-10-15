@@ -23,9 +23,12 @@ from pydantic_monty import (
     MontyTypingError,
 )
 
+from kedi.agent_profile.capabilities import capability_subagent_policy
+
 from ....telemetry import TelemetrySpan, current_span
 from ....telemetry import span as telemetry_span
 from ...telemetry import current_tool_call_name
+from ...hooks.tool_wrapper import with_hook_lifecycle
 from ...tools.specs import ToolSpec
 from .. import validate_final_schema
 from ..attempts import attempt_status_from_run, track_delegation_attempt
@@ -117,8 +120,16 @@ def _dynamic_workflow_span(
     )
 
 
-def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSpec:
+def dynamic_workflow_tool_spec(
+    rt: KediRuntime, profile: AgentProfile, *, activation_profile: AgentProfile | None = None
+) -> ToolSpec:
+    from kedi.agent_profile.activation import require_subagent_activation
+
+    activation_profile = profile if activation_profile is None else activation_profile
     allowed = tuple(profile.subagents)
+    owned_policies = {
+        name: capability_subagent_policy(profile, name, include_deferred=True) for name in allowed
+    }
     definitions = _snapshot_subagent_definitions(rt, profile, allowed)
     native_owner = rt._native_subagent_owner.get()
     budget = (
@@ -157,6 +168,7 @@ def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSp
 
         async def dispatch(function_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             subagent = sandbox_to_profile[function_name]
+            require_subagent_activation(activation_profile, subagent)
             task, final_schema = _validate_child_arguments(function_name, arguments)
             if final_schema is not None:
                 validate_final_schema(final_schema)
@@ -172,9 +184,7 @@ def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSp
                 return dict(await active_call)
 
             async def execute_child() -> dict[str, Any]:
-                stats.active_calls += 1
-                stats.concurrency_peak = max(stats.concurrency_peak, stats.active_calls)
-                try:
+                async def invoke(*, task: str, final_schema: dict[str, Any] | None):
                     return await _execute_dynamic_child(
                         rt=rt,
                         profile=profile,
@@ -186,6 +196,33 @@ def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSp
                         task=task,
                         final_schema=final_schema,
                     )
+
+                def validate(arguments):
+                    task, schema = _validate_child_arguments(function_name, arguments)
+                    if schema is not None:
+                        validate_final_schema(schema)
+                    return {"task": task, "final_schema": schema}
+
+                stats.active_calls += 1
+                stats.concurrency_peak = max(stats.concurrency_peak, stats.active_calls)
+                try:
+                    policy = owned_policies[subagent]
+                    if policy is None:
+                        return await invoke(task=task, final_schema=final_schema)
+                    from ...telemetry import adapter_shortname
+
+                    tool = with_hook_lifecycle(
+                        ToolSpec(
+                            fn=invoke,
+                            name=function_name,
+                            risk="read_only",
+                            capability_policy=policy,
+                            argument_validator=validate,
+                            metadata={"kind": "subagent", "subagent": subagent},
+                        ),
+                        adapter_shortname=adapter_shortname(rt.adapter),
+                    )
+                    return await tool.fn(task=task, final_schema=final_schema)
                 except asyncio.CancelledError:
                     stats.cancelled_calls += 1
                     raise
@@ -335,6 +372,8 @@ def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSp
             "required_before_output": True,
             "code_arg_name": "code",
             "code_arg_language": "python",
+            "kedi_workflow_catalog": descriptions,
+            "kedi_workflow_remaining": max(0, budget.limit - budget.started),
         },
         risk="read_only",
         sequential=True,

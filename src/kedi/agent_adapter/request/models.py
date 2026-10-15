@@ -42,13 +42,13 @@ class InstructionPart:
     """A cache-stable instruction fragment with explicit provenance."""
 
     identity: str
-    source: Literal["profile", "skills", "artifacts", "runtime"]
+    source: Literal["profile", "capability", "skills", "artifacts", "runtime"]
     content: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ToolDefinition:
-    """Immutable model-visible projection of a live ToolSpec."""
+    """Immutable tool contract, including tools pending native activation."""
 
     name: str
     description: str | None
@@ -58,6 +58,8 @@ class ToolDefinition:
     required_before_output: bool
     artifact_result: str
     sequential: bool
+    capability_owners: tuple[str, ...] = ()
+    deferred_capability: str | None = None
 
     def __post_init__(self) -> None:
         if self.input_schema is not None:

@@ -88,6 +88,8 @@ class PydanticHistoryCodec:
             BaseToolReturnPart,
             CompactionPart,
             FilePart,
+            LoadCapabilityCallPart,
+            LoadCapabilityReturnPart,
             ModelMessagesTypeAdapter,
             RetryPromptPart,
             SystemPromptPart,
@@ -171,6 +173,10 @@ class PydanticHistoryCodec:
             provider_required=(
                 has_mixed_system_prompt
                 or any(isinstance(part, ToolAvailabilityDeltaPart) for part in message.parts)
+                or any(
+                    isinstance(part, (LoadCapabilityCallPart, LoadCapabilityReturnPart))
+                    for part in message.parts
+                )
                 or any(
                     isinstance(part, ThinkingPart)
                     and bool(part.signature or part.id or part.provider_details)

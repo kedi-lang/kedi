@@ -6,6 +6,7 @@ import pytest
 
 import kedi.agent_adapter.registry as adapter_registry
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
+from kedi.agent_adapter.request import KediTemplatePromptBuilder
 from kedi.agent_adapter.registry import (
     AdapterFactory,
     adapter_capabilities,
@@ -48,6 +49,10 @@ from kedi.lang.ast import (
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.utils import AttrDict
 from tests.mock_adapter import MockAdapter
+
+TEMPLATE_INSTRUCTIONS = (
+    KediTemplatePromptBuilder(template="", output_fields=()).instruction_parts()[0].content
+)
 
 
 def _adapter() -> MockAdapter:
@@ -1185,7 +1190,7 @@ def test_call_site_model_does_not_override_captured_procedure_profile() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
     assert adapter.model_calls == ["proc-model"]
-    assert adapter.instruction_calls == [artifact_instructions()]
+    assert adapter.instruction_calls == [f"{TEMPLATE_INSTRUCTIONS}\n\n{artifact_instructions()}"]
 
 
 def test_block_state_model_within_procedure_body() -> None:
@@ -1228,7 +1233,7 @@ def test_block_state_system_within_procedure_body() -> None:
             for request, instructions in instructions_by_request.items()
             if "first" in request
         )
-        == artifact_instructions()
+        == f"{TEMPLATE_INSTRUCTIONS}\n\n{artifact_instructions()}"
     )
     assert (
         next(
@@ -1236,7 +1241,7 @@ def test_block_state_system_within_procedure_body() -> None:
             for request, instructions in instructions_by_request.items()
             if "second" in request
         )
-        == f"Answer tersely.\n\n{artifact_instructions()}"
+        == f"{TEMPLATE_INSTRUCTIONS}\n\nAnswer tersely.\n\n{artifact_instructions()}"
     )
 
 
@@ -1252,7 +1257,7 @@ def test_block_state_system_renders_multiline_substitutions() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt._invoke_procedure(rt._procedures["foo"], ["direct"])
     assert adapter.instruction_calls == [
-        f"You are direct.\nKeep it short.\n\n{artifact_instructions()}"
+        f"{TEMPLATE_INSTRUCTIONS}\n\nYou are direct.\nKeep it short.\n\n{artifact_instructions()}"
     ]
 
 
@@ -1264,7 +1269,9 @@ def test_top_level_system_applies_to_following_prompt() -> None:
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
-    assert adapter.instruction_calls == [f"Top-level instructions.\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"{TEMPLATE_INSTRUCTIONS}\n\nTop-level instructions.\n\n{artifact_instructions()}"
+    ]
 
 
 def test_top_level_system_renders_multiline_substitutions() -> None:
@@ -1279,7 +1286,7 @@ def test_top_level_system_renders_multiline_substitutions() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
     assert adapter.instruction_calls == [
-        f"You are concise.\nNo extra text.\n\n{artifact_instructions()}"
+        f"{TEMPLATE_INSTRUCTIONS}\n\nYou are concise.\nNo extra text.\n\n{artifact_instructions()}"
     ]
 
 
@@ -1296,7 +1303,9 @@ person = SimpleNamespace(name="Mert")
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
-    assert adapter.instruction_calls == [f"Your name is Mert.\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"{TEMPLATE_INSTRUCTIONS}\n\nYour name is Mert.\n\n{artifact_instructions()}"
+    ]
 
 
 def test_use_profile_applies_model_at_capture_time() -> None:
@@ -1326,7 +1335,9 @@ def test_use_profile_applies_system_at_capture_time() -> None:
     foo_def = _procedure_def(rt._procedures["foo"])
     assert foo_def.captured_agent_profile.system == "from-profile-system"
     rt._invoke_procedure(rt._procedures["foo"], [])
-    assert adapter.instruction_calls == [f"from-profile-system\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"{TEMPLATE_INSTRUCTIONS}\n\nfrom-profile-system\n\n{artifact_instructions()}"
+    ]
 
 
 def test_use_profile_applies_effort_at_capture_time() -> None:

@@ -8,6 +8,7 @@ import pytest
 from lsprotocol import types as lsp
 
 import kedi
+from kedi.agent_adapter.request import KediTemplatePromptBuilder
 from kedi.artifacts import artifact_instructions
 from kedi.lang import compile_program, parse_program
 from kedi.lang.parser.diagnostics import KediParseError
@@ -19,6 +20,10 @@ from kedi.lsp.features.semantic_tokens import (
 )
 from tests.lsp_helpers import decode_semantic_tokens, hover_text_at
 from tests.mock_adapter import MockAdapter
+
+TEMPLATE_INSTRUCTIONS = (
+    KediTemplatePromptBuilder(template="", output_fields=()).instruction_parts()[0].content
+)
 
 
 @pytest.mark.parametrize("scope", ["top", "procedure", "profile"])
@@ -53,7 +58,9 @@ def test_instructions_preserve_scoped_rendering(scope, multiline):
             runtime.artifacts.close()
     assert caught == []
     expected = "Use a direct tone." + ("\nKeep it short." if multiline else "")
-    assert adapter.instruction_calls == [f"{expected}\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"{TEMPLATE_INSTRUCTIONS}\n\n{expected}\n\n{artifact_instructions()}"
+    ]
 
 
 @pytest.mark.parametrize("scope", ["top", "procedure", "profile"])
@@ -78,7 +85,9 @@ def test_interactive_session_rejects_system_and_accepts_instructions():
             session.execute("> system: Legacy instructions.\n")
         session.execute("> instructions: Updated instructions.\n")
         session.execute(">> The result is [result: str].\n")
-    assert adapter.instruction_calls == [f"Updated instructions.\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"{TEMPLATE_INSTRUCTIONS}\n\nUpdated instructions.\n\n{artifact_instructions()}"
+    ]
 
 
 def test_later_instructions_replace_earlier_profile_instructions():
@@ -92,7 +101,9 @@ def test_later_instructions_replace_earlier_profile_instructions():
         runtime.run_main()
     finally:
         runtime.artifacts.close()
-    assert adapter.instruction_calls == [f"Later.\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"{TEMPLATE_INSTRUCTIONS}\n\nLater.\n\n{artifact_instructions()}"
+    ]
 
 
 def test_instructions_in_imported_modules(tmp_path: Path):

@@ -10,6 +10,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, cast
 
+from kedi.telemetry import current_span
+
 from ..approvals.policy import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -26,6 +28,7 @@ from .scope import (
     current_artifact_admission,
 )
 from .specs import ToolSpec
+from .records import current_tool_call_tracker
 
 _RISK_ORDER: dict[ToolRisk, int] = {
     "read_only": 0,
@@ -252,9 +255,19 @@ def admit_artifact_result(
     from kedi.artifacts import ArtifactHandle, ArtifactStream
     from kedi.artifacts.errors import ArtifactQuotaExceededError, ToolOutputTooLargeError
 
+    excluded = tool_name in policy.exclude_tools
+    current_span().add_event(
+        "tool artifact policy",
+        {
+            "gen_ai.tool.name": tool_name,
+            "gen_ai.tool.call.id": call_id,
+            "kedi.tool.artifact.excluded": excluded,
+        },
+    )
+    policy = policy.for_tool_result(tool_name)
     manager.history.append(
         "tool_call",
-        data={"tool_name": tool_name, "call_id": call_id},
+        data={"tool_name": tool_name, "call_id": call_id, "artifact_excluded": excluded},
     )
     try:
         if isinstance(result, ArtifactStream):
@@ -288,7 +301,12 @@ def admit_artifact_result(
     if not isinstance(stored, ArtifactHandle):
         manager.history.append(
             "tool_result",
-            data={"tool_name": tool_name, "call_id": call_id, "artifacted": False},
+            data={
+                "tool_name": tool_name,
+                "call_id": call_id,
+                "artifacted": False,
+                "artifact_excluded": excluded,
+            },
         )
         return stored
     ref = stored.as_ref()
@@ -321,9 +339,19 @@ async def admit_artifact_result_async(
             tool_name=tool_name,
             call_id=call_id,
         )
+    excluded = tool_name in policy.exclude_tools
+    current_span().add_event(
+        "tool artifact policy",
+        {
+            "gen_ai.tool.name": tool_name,
+            "gen_ai.tool.call.id": call_id,
+            "kedi.tool.artifact.excluded": excluded,
+        },
+    )
+    policy = policy.for_tool_result(tool_name)
     manager.history.append(
         "tool_call",
-        data={"tool_name": tool_name, "call_id": call_id},
+        data={"tool_name": tool_name, "call_id": call_id, "artifact_excluded": excluded},
     )
     try:
         stored = await manager.artifactize_stream_async(
@@ -350,7 +378,12 @@ async def admit_artifact_result_async(
     if not isinstance(stored, ArtifactHandle):
         manager.history.append(
             "tool_result",
-            data={"tool_name": tool_name, "call_id": call_id, "artifacted": False},
+            data={
+                "tool_name": tool_name,
+                "call_id": call_id,
+                "artifacted": False,
+                "artifact_excluded": excluded,
+            },
         )
         return stored
     ref = stored.as_ref()
@@ -396,6 +429,23 @@ def with_artifact_result(
         return tool
     metadata["kedi_artifact_wrapped"] = True
 
+    def result_call_id() -> str:
+        tracker = current_tool_call_tracker()
+        return tracker.tool_call_id if tracker is not None else f"call_{secrets.token_urlsafe(10)}"
+
+    def admission_is_deferred() -> bool:
+        if not _defer_artifact_admission.get():
+            return False
+        current_span().add_event(
+            "tool artifact admission deferred",
+            {
+                "gen_ai.tool.name": tool.name,
+                "kedi.tool.artifact.excluded": tool.name in policy.exclude_tools,
+                "kedi.tool.output.destination": "sandbox",
+            },
+        )
+        return True
+
     async def admit_result(result: Any, tool_name: str) -> Any:
         try:
             return await admit_artifact_result_async(
@@ -403,7 +453,7 @@ def with_artifact_result(
                 manager=manager,
                 policy=policy,
                 tool_name=tool_name,
-                call_id=f"call_{secrets.token_urlsafe(10)}",
+                call_id=result_call_id(),
             )
         except BaseException as exc:
             setattr(exc, "kedi_result_failure_stage", "artifact")
@@ -416,9 +466,9 @@ def with_artifact_result(
 
         @wraps(tool.fn)
         async def artifact_async_tool(*args: Any, **kwargs: Any) -> Any:
-            call_id = f"call_{secrets.token_urlsafe(10)}"
+            call_id = result_call_id()
             result = await tool.fn(*args, **kwargs)
-            if _defer_artifact_admission.get():
+            if admission_is_deferred():
                 return result
             try:
                 return await admit_artifact_result_async(
@@ -441,13 +491,13 @@ def with_artifact_result(
 
     @wraps(tool.fn)
     def artifact_tool(*args: Any, **kwargs: Any) -> Any:
-        call_id = f"call_{secrets.token_urlsafe(10)}"
+        call_id = result_call_id()
         result = tool.fn(*args, **kwargs)
         if inspect.isawaitable(result):
 
             async def await_and_compact() -> Any:
                 resolved = await result
-                if _defer_artifact_admission.get():
+                if admission_is_deferred():
                     return resolved
                 try:
                     return await admit_artifact_result_async(
@@ -462,7 +512,7 @@ def with_artifact_result(
                     raise
 
             return await_and_compact()
-        if _defer_artifact_admission.get():
+        if admission_is_deferred():
             return result
         from kedi.artifacts import ArtifactStream
 

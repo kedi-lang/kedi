@@ -1460,6 +1460,8 @@ def test_native_tool_messages_keep_call_ids_and_order(tmp_path: Path, adapter_ki
         key = "langchain_messages"
     with conversation.adapter_turn(adapter_kind) as turn:
         turn.result_state[key] = messages
+        if adapter_kind == "langchain":
+            turn.result_state["langchain_instruction_digest"] = "a" * 64
     saved = conversation.export_checkpoint(adapter_kind)
     artifact_checkpoint = artifacts.export_checkpoint()
     conversation.close()
@@ -1478,6 +1480,10 @@ def test_native_tool_messages_keep_call_ids_and_order(tmp_path: Path, adapter_ki
         else:
             assert native[0]["data"]["tool_calls"][0]["id"] == "call-7"
             assert native[1]["data"]["tool_call_id"] == "call-7"
+            assert (
+                restored.adapter_state_snapshot(adapter_kind).state["langchain_instruction_digest"]
+                == "a" * 64
+            )
     finally:
         restored.close()
         restored_artifacts.close()
@@ -1549,6 +1555,9 @@ def test_conversation_checkpoint_validation(tmp_path: Path) -> None:
         _checkpoint_lane_state("pydantic", {"provider_handle": "socket"})
     with pytest.raises(ValueError, match="rewrite marker"):
         _checkpoint_lane_state("pydantic", {"history_processor_rewritten": "yes"})
+    for digest in (None, 42, "short", "z" * 64):
+        with pytest.raises(ValueError, match="instruction digest"):
+            _checkpoint_lane_state("langchain", {"langchain_instruction_digest": digest})
     conversation.close()
     artifacts.close()
 

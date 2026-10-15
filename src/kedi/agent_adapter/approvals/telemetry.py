@@ -9,6 +9,7 @@ from typing import Literal
 
 from ...telemetry import TelemetrySpan, add_counter, current_span, record_histogram, span
 from ..telemetry import current_tool_call_name
+from ..tools.records import current_tool_call_tracker
 from .policy import ApprovalDecision, ApprovalRequest
 
 ApprovalMechanism = Literal["cli", "python_handler", "native_adapter"]
@@ -18,6 +19,14 @@ ImmediateApprovalMode = Literal[
     "static_allow",
     "static_deny",
 ]
+
+
+def _tool_call_attributes(request: ApprovalRequest) -> dict[str, str]:
+    attributes = {"gen_ai.tool.name": request.tool_name}
+    tracker = current_tool_call_tracker()
+    if tracker is not None:
+        attributes["gen_ai.tool.call.id"] = tracker.tool_call_id
+    return attributes
 
 
 @dataclass(slots=True)
@@ -50,6 +59,7 @@ def approval_span(
     parent = current_span()
     _mark_parent_requested(parent, request)
     attributes: dict[str, bool | str] = {
+        **_tool_call_attributes(request),
         "kedi.approval.tool.name": request.tool_name,
         "kedi.approval.risk": request.risk,
         "kedi.approval.mechanism": mechanism,
@@ -108,6 +118,8 @@ def record_immediate_decision(
     parent.add_event(
         "tool approval",
         {
+            **_tool_call_attributes(request),
+            "kedi.approval.risk": request.risk,
             "kedi.approval.mode": mode,
             "kedi.approval.decision": decision.decision,
             "kedi.approval.arguments_edited": False,

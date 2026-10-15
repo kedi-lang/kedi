@@ -25,12 +25,14 @@ from ..telemetry import (
     span,
 )
 from ..telemetry.naming import qualified_type_name
+from ..agent_profile.telemetry import capability_attributes, capability_trace_id
 from .invocation import InvocationUsage
 from .meta import AgentAdapterKind
 from .tools.specs import ToolSpec
 
 if TYPE_CHECKING:
     from ..agent_profile import AgentProfile
+    from ..agent_profile.capabilities import CapabilityToolPolicy
 
 AgentCallKind = Literal["produce", "invoke", "subagent"]
 
@@ -75,6 +77,7 @@ def record_conversation_assets(
         "compaction": repr(profile.compaction),
         "output_type": repr(profile.output_type),
         "artifacts": repr(profile.artifacts),
+        "capabilities": [capability_attributes(capability) for capability in profile.capabilities],
     }
     _record_behavioral_asset(
         kind="agent_profile",
@@ -769,10 +772,16 @@ def tool_call_span(
     try:
         with span_context as active_span:
             if active_span is not None:
+                from .tools.records import current_tool_call_tracker
+
+                tracker = current_tool_call_tracker()
+                if tracker is not None:
+                    active_span.set_attribute("gen_ai.tool.call.id", tracker.tool_call_id)
                 active_span.set_attribute("kedi.adapter.name", adapter_shortname)
                 active_span.set_attribute("kedi.tool.source", source)
                 active_span.set_attribute("kedi.tool.risk", tool.risk)
                 active_span.set_attribute("kedi.tool.argument_count", argument_count)
+                record_tool_ownership(tool, tool.capability_policy)
                 active_span.add_event("tool execution started")
             state = ToolCallTelemetry(
                 span=active_span,
@@ -790,6 +799,24 @@ def tool_call_span(
                 state.finish()
     finally:
         _current_tool_call_name.reset(tool_token)
+
+
+def record_tool_ownership(tool: ToolSpec, policy: CapabilityToolPolicy | None) -> None:
+    active = current_span()
+    if not active.is_recording() or current_tool_call_name() != tool.name:
+        return
+    active.set_attribute(
+        "kedi.tool.capability.owners",
+        () if policy is None else tuple(capability_trace_id(owner) for owner in policy.owners),
+    )
+    active.set_attribute(
+        "kedi.tool.approval.source",
+        "tool"
+        if tool.approval is not None
+        else "capability"
+        if policy is not None and policy.approval is not None
+        else "agent",
+    )
 
 
 def tool_source(tool: ToolSpec) -> str:

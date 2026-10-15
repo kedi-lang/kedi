@@ -6,6 +6,8 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from hashlib import sha256
+import json
 from typing import Any, Iterator, Literal, Mapping, Sequence
 
 from langchain.agents.middleware import AgentMiddleware
@@ -19,12 +21,14 @@ from pydantic_ai.usage import RunUsage
 
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings, cache_epoch_key
 from kedi.agent_adapter.compaction.langchain_archive import LangChainArtifactHistoryProcessor
+from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.history_processing import (
     HistoryProcessingError,
     HistoryProcessorRunner,
     rebase_history_cache_key,
 )
 from kedi.agent_adapter.invocation import InvocationUsage
+from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.tools.dispatch import SequentialDispatchGate
 from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries
 
@@ -39,6 +43,8 @@ class LangChainRunState:
     revision: int = 0
     completed_tools: dict[str, ToolMessage] = field(default_factory=dict)
     dispatch_gate: SequentialDispatchGate = field(default_factory=SequentialDispatchGate)
+    instruction_digest: str | None = None
+    instructions_changed: bool = False
 
 
 _RUN: ContextVar[LangChainRunState | None] = ContextVar("kedi_langchain_run", default=None)
@@ -95,11 +101,13 @@ class LangChainRunMiddleware(AgentMiddleware):
         tool_retries: int,
         history_processor: HistoryProcessorRunner[Any] | None = None,
         model_id: str | None = None,
+        conversation: AdapterConversationContext | SubagentConversationContext | None = None,
     ) -> None:
         self.archiver = LangChainArtifactHistoryProcessor(archive) if archive is not None else None
         self.tool_retries = tool_retries
         self.history_processor = history_processor
         self.model_id = model_id
+        self.conversation = conversation
 
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         del runtime
@@ -167,6 +175,28 @@ class LangChainRunMiddleware(AgentMiddleware):
                 settings["prompt_cache_key"] = cache_epoch_key(key, checkpoint_id)
                 changed = True
         model = request.model
+        fingerprint = None
+        instructions_changed = False
+        if self.conversation is not None and state is not None:
+            content = getattr(request.system_message, "content", None)
+            fingerprint = sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
+            previous_digest = state.instruction_digest or self.conversation.resume_state.get(
+                "langchain_instruction_digest"
+            )
+            has_history = state.instruction_digest is not None or bool(
+                self.conversation.resume_state.get("langchain_messages")
+            )
+            # Responses trimming must not discard a changed system message.
+            instructions_changed = has_history and previous_digest != fingerprint
+            if instructions_changed or state.instructions_changed:
+                for key in ("conversation", "conversation_id", "previous_response_id"):
+                    changed = settings.pop(key, None) is not None or changed
+                model = _without_stale_continuation(
+                    model,
+                    reset_previous_response=instructions_changed,
+                    reason="LangChain instructions changed",
+                )
+                changed = model is not request.model or changed
         if self.history_processor is not None:
             directive = self.history_processor.prepare_transport()
             if directive.rewritten:
@@ -212,6 +242,9 @@ class LangChainRunMiddleware(AgentMiddleware):
             state.limits.check_tokens(state.native_usage)
             state.limits.check_per_request_input_tokens(usage.input_tokens)
         _check_model_completion(getattr(response, "result", ()))
+        if state is not None and fingerprint is not None:
+            state.instruction_digest = fingerprint
+            state.instructions_changed = state.instructions_changed or instructions_changed
         return response
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
@@ -271,7 +304,12 @@ def _check_model_completion(messages: Sequence[Any]) -> None:
         raise UnexpectedModelBehavior(f"LangChain model response is incomplete (reason: {code})")
 
 
-def _without_stale_continuation(model: Any, *, reset_previous_response: bool) -> Any:
+def _without_stale_continuation(
+    model: Any,
+    *,
+    reset_previous_response: bool,
+    reason: str = "history_processor rewrote LangChain history",
+) -> Any:
     updates: dict[str, Any] = {}
     if reset_previous_response and getattr(model, "use_previous_response_id", False):
         updates["use_previous_response_id"] = False
@@ -293,7 +331,6 @@ def _without_stale_continuation(model: Any, *, reset_previous_response: bool) ->
     copy_model = getattr(model, "model_copy", None)
     if not callable(copy_model):
         raise HistoryProcessingError(
-            "history_processor rewrote LangChain history, but the configured model cannot "
-            "disable its stale server-side continuation"
+            f"{reason}, but the configured model cannot disable its stale server-side continuation"
         )
     return copy_model(update=updates)

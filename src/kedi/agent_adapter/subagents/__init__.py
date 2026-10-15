@@ -137,7 +137,11 @@ def subagent_tool_specs(
     profile: AgentProfile,
     *,
     supports_background: bool,
+    activation_profile: AgentProfile | None = None,
 ) -> tuple[ToolSpec, ...]:
+    from kedi.agent_profile.activation import require_subagent_activation
+
+    activation_profile = profile if activation_profile is None else activation_profile
     allowed = tuple(profile.subagents)
     subagent_definitions = dict(profile.subagent_bindings)
     descriptions = _subagent_descriptions(rt, allowed, subagent_definitions)
@@ -158,6 +162,7 @@ def subagent_tool_specs(
         final_schema: dict[str, Any] | None = None,
         background: bool = False,
     ) -> dict[str, Any]:
+        require_subagent_activation(activation_profile, subagent)
         with track_delegation_attempt(
             requested_profile=subagent,
             task=task,
@@ -210,6 +215,8 @@ def subagent_tool_specs(
         final_schema: dict[str, Any] | None = None,
         background: bool = False,
     ) -> dict[str, Any]:
+        run = rt._subagent_coordinator.runs.get(run_id)
+        require_subagent_activation(activation_profile, run.profile_name)
         if background:
             if not supports_background:
                 raise ValueError("The active adapter does not support background subagents")
@@ -352,6 +359,25 @@ def subagent_tool_specs(
             risk="read_only",
         ),
     ]
+    for index, tool in enumerate(tools):
+        if tool.name == "delegate_task":
+            from dataclasses import replace
+
+            tools[index] = replace(
+                tool,
+                metadata={
+                    **(tool.metadata or {}),
+                    "kedi_subagent_preamble": (tool.description or "").removesuffix(descriptions),
+                    "kedi_subagent_catalog": {
+                        name: getattr(
+                            subagent_definitions.get(name) or rt._profile_registry.get(name),
+                            "description",
+                            None,
+                        )
+                        for name in allowed
+                    },
+                },
+            )
     if not supports_background:
         return tuple(tools)
 

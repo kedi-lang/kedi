@@ -82,6 +82,23 @@ class HookDispatcher:
     def handlers_for(self, event: HookEventName) -> tuple[HookHandler, ...]:
         return self.snapshot.handlers.get(event, ())
 
+    def with_tool_hooks(self, hooks: HookSettings) -> HookDispatcher:
+        """Create a tool-local chain while preserving this run's event sequence."""
+
+        handlers = {
+            event: self.handlers_for(event)
+            + (() if event == "user_prompt_submit" else hooks.handlers_for(event))
+            for event in HOOK_EVENT_NAMES
+        }
+        child = HookDispatcher(
+            HookDispatcherSnapshot(
+                handlers=MappingProxyType(handlers), timeout=self.snapshot.timeout
+            )
+        )
+        child._sequence_lock = self._sequence_lock
+        child._sequences = self._sequences
+        return child
+
     async def dispatch(self, event: HookEvent) -> HookResult:
         if _HOOK_DISPATCH_SUSPENDED.get():
             return _default_result(event)

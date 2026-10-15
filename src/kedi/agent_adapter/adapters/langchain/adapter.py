@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -86,7 +88,7 @@ from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, deleg
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.telemetry import mcp_initialization_span
 from kedi.agent_adapter.tools.scope import ToolScope, current_artifact_admission
-from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec, tool_approval_policy
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from kedi.agent_profile.compaction import CompactionSettingsError
 from kedi.agent_profile.settings import (
@@ -95,9 +97,13 @@ from kedi.agent_profile.settings import (
     langchain_model_settings,
     tool_reason_enabled,
 )
+from kedi.artifacts.policy import warn_unmatched_tool_exclusions
 from kedi.model_normalization import normalize_for_langchain
 from kedi.resolved_types import ResolvedKediType
 from kedi.run_budget import assert_run_budget_supported, current_run_budget
+
+if TYPE_CHECKING:
+    from .runtime import LangChainRunState
 
 
 class LangChainAdapter(HookRegistrationMixin):
@@ -106,6 +112,8 @@ class LangChainAdapter(HookRegistrationMixin):
     kind: AgentAdapterKind = "agent-framework"
     shortname = "langchain"
     capabilities = AdapterCapabilities(
+        supports_capabilities=True,
+        supports_deferred_tools=False,
         supports_structured_output=True,
         supports_tool_registration=True,
         supports_mcp=True,
@@ -570,7 +578,7 @@ class LangChainAdapter(HookRegistrationMixin):
                         cast(RunnableConfig, config),
                         control,
                         lambda messages: self._capture_conversation_messages(
-                            {"messages": messages}
+                            {"messages": messages}, run_state=run_state
                         ),
                     )
             finally:
@@ -578,7 +586,7 @@ class LangChainAdapter(HookRegistrationMixin):
                     report_invocation(
                         replace(run_state.usage, requests=run_state.native_usage.requests)
                     )
-            self._capture_conversation_messages(result)
+            self._capture_conversation_messages(result, run_state=run_state)
             if invocation_observer() is not None and not run_state.usage.requests:
                 report_invocation(
                     _langchain_invocation_usage(
@@ -734,7 +742,9 @@ class LangChainAdapter(HookRegistrationMixin):
 
         return _langchain_with_cache_control(SystemMessage(content=prompt))
 
-    def _capture_conversation_messages(self, result: Any) -> None:
+    def _capture_conversation_messages(
+        self, result: Any, *, run_state: LangChainRunState | None = None
+    ) -> None:
         conversation = self._conversation_var.get()
         if conversation is None or not isinstance(result, Mapping):
             return
@@ -746,6 +756,12 @@ class LangChainAdapter(HookRegistrationMixin):
         from kedi.agent_adapter.request_budget import capture_history_usage
 
         if all(isinstance(message, BaseMessage) for message in messages):
+            if run_state is not None and run_state.instruction_digest is not None:
+                conversation.result_state["langchain_instruction_digest"] = (
+                    run_state.instruction_digest
+                )
+                if isinstance(conversation, AdapterConversationContext):
+                    conversation.cache_prefix_changed |= run_state.instructions_changed
             conversation.result_state["langchain_messages"] = [
                 message_to_dict(_langchain_without_cache_control(message)) for message in messages
             ]
@@ -802,10 +818,19 @@ class LangChainAdapter(HookRegistrationMixin):
         return create_agent(**kwargs)
 
     async def _tools_for_run(self) -> list[Any]:
-        return [
+        tools = [
             *self.scoped_tools,
             *await self._mcp_tools_for_profile(self.active_profile),
         ]
+        names: set[str] = set()
+        for tool in tools:
+            name = tool.name
+            if name in names:
+                raise ValueError(
+                    f"Duplicate LangChain tool name {name!r}; use distinct exposed names"
+                )
+            names.add(name)
+        return tools
 
     def _approval_middleware_for_run(
         self,
@@ -837,7 +862,7 @@ class LangChainAdapter(HookRegistrationMixin):
         for tool in tools:
             name = getattr(tool, "name", None)
             if isinstance(name, str) and name not in known_specs:
-                tool_specs.append(_langchain_tool_spec_from_native(tool))
+                tool_specs.append(_langchain_tool_spec_from_native(tool, self.active_profile))
         return [
             _langchain_approval_middleware(
                 profile=self.active_profile,
@@ -863,6 +888,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 history_processor=self._history_processor_runner,
                 model_id=_history_processor_model_id(model),
                 tool_retries=self._tool_retries,
+                conversation=self._conversation_var.get(),
             ),
             *_langchain_cache_middleware(
                 model,
@@ -877,6 +903,10 @@ class LangChainAdapter(HookRegistrationMixin):
     @asynccontextmanager
     async def _projected_tools_for_run(self) -> AsyncIterator[CodeModeProjection]:
         native_tools = await self._tools_for_run()
+        admission = current_artifact_admission()
+        if admission is not None:
+            _manager, policy = admission
+            warn_unmatched_tool_exclusions(policy, (tool.name for tool in native_tools))
         known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         # Validate application tools before replacing them with CodeMode controls.
         assert_run_budget_supported(
@@ -906,15 +936,16 @@ class LangChainAdapter(HookRegistrationMixin):
         for tool in native_tools:
             spec = known_specs.get(tool.name)
             if spec is None:
-                spec = _langchain_tool_spec_from_native(tool)
+                spec = _langchain_tool_spec_from_native(tool, self.active_profile)
             elif spec.json_schema is None:
                 spec = replace(spec, json_schema=_langchain_tool_parameters_schema(tool))
             specs.append(spec)
         projection = codemode_projection(
             specs,
             limits=limits,
-            policies=approval_policies(
-                self.active_profile.approval,
+            policies=(),
+            policy_resolver=lambda tool: approval_policies(
+                tool_approval_policy(tool, self.active_profile.approval),
                 self._approval_ceiling_var.get(),
             ),
             adapter_shortname=self.shortname,
@@ -945,15 +976,32 @@ class LangChainAdapter(HookRegistrationMixin):
             transport=transport,
             server_count=len(profile.mcp_servers),
         ) as active:
-            tools = list(await client.get_tools())
-            for tool in tools:
-                if not hasattr(tool, "metadata"):
-                    continue
-                metadata = getattr(tool, "metadata", None)
-                tool.metadata = {
-                    **(dict(metadata) if isinstance(metadata, Mapping) else {}),
-                    "kedi_origin": "mcp",
-                }
+            from kedi.agent_profile.capabilities import capability_mcp_policy, mcp_server_identity
+
+            for server in profile.mcp_servers:
+                capability_mcp_policy(profile, mcp_server_identity(server))
+            discoveries = [
+                asyncio.create_task(client.get_tools(server_name=f"kedi_mcp_{index}"))
+                for index in range(len(profile.mcp_servers))
+            ]
+            try:
+                discovered_by_server = await asyncio.gather(*discoveries)
+            finally:
+                # gather does not cancel siblings when one discovery fails.
+                for discovery in discoveries:
+                    if not discovery.done():
+                        discovery.cancel()
+                await asyncio.gather(*discoveries, return_exceptions=True)
+            tools = []
+            for server, discovered in zip(profile.mcp_servers, discovered_by_server, strict=True):
+                for tool in discovered:
+                    metadata = getattr(tool, "metadata", None)
+                    tool.metadata = {
+                        **(dict(metadata) if isinstance(metadata, Mapping) else {}),
+                        "kedi_origin": "mcp",
+                        "kedi_mcp_server": mcp_server_identity(server),
+                    }
+                tools.extend(discovered)
             active.set_attribute("kedi.mcp.tool_count", len(tools))
             active.add_event(
                 "mcp tools discovered",

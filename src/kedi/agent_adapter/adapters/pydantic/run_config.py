@@ -181,6 +181,13 @@ def _run_kwargs(
             *(toolsets or ()),
         ]
     capabilities = run_kwargs.get("capabilities")
+    from .user_capabilities import deferred_run_capabilities
+
+    deferred = deferred_run_capabilities(self, tool_specs)
+    if deferred:
+        if capabilities is not None and not isinstance(capabilities, (list, tuple)):
+            raise TypeError("Pydantic AI capabilities must be a list or tuple.")
+        capabilities = [*(capabilities or ()), *deferred]
     if self.active_history_processor is not None:
         from .history_processing import reject_conflicting_history_capabilities
 
@@ -194,15 +201,19 @@ def _run_kwargs(
         )
     approval_resolution = self.active_approval_resolution
     dispatcher = current_hook_dispatcher()
-    if any((tool.metadata or {}).get("source") != "external" for tool in tool_specs) or (
-        dispatcher is not None
-        and any(
-            dispatcher.handlers_for(event)
-            for event in (
-                "pre_tool_use",
-                "post_tool_use",
-                "post_tool_use_failure",
-                "post_tool_result_failure",
+    if (
+        self.active_profile.capabilities
+        or any((tool.metadata or {}).get("source") != "external" for tool in tool_specs)
+        or (
+            dispatcher is not None
+            and any(
+                dispatcher.handlers_for(event)
+                for event in (
+                    "pre_tool_use",
+                    "post_tool_use",
+                    "post_tool_use_failure",
+                    "post_tool_result_failure",
+                )
             )
         )
     ):
@@ -235,11 +246,11 @@ def _run_kwargs(
             ),
         )
     if approval_resolution == "kedi" and (
-        caller_toolsets or toolsets is not None or self._has_native_approval_tools()
+        caller_toolsets or toolsets is not None or deferred or self._has_native_approval_tools()
     ):
         capabilities = self._with_deferred_approval_capability(capabilities)
     elif approval_resolution == "external" and (
-        caller_toolsets or toolsets is not None or self._has_native_approval_tools()
+        caller_toolsets or toolsets is not None or deferred or self._has_native_approval_tools()
     ):
         capabilities = self._with_external_approval_capability(capabilities)
     if any((tool.metadata or {}).get("required_before_output") is True for tool in tool_specs):

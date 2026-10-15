@@ -438,8 +438,7 @@ def _kedi_run(
             if tool_adapter is not None:
                 for spec in captured_tool_specs:
                     tool_adapter.register_tool(spec)
-            instruction_parts = self._agent_instruction_parts(profile, adapter)
-            prompt = KediTemplatePromptBuilder(
+            prompt_builder = KediTemplatePromptBuilder(
                 template="".join(resolved_parts),
                 output_fields=tuple(required),
                 mode=(
@@ -447,7 +446,12 @@ def _kedi_run(
                     if isinstance(adapter, SupportsTemplatePromptMode)
                     else "completion"
                 ),
-            ).build()
+            )
+            prompt = prompt_builder.build()
+            instruction_parts = (
+                *prompt_builder.instruction_parts(),
+                *self._agent_instruction_parts(profile, adapter),
+            )
 
             with override_ctx:
                 result_map = self._run_conversation_call(

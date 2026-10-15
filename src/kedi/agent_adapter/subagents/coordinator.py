@@ -315,6 +315,7 @@ class SubagentCoordinator:
                 conversation_id=conversation_id,
                 owner_profile_name=owner_profile_name,
                 profile_name=subagent,
+                profile_definition=definition,
                 depth=child_depth,
             )
             bind_current_delegation_run(run_id)

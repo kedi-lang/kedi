@@ -47,7 +47,7 @@ from .agent_adapter import (
     current_subagent_execution,
     observe_agent_events,
 )
-from .agent_profile import CodeModeSettings, HookSettings, McpServerSpec, SkillsSettings
+from .agent_profile import Capability, CodeModeSettings, HookSettings, McpServerSpec, SkillsSettings
 from .agent_surface import AgentSurface
 from .api import (
     AdapterLike,
@@ -131,6 +131,7 @@ __all__ = [
     "AsyncAgentEventQueue",
     "bind_agent_event_dispatcher",
     "CacheInfo",
+    "Capability",
     "Constraints",
     "DecisionInfo",
     "DecisionCapture",

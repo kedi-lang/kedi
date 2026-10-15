@@ -308,7 +308,18 @@ def _hook_tool_for_call(
         return tool, "kedi"
     toolset_id = tool_def.toolset_id or ""
     origin: ToolOrigin = "mcp" if "mcp" in toolset_id.lower() else "adapter_native"
-    return _external_tool_spec(tool_name, tool_def), origin
+    tool = _external_tool_spec(tool_name, tool_def)
+    server_identity = (tool.metadata or {}).get("kedi_mcp_server")
+    if isinstance(server_identity, str):
+        from dataclasses import replace
+
+        from kedi.agent_profile.capabilities import capability_mcp_policy
+
+        tool = replace(
+            tool, capability_policy=capability_mcp_policy(self.active_profile, server_identity)
+        )
+        origin = "mcp"
+    return tool, origin
 
 
 def _remember_hook_tool(
@@ -381,7 +392,14 @@ def _hook_arguments_for_current_adapter(
 
 
 def _remember_hook_started(self: PydanticAdapter[Any, Any], tool_call_id: str) -> None:
-    dispatcher = current_hook_dispatcher()
+    from kedi.agent_adapter.hooks.tool_wrapper import tool_hook_dispatcher
+
+    resolved = self._hook_tools_for_current_adapter().get().get(tool_call_id)
+    dispatcher = (
+        current_hook_dispatcher()
+        if resolved is None
+        else tool_hook_dispatcher(resolved[0], self._hook_arguments_for_call(tool_call_id, {}))
+    )
     if dispatcher is None or not dispatcher.handlers_for("post_tool_use_failure"):
         return
     self._hook_started_for_current_adapter().get()[tool_call_id] = monotonic()

@@ -6,7 +6,7 @@ import os
 from collections.abc import Coroutine
 from concurrent.futures import Future
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -1065,7 +1065,7 @@ def test_dynamic_workflow_executes_sequential_parallel_and_structured_children()
 
 def test_dynamic_workflow_snapshots_local_child_definitions() -> None:
     adapter, runtime, tool = _dynamic_workflow_tool()
-    runtime._profile_registry["worker"].members.clear()
+    runtime._profile_registry["worker"] = replace(runtime._profile_registry["worker"], members=())
 
     result = asyncio.run(
         tool.fn(code="result = await worker(task='snapshot')\nresult['task_summary']")
@@ -1694,7 +1694,7 @@ def test_delegate_task_runs_text_child_in_isolated_profile() -> None:
     assert adapter.invocations == [
         (
             "Inspect the parser",
-            f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}",
+            f"Work carefully.\n\n<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n{artifact_instructions()}",
             (
                 "lookup",
                 "read_artifact",
@@ -1773,7 +1773,7 @@ def test_delegate_task_runs_structured_child_and_validates_result() -> None:
     assert adapter.invocations == [
         (
             "Build a value",
-            f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}",
+            f"Work carefully.\n\n<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n{artifact_instructions()}",
             (
                 "lookup",
                 "read_artifact",
@@ -2302,13 +2302,13 @@ def test_delegate_task_uses_adapter_neutral_child_execution_seam(
     )
     assert all(
         request.instructions
-        == f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+        == f"Work carefully.\n\n<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n{artifact_instructions()}"
         for request in adapter.child_requests
     )
     assert adapter.child_calls[0][1]["neutral_request_limit"] is not None
     assert (
         adapter.child_calls[0][1]["instructions"]
-        == f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+        == f"Work carefully.\n\n<ToolCallInstructions>\n{GROUNDING_INSTRUCTION}\n</ToolCallInstructions>\n\n{artifact_instructions()}"
     )
     structured_schema = adapter.child_calls[1][1]["output_schema"]
     assert structured_schema["required"] == ["task_summary", "final_result"]

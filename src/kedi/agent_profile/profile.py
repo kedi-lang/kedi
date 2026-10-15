@@ -10,11 +10,13 @@ from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from ..run_budget import RunBudget
+from .capabilities import AppliedCapability, merge_capabilities, validate_capability_bindings
 from .codemode import CodeModeSettings, normalize_codemode_settings
 from .compaction import CompactionSettings
 from .connection import A2AConnection
 from .history import HistoryProcessingSettings
 from .hooks import HookSettings, normalize_hook_settings
+from .instructions import CapabilityInstruction, merge_capability_instructions
 from .mcp import McpServerSpec
 from .settings import tool_reason_enabled
 from .skills import SkillsSettings, skills_settings
@@ -39,6 +41,8 @@ class AgentProfile:
     a2a_connection: A2AConnection | None = None
     effort: EffortValue | None = None
     system: str | None = None
+    capability_instructions: tuple[CapabilityInstruction, ...] = ()
+    capabilities: tuple[AppliedCapability, ...] = ()
     settings: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[str, ...] = ()
     # Imported profiles keep their private dependencies here instead of publishing
@@ -89,7 +93,10 @@ class AgentProfile:
         return cls(artifacts=ArtifactPolicy.patch({}))
 
     def merge(self, other: AgentProfile) -> AgentProfile:
+        if self.capabilities or other.capabilities:
+            validate_capability_bindings(self, other)
         updates: dict[str, object] = {}
+        retained_capabilities = self.capabilities
         if other.name is not None:
             updates["name"] = other.name
         if other.adapter_shortname is not None:
@@ -112,6 +119,18 @@ class AgentProfile:
             updates["effort"] = other.effort
         if other.system is not None:
             updates["system"] = other.system
+            updates["capability_instructions"] = other.capability_instructions
+            retained_capabilities = tuple(
+                replace(capability, instructions_enabled=False, instructions_restored=False)
+                for capability in self.capabilities
+            )
+            updates["capabilities"] = retained_capabilities
+        elif other.capability_instructions:
+            updates["capability_instructions"] = merge_capability_instructions(
+                self.capability_instructions, other.capability_instructions
+            )
+        if other.capabilities:
+            updates["capabilities"] = merge_capabilities(retained_capabilities, other.capabilities)
         if other.settings:
             updates["settings"] = {**(self.settings or {}), **other.settings}
         if other.tools or other.tool_bindings:
@@ -122,10 +141,21 @@ class AgentProfile:
                 bindings.pop(tool_name, None)
             bindings.update(other.tool_bindings)
             if other.tools:
-                updates["tools"] = _merge_tool_names(self.tools, other.tools)
+                updates["tools"] = (
+                    tuple(dict.fromkeys((*self.tools, *other.tools)))
+                    if other.capabilities
+                    else _merge_tool_names(self.tools, other.tools)
+                )
             updates["tool_bindings"] = bindings
         if other.mcp_servers:
-            updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
+            if other.capabilities:
+                servers = list(self.mcp_servers)
+                for server in other.mcp_servers:
+                    if server not in servers:
+                        servers.append(server)
+                updates["mcp_servers"] = tuple(servers)
+            else:
+                updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
         if other.approval is not None:
             updates["approval"] = other.approval
         if other.hooks is not None:
@@ -144,7 +174,11 @@ class AgentProfile:
                 bindings.pop(subagent_name, None)
             bindings.update(other.subagent_bindings)
             if other.subagents:
-                updates["subagents"] = _merge_names(self.subagents, other.subagents)
+                updates["subagents"] = (
+                    tuple(dict.fromkeys((*self.subagents, *other.subagents)))
+                    if other.capabilities
+                    else _merge_names(self.subagents, other.subagents)
+                )
             updates["subagent_bindings"] = bindings
         if other.max_agents is not None:
             updates["max_agents"] = other.max_agents
@@ -202,7 +236,15 @@ class AgentProfile:
     def frozen_copy(self) -> AgentProfile:
         return replace(
             self,
-            settings=dict(self.settings or {}),
+            settings=_snapshot_settings(self.settings),
+            mcp_servers=tuple(
+                replace(
+                    server,
+                    env=None if server.env is None else dict(server.env),
+                    headers=None if server.headers is None else dict(server.headers),
+                )
+                for server in self.mcp_servers
+            ),
             tool_bindings=dict(self.tool_bindings),
             subagent_bindings=dict(self.subagent_bindings),
             requirement_origins={
@@ -229,10 +271,23 @@ class AgentProfile:
             or self.a2a_connection is not None
             or bool(self.mcp_servers)
             or bool(self.settings)
+            or bool(self.capabilities)
             or self.compaction is not None
             or self.history_processing is not None
             or self.needs_model_override(adapter_default)
         )
+
+
+def _snapshot_settings(value: Any) -> Any:
+    """Detach mutable containers without copying caller-owned SDK objects."""
+
+    if isinstance(value, Mapping):
+        return {key: _snapshot_settings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_snapshot_settings(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_snapshot_settings(item) for item in value)
+    return value
 
 
 def _merge_tool_names(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:

@@ -7,7 +7,10 @@ from collections import deque
 from dataclasses import dataclass, replace
 from threading import Lock
 from time import time
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from kedi.agent_profile.definitions import ProfileDefinition
 
 SubagentRunStatus = Literal[
     "pending",
@@ -113,6 +116,7 @@ class SubagentRunRegistry:
 
     def __init__(self) -> None:
         self._runs: dict[str, SubagentRun] = {}
+        self._profile_definitions: dict[str, ProfileDefinition] = {}
         self._lock = Lock()
 
     def create(
@@ -126,6 +130,7 @@ class SubagentRunRegistry:
         previous_run_id: str | None = None,
         conversation_id: str | None = None,
         owner_profile_name: str = "",
+        profile_definition: ProfileDefinition | None = None,
     ) -> SubagentRun:
         run = SubagentRun(
             run_id=run_id,
@@ -143,7 +148,14 @@ class SubagentRunRegistry:
             if run_id in self._runs:
                 raise ValueError(f"Duplicate subagent run ID: {run_id}")
             self._runs[run_id] = run
+            if profile_definition is not None:
+                self._profile_definitions[run_id] = profile_definition
         return run
+
+    def matches_profile(self, run_id: str, definition: ProfileDefinition) -> bool:
+        """Check in-process binding evidence without serializing executable definitions."""
+        with self._lock:
+            return self._profile_definitions.get(run_id) == definition
 
     def transition(
         self,
@@ -230,6 +242,7 @@ class SubagentRunRegistry:
     def discard(self, run_id: str) -> None:
         with self._lock:
             self._runs.pop(run_id, None)
+            self._profile_definitions.pop(run_id, None)
 
 
 def safe_subagent_error_message(error: BaseException | None) -> str | None:

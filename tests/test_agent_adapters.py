@@ -189,6 +189,16 @@ def test_artifact_capabilities_require_structured_tool_adapters() -> None:
         AdapterCapabilities(supports_native_artifacts=True)
 
 
+def test_builtin_capability_composition_support_matches_native_mapping() -> None:
+    assert PydanticAdapter.capabilities.supports("capabilities")
+    assert PydanticAdapter.capabilities.supports("deferred_tools")
+    assert LangChainAdapter.capabilities.supports("capabilities")
+    assert not LangChainAdapter.capabilities.supports("deferred_tools")
+    for adapter in (DSPyAdapter, ClaudeAdapter, CodexAdapter, WebGPUAdapter):
+        assert not adapter.capabilities.supports("capabilities")
+        assert not adapter.capabilities.supports("deferred_tools")
+
+
 def test_pydantic_native_telemetry_ownership_follows_operation_and_instrumentation() -> None:
     enabled = SimpleNamespace(instrument=True)
     disabled = SimpleNamespace(instrument=False)
@@ -551,8 +561,8 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
         def __init__(self, configs: dict[str, Any]) -> None:
             events["mcp_configs"].append(configs)
 
-        async def get_tools(self) -> list[Any]:
-            return events.get("mcp_tools", ["mcp-tool"])
+        async def get_tools(self, *, server_name: str | None = None) -> list[Any]:
+            return events.get("mcp_tools", [SimpleNamespace(name="mcp-tool", metadata=None)])
 
     def fake_init_chat_model(model: str, **settings: Any) -> dict[str, Any]:
         call = {"model": model, "settings": settings}
@@ -3398,9 +3408,15 @@ def test_pydantic_adapter_builds_mcp_toolsets(monkeypatch: pytest.MonkeyPatch) -
 
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
+    class FakeToolset(str):
+        def with_metadata(self, **metadata: Any) -> FakeToolset:
+            assert metadata["kedi_origin"] == "mcp"
+            assert len(metadata["kedi_mcp_server"]) == 64
+            return self
+
     def fake_toolset(*args: Any, **kwargs: Any) -> str:
         calls.append(("toolset", args, kwargs))
-        return f"toolset:{len(calls)}"
+        return FakeToolset(f"toolset:{len(calls)}")
 
     monkeypatch.setattr(pydantic_mcp, "MCPToolset", fake_toolset)
 

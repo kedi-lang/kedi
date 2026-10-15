@@ -19,8 +19,9 @@ from kedi.agent_adapter.adapters.pydantic.compat import (
     configured_prompt_model,
 )
 from kedi.agent_adapter.models import model_template_prompt_mode
-from kedi.agent_adapter.request import KediTemplatePromptBuilder
+from kedi.agent_adapter.request import KediTemplatePromptBuilder, lower_request_sync
 from kedi.agent_profile import AgentProfile
+from kedi.artifacts import ArtifactPolicy
 from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
 
@@ -39,11 +40,19 @@ def test_decision_prompt_preserves_context_and_capture_order() -> None:
     )
     assert "substitution" not in prompt.content
     assert "grammatically" not in prompt.content
+    assert (
+        KediTemplatePromptBuilder(
+            template=template, output_fields=("accepted", "score"), mode="decision"
+        ).instruction_parts()
+        == ()
+    )
 
 
 def test_prompt_builder_rejects_invalid_mode() -> None:
     with pytest.raises(ValueError, match="Template prompt mode"):
         KediTemplatePromptBuilder(template="", output_fields=(), mode="invalid").build()
+    with pytest.raises(ValueError, match="Template prompt mode"):
+        KediTemplatePromptBuilder(template="", output_fields=(), mode="invalid").instruction_parts()
 
 
 @pytest.mark.parametrize(
@@ -209,6 +218,7 @@ def test_decision_prompt_reaches_hooks_history_and_model_without_losing_criteria
     state, questions = client.calls[0]
     assert "private account" not in str(state)
     assert "Fill each unescaped" not in str(state)
+    assert "<TemplateInstructions>" not in str(state)
     assert "Was the payment approved?" in questions["approved"].instructions
     history = runtime._implicit_conversation_state.snapshot()
     assert history[0].content == observed[0].replace("private account", "account")
@@ -225,4 +235,56 @@ def test_regular_llm_keeps_completion_prompt_in_kedi_runtime() -> None:
         adapter=adapter,
     )
     assert runtime.run_main() == "True"
-    assert observed[0].startswith("Fill each unescaped")
+    assert observed[0].startswith("Fields to be substituted")
+    assert "Fill each unescaped" not in observed[0]
+
+
+def test_completion_instructions_do_not_leak_into_raw_invokes_or_claims(monkeypatch) -> None:
+    adapter = PydanticAdapter(TestModel(call_tools=[]))
+    requests = []
+
+    def record_request(adapter, request, **kwargs):
+        requests.append(request)
+        return lower_request_sync(adapter, request, **kwargs)
+
+    monkeypatch.setattr("kedi.agent_adapter.request.lower_request_sync", record_request)
+    engine = SequentialEngine()
+    runtime = compile_program(
+        parse_program(
+            "> history: enabled\n"
+            "> instructions: Keep responses brief.\n"
+            ">> The first check is [first: bool].\n"
+            "> show: <first>\n"
+            ">> Acknowledge the first check.\n"
+            "> if: The first check has completed\n"
+            "  > show: Checked.\n"
+            ">> The final check is [final: bool].\n"
+            "= <final>\n"
+        ),
+        adapter=adapter,
+        engine=engine,
+        default_agent_profile=AgentProfile(artifacts=ArtifactPolicy(enabled=False)),
+    )
+    try:
+        runtime.run_main()
+        assert [request.prompt.kind for request in requests] == [
+            "template",
+            "raw",
+            "claim",
+            "template",
+        ]
+        for request in requests:
+            assert request.instruction_text.count("Keep responses brief.") == 1
+            assert request.instruction_text.count("<TemplateInstructions>") == int(
+                request.prompt.kind == "template"
+            )
+            assert "<ToolCallInstructions>" not in request.instruction_text
+            assert "Fill each unescaped" not in request.prompt.content
+        assert requests[0].instruction_text == requests[-1].instruction_text
+        assert all(
+            "Fill each unescaped" not in str(message.content)
+            for message in runtime._implicit_conversation_state.snapshot()
+        )
+    finally:
+        asyncio.run(runtime.aclose())
+        engine.shutdown()
