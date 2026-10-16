@@ -11,9 +11,14 @@ from kedi.agent_profile import AgentProfile, HookSettings
 from kedi.agent_profile.capabilities import AppliedCapability
 from kedi.agent_profile.history import HistoryProcessingSettings
 from kedi.agent_profile.instructions import CapabilityInstruction
-from kedi.api.cache import _hooks_identity, _object_identity, _profile_identity, _stable_repr
-from kedi.api.cache import _adapter_identity
 from kedi.api import cache as cache_module
+from kedi.api.cache import (
+    _adapter_identity,
+    _hooks_identity,
+    _object_identity,
+    _profile_identity,
+    _stable_repr,
+)
 
 
 def test_cache_identity_tokens_do_not_retain_weak_referenceable_callables() -> None:

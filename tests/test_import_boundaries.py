@@ -29,8 +29,7 @@ assert not any(name.startswith('kedi.agent_adapter.adapters.pydantic') for name 
 
 
 def test_adapter_exports_still_resolve_and_cache() -> None:
-    from kedi.agent_adapter import adapters
-    from kedi.agent_adapter import compaction
+    from kedi.agent_adapter import adapters, compaction
 
     for name in adapters.__all__:
         first = adapters.__getattr__(name)

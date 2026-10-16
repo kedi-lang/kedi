@@ -19,6 +19,7 @@ from .tool_schemas import build_subagent_tool_specs
 
 if TYPE_CHECKING:
     from kedi.agent_profile import AgentProfile
+
     from .coordinator import SubagentCoordinator
 
 
