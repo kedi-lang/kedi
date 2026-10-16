@@ -52,7 +52,7 @@ class LazyAdapter(HookRegistrationMixin):
     ) -> None:
         self._init_hook_registration(hook_handler)
         self._factory = factory
-        self.kind = kind
+        self.kind: AgentAdapterKind = kind
         self.shortname = shortname
         self._configured_model = model
         self.capabilities = capabilities or AdapterCapabilities()

@@ -1,5 +1,8 @@
 """Deterministic, adapter-neutral conversation compaction primitives."""
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
 from .archive import HistoryArchiveSettings
 from .backends import CompactionBackend, resolve_compaction_backend
 from .codecs import AdapterHistoryCodec, HistoryCodecRegistry
@@ -35,12 +38,27 @@ from .models import (
 )
 from .native_backend import NativeCompactionBackend
 from .processor import HistoryProcessor
-from .pydantic_archive import (
-    PydanticArtifactHistoryCapability,
-    PydanticArtifactHistoryProcessor,
-    PydanticHistoryArchiveSettings,
-)
 from .pydantic_codec import PydanticHistoryCodec
+
+if TYPE_CHECKING:
+    from .pydantic_archive import (
+        PydanticArtifactHistoryCapability,
+        PydanticArtifactHistoryProcessor,
+        PydanticHistoryArchiveSettings,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    if name not in {
+        "PydanticArtifactHistoryCapability",
+        "PydanticArtifactHistoryProcessor",
+        "PydanticHistoryArchiveSettings",
+    }:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(".pydantic_archive", __name__), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "AdapterHistoryCodec",

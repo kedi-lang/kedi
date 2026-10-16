@@ -71,18 +71,6 @@ def _snapshot_prompt_input(name: str, value: Any) -> _PromptInputSnapshot:
     )
 
 
-def _tool_request_context(tools: Sequence[Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.json_schema,
-            "returns": tool.return_schema,
-        }
-        for tool in tools
-    ]
-
-
 def _invoke_text_parts(
     self: KediRuntime,
     parts: Sequence[Any],
@@ -148,6 +136,7 @@ def _invoke_text_parts(
                     conversation_state=conversation_state,
                     conversation_ticket=conversation_ticket,
                     lane_identity=lane_identity,
+                    retain_failed_turn=parallel,
                 )
 
     if not parallel:
@@ -171,10 +160,8 @@ def _invoke_text_parts(
             response = _call_invoke()
             return {capture_key: response} if capture_key is not None else {}
         except KediExecutionError:
-            self._cancel_conversation_turn(conversation_state, conversation_ticket)
             raise
         except Exception as exc:  # noqa: BLE001
-            self._cancel_conversation_turn(conversation_state, conversation_ticket)
             raise self.build_execution_error(exc) from None
         finally:
             self._current_env.reset(token)
@@ -466,6 +453,7 @@ def _kedi_run(
                     conversation_state=conversation_state,
                     conversation_ticket=conversation_ticket,
                     lane_identity=lane_identity,
+                    retain_failed_turn=parallel,
                 )
         if not captured_evidence:
             record_future.set_result(None)
@@ -534,10 +522,8 @@ def _kedi_run(
         try:
             return _produce()
         except KediExecutionError:
-            self._cancel_conversation_turn(conversation_state, conversation_ticket)
             raise
         except Exception as exc:  # noqa: BLE001
-            self._cancel_conversation_turn(conversation_state, conversation_ticket)
             # build_execution_error keeps the provider error on `.original`, so the job-manager
             # retry policy can still classify it (a 429/timeout stays retryable) even though the
             # job surfaces the wrapped KediExecutionError. `from None` avoids re-chaining it.

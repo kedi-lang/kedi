@@ -62,6 +62,12 @@ def current_run_cancellations() -> tuple[RunCancellation, ...]:
     return _RUN_CANCELLATIONS.get()
 
 
+def check_run_cancelled() -> None:
+    """Stop synchronous cooperative work before admitting another unit of work."""
+    if any(owner.cancelled for owner in current_run_cancellations()):
+        raise RunCancelled("adapter execution was interrupted")
+
+
 @contextmanager
 def use_run_cancellation(owner: RunCancellation) -> Iterator[None]:
     """Nested owners cannot disable cancellation requested by an outer owner."""

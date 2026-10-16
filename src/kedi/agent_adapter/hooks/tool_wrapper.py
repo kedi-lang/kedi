@@ -13,6 +13,7 @@ from ..approvals.policy import ToolApprovalDenied
 from ..events import current_agent_run_identity, current_bound_agent_run_identity
 from ..tools.execution import validate_tool_arguments
 from ..tools.records import (
+    FailureStage,
     ToolCallRecord,
     ToolCallTracker,
     attach_tool_call,
@@ -585,7 +586,7 @@ async def _dispatch_tracked_failure(
             )
         return
     if record.execution_state == "returned":
-        stage = getattr(error, "kedi_result_failure_stage", "result_validation")
+        stage: FailureStage = getattr(error, "kedi_result_failure_stage", "result_validation")
         record = tracker.result_failed(stage) or record
         attach_tool_call(error, record)
         await _observe_result_failure(
@@ -637,7 +638,7 @@ def _dispatch_tracked_failure_sync(
             )
         return
     if record.execution_state == "returned":
-        stage = getattr(error, "kedi_result_failure_stage", "result_validation")
+        stage: FailureStage = getattr(error, "kedi_result_failure_stage", "result_validation")
         record = tracker.result_failed(stage) or record
         attach_tool_call(error, record)
         _observe_result_failure_sync(

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from pydantic_ai import format_as_xml
-
 
 def artifact_instructions(*, query_artifact: bool = False) -> str:
     """Return the stable, cache-friendly contract for artifact-backed values."""
+
+    from pydantic_ai import format_as_xml
 
     return format_as_xml(
         {

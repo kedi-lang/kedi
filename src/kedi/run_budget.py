@@ -160,10 +160,11 @@ def assert_run_budget_supported(adapter: object, *, opaque_tools: bool = False) 
     if ledger is None:
         return
     capabilities = getattr(adapter, "capabilities", None)
-    for dimension, feature in (
+    dimensions: tuple[tuple[BudgetDimension, str], ...] = (
         ("request", "request_budget"),
         ("tool_attempt", "tool_attempt_budget"),
-    ):
+    )
+    for dimension, feature in dimensions:
         if not ledger.has_limit(dimension):
             continue
         supported = (

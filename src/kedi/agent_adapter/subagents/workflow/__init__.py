@@ -409,7 +409,7 @@ async def _execute_dynamic_child(
                 subagent_definitions=definitions,
             )
             run_id = handle.run_id
-            result = await rt._wait_subagent(run_id)
+            result = await rt._wait_subagent(handle.run_id)
             serialized = to_jsonable_python(result.as_tool_result())
         except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):

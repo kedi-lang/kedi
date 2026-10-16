@@ -283,7 +283,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             )
         self.approval_resolution = approval_resolution
         self.subagent_approval_resolution = subagent_approval_resolution
-        self._subagent_failure_policy = subagent_failure_policy
+        self._subagent_failure_policy: DelegationFailurePolicy = subagent_failure_policy
         self._default_usage_limits = default_usage_limits
         self.codemode = normalize_codemode_settings(codemode)
         self._model_overrides: dict[str, Model] = {}

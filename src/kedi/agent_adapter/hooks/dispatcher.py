@@ -11,6 +11,7 @@ from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterator, cast
 
+from ..execution import run_in_worker
 from .models import (
     HOOK_EVENT_NAMES,
     HookEvent,
@@ -85,7 +86,7 @@ class HookDispatcher:
     def with_tool_hooks(self, hooks: HookSettings) -> HookDispatcher:
         """Create a tool-local chain while preserving this run's event sequence."""
 
-        handlers = {
+        handlers: dict[HookEventName, tuple[HookHandler, ...]] = {
             event: self.handlers_for(event)
             + (() if event == "user_prompt_submit" else hooks.handlers_for(event))
             for event in HOOK_EVENT_NAMES
@@ -156,24 +157,30 @@ class HookDispatcher:
 
     async def _call_async(self, handler: HookHandler, event: HookEvent) -> HookResult:
         identity = handler_identity(handler)
-        started = monotonic()
         token = _HOOK_DISPATCH_SUSPENDED.set(True)
         try:
-            result = handler(event)
-            if inspect.isawaitable(result):
-                awaitable = cast(Awaitable[HookResult], result)
-                if self.snapshot.timeout is None:
-                    return await awaitable
-                try:
-                    return await asyncio.wait_for(awaitable, timeout=self.snapshot.timeout)
-                except asyncio.TimeoutError as exc:
-                    raise HookTimeoutError(
-                        event=event.event,
-                        handler_name=identity,
-                        timeout=self.snapshot.timeout,
-                    ) from exc
-            self._check_elapsed(event, identity, started)
-            return cast(HookResult, result)
+
+            async def invoke() -> HookResult:
+                result = (
+                    handler(event)
+                    if inspect.iscoroutinefunction(handler)
+                    or inspect.iscoroutinefunction(getattr(handler, "__call__", None))
+                    else await run_in_worker(handler, event)
+                )
+                if inspect.isawaitable(result):
+                    return await cast(Awaitable[HookResult], result)
+                return cast(HookResult, result)
+
+            if self.snapshot.timeout is None:
+                return await invoke()
+            try:
+                return await asyncio.wait_for(invoke(), timeout=self.snapshot.timeout)
+            except asyncio.TimeoutError as exc:
+                raise HookTimeoutError(
+                    event=event.event,
+                    handler_name=identity,
+                    timeout=self.snapshot.timeout,
+                ) from exc
         except HookExecutionError:
             raise
         except Exception as exc:

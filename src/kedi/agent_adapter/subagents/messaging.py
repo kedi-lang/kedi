@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from pydantic import JsonValue
@@ -18,6 +19,7 @@ from kedi.agent_adapter.tools.specs import ToolSpec
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.subagents import DelegationResult
+    from kedi.agent_adapter.subagents.coordinator import SubagentCoordinator
     from kedi.core.runtime import KediRuntime
 
 
@@ -119,9 +121,19 @@ def input_tool_specs(rt: KediRuntime, *, children: bool, parent: bool) -> tuple[
 async def wait_for_child(
     rt: KediRuntime, run_id: str, timeout: float | None
 ) -> DelegationResult | ChildInputAvailable:
+    return await wait_for_child_call(rt._subagent_coordinator, rt._wait_subagent, run_id, timeout)
+
+
+async def wait_for_child_call(
+    coordinator: SubagentCoordinator,
+    wait: Callable[..., Awaitable[DelegationResult]],
+    run_id: str,
+    timeout: float | None,
+) -> DelegationResult | ChildInputAvailable:
+    """Observe child completion or parent input without taking ownership of the child."""
     control = current_live_input()
     if control is None:
-        return await rt._wait_subagent(run_id, timeout=timeout)
+        return await wait(run_id, timeout=timeout)
     input_sequence = control.input_sequence
 
     async def wait_input() -> None:
@@ -135,7 +147,7 @@ async def wait_for_child(
                 return
             await control.wait_changed(sequence)
 
-    waiter = asyncio.create_task(rt._wait_subagent(run_id, timeout=timeout))
+    waiter = asyncio.ensure_future(wait(run_id, timeout=timeout))
     notification = asyncio.create_task(wait_input())
     try:
         if not control.waiting_input:
@@ -144,7 +156,7 @@ async def wait_for_child(
             )
             if waiter in done:
                 return waiter.result()
-        run = rt._subagent_coordinator.runs.get(run_id)
+        run = coordinator.runs.get(run_id)
         return {
             "run_id": run_id,
             "subagent": run.profile_name,

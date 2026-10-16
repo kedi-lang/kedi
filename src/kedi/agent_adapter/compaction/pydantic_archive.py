@@ -97,7 +97,7 @@ def _tool_outcomes(messages: list[ModelMessage]) -> tuple[str, ...]:
             for part in message.parts:
                 if isinstance(part, ToolReturnPart):
                     results[(part.tool_name, part.outcome)] += 1
-                elif isinstance(part, BaseToolReturnPart):
+                elif isinstance(part, BaseToolReturnPart) and part.tool_name is not None:
                     results[(part.tool_name, "completed")] += 1
                 elif isinstance(part, RetryPromptPart) and part.tool_name:
                     results[(part.tool_name, "retry")] += 1

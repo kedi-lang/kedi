@@ -2562,8 +2562,8 @@ def test_wait_subagent_propagates_terminal_errors_without_delegation_attempt(mon
     async def wait(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(runtime, "_wait_subagent", wait)
-    monkeypatch.setattr(runtime, "_subagent_status", lambda _: "timed_out")
+    monkeypatch.setattr(runtime._subagent_coordinator, "wait", wait)
+    monkeypatch.setattr(runtime._subagent_coordinator, "status", lambda _: "timed_out")
     with pytest.raises(type(failure), match=str(failure)):
         asyncio.run(tools["wait_subagent"].fn(run_id="untracked"))
 
@@ -2579,14 +2579,14 @@ def test_wait_subagent_can_observe_result_outside_delegation_scope(
         assert run_id == result.run_id
         return result
 
-    monkeypatch.setattr(runtime, "_wait_subagent", wait)
+    monkeypatch.setattr(runtime._subagent_coordinator, "wait", wait)
     assert asyncio.run(tools["wait_subagent"].fn(run_id="restored")) == result.as_tool_result()
 
 
 def test_waiter_cancellation_does_not_fail_still_running_child(monkeypatch):
     from types import SimpleNamespace
 
-    from kedi.agent_adapter import subagents
+    from kedi.agent_adapter.subagents import tool_binding
 
     _adapter, runtime, tools = _manager_tools()
 
@@ -2596,10 +2596,10 @@ def test_waiter_cancellation_does_not_fail_still_running_child(monkeypatch):
     def fail(**kwargs):
         pytest.fail("waiter cancellation must not fail the child")
 
-    monkeypatch.setattr(runtime, "_wait_subagent", wait)
-    monkeypatch.setattr(runtime, "_subagent_status", lambda _: "running")
+    monkeypatch.setattr(runtime._subagent_coordinator, "wait", wait)
+    monkeypatch.setattr(runtime._subagent_coordinator, "status", lambda _: "running")
     monkeypatch.setattr(
-        subagents, "active_delegation_attempt_for_run", lambda _: SimpleNamespace(fail=fail)
+        tool_binding, "active_delegation_attempt_for_run", lambda _: SimpleNamespace(fail=fail)
     )
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(tools["wait_subagent"].fn(run_id="running-child"))

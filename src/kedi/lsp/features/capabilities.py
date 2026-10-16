@@ -282,14 +282,16 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, RequiresDirectiveStmt):
             active = _with_requirements_state(active, stmt)
-            entries = tuple(
+            requirement_entries: tuple[tuple[AdapterCapability, Span | None], ...] = tuple(
                 (
                     cast(AdapterCapability, requirement),
                     stmt.requirement_locs.get(requirement),
                 )
                 for requirement in stmt.requirements
             )
-            diagnostics.extend(_explicit_requirement_diagnostics(active, entries=entries))
+            diagnostics.extend(
+                _explicit_requirement_diagnostics(active, entries=requirement_entries)
+            )
             continue
         if isinstance(stmt, BudgetDirectiveStmt):
             diagnostics.extend(_budget_capability_diagnostics(active, stmt))

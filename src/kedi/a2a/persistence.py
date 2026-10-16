@@ -8,7 +8,7 @@ import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from a2a.server.models import Base, TaskModel
 from a2a.server.tasks.database_task_store import DatabaseTaskStore
@@ -92,11 +92,12 @@ def _model_to_task(row: TaskModel) -> Task:
     if row.protocol_version != "1.0":
         raise RuntimeError("Unsupported stored A2A protocol version")
     task = Task(id=row.id, context_id=row.context_id)
-    ParseDict(row.status, task.status)
+    # The SDK annotates these JSON columns as protobufs; SQLAlchemy loads JSON dicts.
+    ParseDict(cast(dict[str, Any], row.status), task.status)
     for value in row.artifacts or ():
-        ParseDict(value, task.artifacts.add())
+        ParseDict(cast(dict[str, Any], value), task.artifacts.add())
     for value in row.history or ():
-        ParseDict(value, task.history.add())
+        ParseDict(cast(dict[str, Any], value), task.history.add())
     if row.task_metadata:
         task.metadata.update(row.task_metadata)
     return task
@@ -512,7 +513,7 @@ class A2APersistence:
                 raise RuntimeError("A2A state contains an invalid artifact session")
             committed_sessions.add(session_id)
 
-            def validate() -> None:
+            def validate(artifact_checkpoint: dict[str, Any] = artifact_checkpoint) -> None:
                 artifacts = ArtifactManager.from_checkpoint(
                     checkpoint["artifacts"], durable_root=self.artifact_root
                 )

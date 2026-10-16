@@ -205,7 +205,7 @@ class LangChainAdapter(HookRegistrationMixin):
         self._model = self._resolve_model(model) if isinstance(model, str) else model
         self._model_settings = dict(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
-        self._subagent_failure_policy = subagent_failure_policy
+        self._subagent_failure_policy: DelegationFailurePolicy = subagent_failure_policy
         self.codemode = normalize_codemode_settings(codemode)
         self._tool_scope = ToolScope()
         self._tool_spec_scope = ToolScope()

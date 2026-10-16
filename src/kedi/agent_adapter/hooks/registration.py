@@ -71,7 +71,9 @@ class HookRegistrationMixin:
 
     def hook_snapshot(self) -> AdapterHookSnapshot:
         with self._hook_registration_lock:
-            by_event = {event: tuple(handlers) for event, handlers in self._hook_handlers.items()}
+            by_event: dict[HookEventName, tuple[HookHandler, ...]] = {
+                event: tuple(handlers) for event, handlers in self._hook_handlers.items()
+            }
             return AdapterHookSnapshot(
                 catch_all=self._hook_catch_all,
                 by_event=MappingProxyType(by_event),

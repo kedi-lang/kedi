@@ -978,13 +978,17 @@ class ArtifactManager:
         source: str | None,
         sensitive: bool,
     ) -> Any:
+        from kedi.agent_adapter.cancellation import check_run_cancelled
+
         effective = policy.resolved()
         encoder = ArtifactStreamEncoder(stream, preview_chars=effective.preview_chars)
         state = _StreamingWrite(self, effective, source, sensitive, stream, encoder)
         try:
             state.accept(encoder.start())
             for chunk in chunks:
+                check_run_cancelled()
                 state.accept_chunk(encoder.encode(chunk))
+            check_run_cancelled()
             tail, streamed = encoder.finish()
             state.accept(tail)
             return state.finish(streamed)

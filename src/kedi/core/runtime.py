@@ -27,6 +27,7 @@ from kedi.core import tool_binding as _tool_binding
 from kedi.core import tracing as _tracing
 from kedi.core.engines import _default_engine
 from kedi.core.expressions import CallExpr, Expression, InputExpr, OutputExpr, ValueEnv, c, i, o
+from kedi.core.lifecycle import RuntimeLifecycle
 from kedi.core.scopes import ProcessingScope
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.executors.base import DefaultExecutor, Executor
@@ -87,8 +88,7 @@ class KediRuntime:
         self._outstanding_lock = Lock()
         self._origin_counter_lock = Lock()
         self._conversation_state_lock = Lock()
-        self._lifecycle_lock = Lock()
-        self._closed = False
+        self._lifecycle = RuntimeLifecycle()
         self._processing_scope: ContextVar[ProcessingScope | None] = ContextVar(
             "kedi_processing_scope", default=None
         )
@@ -205,11 +205,22 @@ class KediRuntime:
     ) -> AgentSurface:
         """Assemble Kedi runtime services for a native embedded-agent lifecycle."""
 
+        with self._lifecycle.admission():
+            return self._bind_agent(
+                adapter=adapter,
+                profile=profile,
+                close_conversation_state=close_conversation_state,
+            )
+
+    def _bind_agent(
+        self,
+        *,
+        adapter: AgentAdapter[Any] | None,
+        profile: AgentProfile | None,
+        close_conversation_state: bool,
+    ) -> AgentSurface:
         from kedi.agent_surface import AgentSurface
 
-        with self._lifecycle_lock:
-            if self._closed:
-                raise RuntimeError("KediRuntime is closed")
         selected_profile = (profile or self.default_agent_profile).frozen_copy()
         selected_adapter = self._concrete_adapter(
             adapter or self._resolve_adapter(selected_profile)
@@ -234,8 +245,7 @@ class KediRuntime:
     async def aclose(self) -> None:
         """Cancel owned child runs and close runtime-owned session resources."""
 
-        with self._lifecycle_lock:
-            self._closed = True
+        await self._lifecycle.aclose()
         await self._subagent_coordinator.aclose()
         if self._implicit_conversation_state is not None:
             self._implicit_conversation_state.close()
@@ -287,6 +297,10 @@ class KediRuntime:
         return result[capture]
 
     def run_main(self) -> Any:
+        with self._lifecycle.admission():
+            return self._run_main()
+
+    def _run_main(self) -> Any:
         if self._main is None:
             return None
         result = self._invoke_procedure(self._main, [])
@@ -327,7 +341,8 @@ class KediRuntime:
         return _expressions._evaluate_value(self, value, env)
 
     def _invoke_procedure(self, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
-        return _expressions._invoke_procedure(self, fn, args)
+        with self._lifecycle.admission():
+            return _expressions._invoke_procedure(self, fn, args)
 
     def _drain_outermost(self, primary_exc: BaseException | None) -> None:
         try:
@@ -412,6 +427,7 @@ class KediRuntime:
         conversation_state: ConversationState | None = None,
         conversation_ticket: ConversationTurnTicket | None = None,
         lane_identity: str | None = None,
+        retain_failed_turn: bool = False,
     ) -> Any:
         """Assemble and execute one adapter-neutral request transaction."""
         return _conversation._run_conversation_call(
@@ -427,6 +443,7 @@ class KediRuntime:
             conversation_state=conversation_state,
             conversation_ticket=conversation_ticket,
             lane_identity=lane_identity,
+            retain_failed_turn=retain_failed_turn,
         )
 
     def _conversation_state_for_profile(
@@ -532,9 +549,12 @@ class KediRuntime:
                 raise AgentProfileOverrideUnsupported(
                     f"Agent hooks are not supported by adapter {shortname!r}"
                 )
-            unsupported = capabilities.hooks.unsupported(
-                tuple(event for event in HOOK_EVENT_NAMES if hooks.handlers_for(event))
+            from kedi.agent_adapter.meta import HookCapabilityEvent
+
+            events: tuple[HookCapabilityEvent, ...] = tuple(
+                event for event in HOOK_EVENT_NAMES if hooks.handlers_for(event)
             )
+            unsupported = capabilities.hooks.unsupported(events)
             if unsupported:
                 names = ", ".join(unsupported)
                 raise AgentProfileOverrideUnsupported(
@@ -615,29 +635,6 @@ class KediRuntime:
             self, profile, adapter, artifact_manager=artifact_manager
         )
 
-    async def _delegate_task(
-        self,
-        *,
-        allowed_subagents: tuple[str, ...],
-        subagent: str,
-        task: str,
-        final_schema: dict[str, Any] | None,
-        parent_profile: Any,
-        parent_budget: "DelegationBudget",
-        parent_concurrency: "DelegationConcurrency",
-        subagent_definitions: Mapping[str, Any] | None = None,
-    ) -> Any:
-        return await self._subagent_coordinator.delegate(
-            allowed_subagents=allowed_subagents,
-            subagent=subagent,
-            task=task,
-            final_schema=final_schema,
-            parent_profile=parent_profile,
-            parent_budget=parent_budget,
-            parent_concurrency=parent_concurrency,
-            subagent_definitions=subagent_definitions,
-        )
-
     def _start_subagent(
         self,
         *,
@@ -663,52 +660,6 @@ class KediRuntime:
             subagent_definitions=subagent_definitions,
             evaluated_profile=evaluated_profile,
             retain_for_native_owner=retain_for_native_owner,
-        )
-
-    async def _continue_subagent(
-        self,
-        *,
-        run_id: str,
-        allowed_subagents: tuple[str, ...],
-        task: str,
-        final_schema: dict[str, Any] | None,
-        parent_profile: Any,
-        parent_budget: "DelegationBudget",
-        parent_concurrency: "DelegationConcurrency",
-        subagent_definitions: Mapping[str, Any] | None = None,
-    ) -> Any:
-        return await self._subagent_coordinator.continue_run(
-            run_id=run_id,
-            allowed_subagents=allowed_subagents,
-            task=task,
-            final_schema=final_schema,
-            parent_profile=parent_profile,
-            parent_budget=parent_budget,
-            parent_concurrency=parent_concurrency,
-            subagent_definitions=subagent_definitions,
-        )
-
-    def _start_subagent_continuation(
-        self,
-        *,
-        run_id: str,
-        allowed_subagents: tuple[str, ...],
-        task: str,
-        final_schema: dict[str, Any] | None,
-        parent_profile: Any,
-        parent_budget: "DelegationBudget",
-        parent_concurrency: "DelegationConcurrency",
-        subagent_definitions: Mapping[str, Any] | None = None,
-    ) -> Any:
-        return self._subagent_coordinator.start_continuation(
-            run_id=run_id,
-            allowed_subagents=allowed_subagents,
-            task=task,
-            final_schema=final_schema,
-            parent_profile=parent_profile,
-            parent_budget=parent_budget,
-            parent_concurrency=parent_concurrency,
-            subagent_definitions=subagent_definitions,
         )
 
     async def _wait_subagent(

@@ -204,7 +204,7 @@ def _with_requirements_state(
     state: _AdapterDiagnosticState,
     directive: RequiresDirectiveStmt | ProfileRequiresEntry,
 ) -> _AdapterDiagnosticState:
-    entries = tuple(
+    entries: tuple[tuple[AdapterCapability, Span | None], ...] = tuple(
         (cast(AdapterCapability, requirement), directive.requirement_locs.get(requirement))
         for requirement in directive.requirements
     )

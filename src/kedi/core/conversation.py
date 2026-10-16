@@ -6,19 +6,14 @@ from typing import (
     Any,
     Callable,
     Literal,
-    Mapping,
     Sequence,
 )
 
-from kedi.core.expressions import _type_display_name
-from kedi.core.model_calls import _tool_request_context
 from kedi.debugging import checkpoint, execution_frame, execution_observed, observation_only
 from kedi.errors import KediExecutionError
-from kedi.telemetry import capture_enabled
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.conversation import (
-        AdapterConversationContext,
         ConversationState,
         ConversationTurnTicket,
     )
@@ -28,7 +23,6 @@ if TYPE_CHECKING:
         OutputContract,
         PromptDraft,
     )
-    from kedi.agent_adapter.subagents import SubagentConversationContext
     from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.agent_profile import AgentProfile
     from kedi.core.runtime import KediRuntime
@@ -75,251 +69,34 @@ def _execute_conversation_call(
     conversation_state: ConversationState | None = None,
     conversation_ticket: ConversationTurnTicket | None = None,
     lane_identity: str | None = None,
+    retain_failed_turn: bool = False,
 ) -> Any:
     """Assemble and execute one adapter-neutral request transaction."""
+    from functools import partial
     from uuid import uuid4
 
-    from kedi.agent_adapter.history_provenance import history_source_scope
     from kedi.agent_adapter.hooks import HookRegistrationMixin, prepared_agent_hook_run
-    from kedi.agent_adapter.invocation import observe_invocations
     from kedi.agent_adapter.request import (
         AdapterRunOutcome,
         ConversationCoordinates,
         RunRequestAssembler,
-        SchemaOutput,
-        TypedOutput,
     )
-    from kedi.agent_adapter.request_budget import ModelRequestBudget, SupportsHistoryTokenEstimate
-    from kedi.agent_adapter.telemetry import (
-        agent_call_span,
-        model_call_span,
-        record_conversation_assets,
-        resolved_adapter_model,
-    )
-    from kedi.agent_adapter.tools.scope import (
-        artifact_admission_scope,
-        required_tool_call_scope,
-        validate_required_tool_calls,
-    )
+    from kedi.agent_adapter.request_budget import ModelRequestBudget
+    from kedi.core.request_execution import execute_request
 
-    budget = self._request_budget.get() or ModelRequestBudget()
-    configured_model = profile.model
     frames = self.current_trace_frames()
-    frame = frames[-1] if frames else None
-    source_span = None if frame is None else frame.span
-    source_path = (
-        source_span.source_path
-        if source_span is not None
-        and source_span.source_path is not None
-        and capture_enabled("source_path")
-        else None
+    execute = partial(
+        execute_request,
+        adapter=adapter,
+        call=call,
+        profile=profile,
+        tools=tools,
+        budget=self._request_budget.get() or ModelRequestBudget(),
+        artifacts=self.artifacts,
+        source_frame=frames[-1] if frames else None,
+        checkpoint_event=partial(checkpoint, self),
     )
-    source_line = None if source_span is None else source_span.start_line
-    source_snippet = (
-        frame.source_snippet if frame is not None and capture_enabled("source_snippet") else None
-    )
-    output_schema = (
-        {key: repr(value) for key, value in output.schema.items()}
-        if isinstance(output, SchemaOutput)
-        else {"result": _type_display_name(output.output_type)}
-        if isinstance(output, TypedOutput)
-        else None
-    )
-    output_field_count = 0 if output_schema is None else len(output_schema)
     assembler = RunRequestAssembler()
-
-    def request_context(request: AgentRunRequest) -> tuple[Any, ...]:
-        values: list[Any] = []
-        if request.instruction_text is not None:
-            values.append(request.instruction_text)
-        values.append(_tool_request_context(tools))
-        if output_schema is not None:
-            values.append(output_schema)
-        return tuple(values)
-
-    def execute(
-        request: AgentRunRequest,
-        *,
-        resume_state: Mapping[str, Any] | None = None,
-        conversation_scope: Any = None,
-        live_conversation: AdapterConversationContext | SubagentConversationContext | None = None,
-    ) -> Any:
-        from kedi.run_budget import assert_run_budget_supported
-
-        if execution_observed():
-            checkpoint(
-                self,
-                "request",
-                safe=False,
-                payload={
-                    "prompt": request.prompt.content,
-                    "instructions": request.instruction_text,
-                    "model": configured_model,
-                    "tools": [tool.name for tool in tools],
-                },
-            )
-
-        assert_run_budget_supported(
-            adapter,
-            opaque_tools=bool(profile.mcp_servers)
-            or any((tool.metadata or {}).get("source") == "external" for tool in tools),
-        )
-        record_conversation_assets(
-            prompt=request.prompt.content,
-            instructions=request.instruction_text,
-            profile=profile,
-            tools=tools,
-            output_schema=output_schema,
-            call_kind=call_kind,
-            source_path=source_path,
-            source_line=source_line,
-            source_snippet=source_snippet,
-        )
-        with agent_call_span(
-            adapter,
-            profile_name=profile.name,
-            call_kind=call_kind,
-            prompt_chars=len(request.prompt.content),
-            output_field_count=output_field_count,
-            tool_count=len(request.tool_definitions),
-            mcp_server_count=len(profile.mcp_servers),
-            artifacts_enabled=bool(profile.artifacts and profile.artifacts.enabled),
-            configured_model=configured_model,
-            prompt_kind=request.prompt.kind,
-            instruction_count=len(request.instructions),
-            history_count=(
-                0 if request.conversation is None else request.conversation.history_count
-            ),
-            cache_epoch=(
-                None if request.conversation is None else request.conversation.cache_epoch
-            ),
-            turn_sequence=request.metadata.turn_sequence,
-        ) as agent_telemetry:
-            from kedi.agent_profile.telemetry import record_capability_snapshot
-
-            record_capability_snapshot(profile)
-            history_estimator = adapter
-            reservation = budget.reserve(
-                request.prompt.content,
-                context=request_context(request),
-                resume_state=resume_state,
-                history_tokens=(
-                    history_estimator.estimate_history_tokens(resume_state)
-                    if resume_state is not None
-                    and isinstance(history_estimator, SupportsHistoryTokenEstimate)
-                    else None
-                ),
-            )
-            try:
-                artifact_scope = (
-                    artifact_admission_scope(
-                        manager=self.artifacts,
-                        policy=profile.artifacts,
-                    )
-                    if profile.artifacts is not None
-                    else nullcontext()
-                )
-                with (
-                    history_source_scope(request.metadata.run_id, source_span),
-                    required_tool_call_scope(tools),
-                    artifact_scope,
-                    conversation_scope or nullcontext(),
-                    model_call_span(
-                        adapter,
-                        call_kind=call_kind,
-                        configured_model=configured_model,
-                    ) as model_telemetry,
-                ):
-
-                    def observe(usage: Any) -> None:
-                        reservation.observe(usage)
-                        agent_telemetry.observe(usage)
-                        model_telemetry.observe(usage)
-                        if execution_observed():
-                            checkpoint(
-                                self,
-                                "usage",
-                                safe=False,
-                                payload={
-                                    "requests": usage.requests,
-                                    "tool_calls": usage.tool_calls,
-                                    "input_tokens": usage.input_tokens,
-                                    "cache_read_tokens": usage.cache_read_tokens,
-                                    "output_tokens": usage.output_tokens,
-                                },
-                            )
-
-                    with observe_invocations(observe):
-                        from kedi.agent_adapter.subagents.control import (
-                            LiveInput,
-                            current_live_input,
-                            live_input_scope,
-                        )
-
-                        control = current_live_input()
-                        owns_control = (
-                            control is None
-                            and bool(profile.subagents)
-                            and adapter.capabilities.supports("live_subagent_input")
-                        )
-                        if owns_control:
-                            control = LiveInput(request.metadata.run_id)
-                            control.configure(
-                                input=adapter.capabilities.supports("live_subagent_input")
-                            )
-                        ephemeral = None
-                        if owns_control and conversation_scope is None:
-                            from kedi.agent_adapter.conversation import AdapterConversationContext
-
-                            ephemeral = AdapterConversationContext(
-                                session_id=request.metadata.run_id,
-                                cache_key=request.metadata.run_id,
-                            )
-                        try:
-                            with (
-                                live_input_scope(control),
-                                (
-                                    adapter.conversation_scope(ephemeral)
-                                    if ephemeral is not None
-                                    else nullcontext()
-                                ),
-                            ):
-                                active_request = request
-                                while True:
-                                    result = call(active_request)
-                                    if (
-                                        not owns_control
-                                        or control is None
-                                        or control.try_finish(0, lambda: None)
-                                    ):
-                                        break
-                                    from dataclasses import replace
-
-                                    continuation = live_conversation or ephemeral
-                                    assert continuation is not None
-                                    continuation.resume_state.update(continuation.result_state)
-                                    control.begin_attempt()
-                                    inputs = control.take_pending(revision=0)
-                                    active_request = replace(
-                                        request,
-                                        prompt=request.prompt.with_content(
-                                            "\n\n".join(item.render() for item in inputs)
-                                        ),
-                                    )
-                        finally:
-                            if owns_control and control is not None:
-                                control.close()
-                            if ephemeral is not None and ephemeral.cleanup is not None:
-                                ephemeral.cleanup()
-                    validate_required_tool_calls()
-                    model = resolved_adapter_model(adapter, configured_model)
-                    model_telemetry.complete(result, model=model)
-                    agent_telemetry.complete(result, model=model)
-            except BaseException:
-                reservation.finish(raise_on_exceeded=False)
-                raise
-            reservation.finish()
-            return result
 
     runtime_adapter: Any = adapter
     if isinstance(runtime_adapter, HookRegistrationMixin):
@@ -366,6 +143,7 @@ def _execute_conversation_call(
                 adapter_shortname,
                 ticket=conversation_ticket,
                 lane_identity=lane_identity,
+                retain_failed_turn=retain_failed_turn,
             ) as conversation:
                 coordinates = ConversationCoordinates(
                     session_id=conversation.session_id,
@@ -408,7 +186,8 @@ def _execute_conversation_call(
                 )
                 return result
     except BaseException:
-        self._cancel_conversation_turn(state, conversation_ticket)
+        if not retain_failed_turn:
+            self._cancel_conversation_turn(state, conversation_ticket)
         raise
 
 

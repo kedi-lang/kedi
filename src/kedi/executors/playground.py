@@ -113,7 +113,7 @@ class PlaygroundExecutor:
         from ..lang.compiler.environment import build_python_env
 
         execution_env = build_python_env(rt, {})
-        sync_names = list(dict.fromkeys([*(env or {}), *_prelude_names(code)]))
+        sync_names: list[str] = list(dict.fromkeys([*(env or {}), *_prelude_names(code)]))
         response = self._request(
             "execute_prelude",
             code,

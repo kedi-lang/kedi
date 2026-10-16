@@ -473,7 +473,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         "adapter_identity": ("agent-framework", "test", "tests", "ApiAdapter", 1),
         "adapter_kwargs": {},
         "profile": AgentProfile.empty(),
-        "tool_names": (),
+        "tools": {},
     }
     assert repr(kwargs_a["value"]) != repr(kwargs_b["value"])
     assert api_cache_module._response_cache_key(

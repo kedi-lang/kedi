@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import builtins
 import functools
 import inspect
@@ -17,6 +16,7 @@ from typing import (
 
 from kedi.agent_adapter import AdapterCapability, ConversationState
 from kedi.agent_adapter.approvals.policy import ApprovalHandler, ApprovalMode, ApprovalPolicy
+from kedi.agent_adapter.execution import run_in_worker
 from kedi.agent_profile import (
     AgentProfile,
     HookInput,
@@ -147,23 +147,27 @@ def _decorate_kedi_program(
             *config.tools,
             *tool_map,
         }  # single source for the cache key + shadow guard
-        cache_key = _response_cache_key(
-            kind=kind,
-            inner=inner,
-            source_id=source_id,
-            source_hash=active_source_hash,
-            args=args,
-            kwargs=kwargs,
-            config_env=config.env,
-            env=env,
-            adapter_identity=_adapter_identity(
-                active_adapter,
-                kind=profile.adapter_kind or config.adapter_kind,
-                shortname=profile.adapter_shortname or config.adapter_shortname,
-            ),
-            adapter_kwargs=config.adapter_kwargs,
-            profile=profile,
-            tool_names=sorted(tool_namespace),
+        cache_key = (
+            _response_cache_key(
+                kind=kind,
+                inner=inner,
+                source_id=source_id,
+                source_hash=active_source_hash,
+                args=args,
+                kwargs=kwargs,
+                config_env=config.env,
+                env=env,
+                adapter_identity=_adapter_identity(
+                    active_adapter,
+                    kind=profile.adapter_kind or config.adapter_kind,
+                    shortname=profile.adapter_shortname or config.adapter_shortname,
+                ),
+                adapter_kwargs=config.adapter_kwargs,
+                profile=profile,
+                tools={**config.tools, **tool_map},
+            )
+            if cache
+            else ""
         )
         bound_globals = _bound_runtime_globals(inner, args, kwargs)
         tool_collisions = tool_namespace & set(bound_globals)
@@ -197,7 +201,9 @@ def _decorate_kedi_program(
             )
             if not owns_flight:
                 assert cache_flight is not None
-                return cast(R, _isolate_cached(cache_flight.future.result()))
+                from kedi.api.cache import _wait_response_flight
+
+                return cast(R, _isolate_cached(_wait_response_flight(cache_flight)))
         try:
             runtime = compile_program(
                 active_program,
@@ -256,10 +262,7 @@ def _decorate_kedi_program(
 
         @functools.wraps(inner)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # run() does blocking model I/O; offload it to a worker thread so an async caller's
-            # event loop keeps serving other coroutines. to_thread copies the context, so the
-            # active kedi config/profile contextvars still reach run().
-            return await asyncio.to_thread(run, *args, **kwargs)
+            return await run_in_worker(run, *args, **kwargs)
 
         setattr(async_wrapper, "__kedi_inspection_source__", inspection_source)
         return cast(Callable[P, R], async_wrapper)

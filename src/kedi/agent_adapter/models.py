@@ -140,7 +140,7 @@ def codex_responses_model(
 
     model_name = _codex_model_name(model_id)
     try:
-        import codex_auth_helper  # ty: ignore[unresolved-import]  # Optional codex-model extra.
+        import codex_auth_helper  # Optional codex-model extra.
     except ModuleNotFoundError as exc:
         if exc.name != "codex_auth_helper":
             raise

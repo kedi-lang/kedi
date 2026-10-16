@@ -571,7 +571,8 @@ def test_prepare_a2a_program_closes_owned_resources_when_validation_fails(
             max_concurrency=0,
         )
 
-    assert captured["runtime"]._closed is True
+    with pytest.raises(RuntimeError, match="KediRuntime is closed"):
+        captured["runtime"].run_main()
     assert adapter.closed is True
 
 
@@ -723,7 +724,8 @@ def test_served_a2a_shutdown_drains_active_and_queued_calls(
         await asyncio.gather(served.aclose(), served.aclose())
         assert active.cancelled() and queued.cancelled()
         assert all(session.surface._closed for session in sessions)
-        assert served.runtime._closed
+        with pytest.raises(RuntimeError, match="KediRuntime is closed"):
+            served.runtime.run_main()
         assert served._pending_tasks == 0
         assert not served._invocations
         assert not served._sessions

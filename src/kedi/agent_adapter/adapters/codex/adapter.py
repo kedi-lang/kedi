@@ -147,7 +147,7 @@ class CodexAdapter(HookRegistrationMixin):
             **self._validated_settings(kwargs),
         }
         self._turn_timeout = turn_timeout
-        self._subagent_failure_policy = subagent_failure_policy
+        self._subagent_failure_policy: DelegationFailurePolicy = subagent_failure_policy
         self.codemode = normalize_codemode_settings(codemode)
         self._client = client or CodexAppServerClient(
             command,

@@ -332,7 +332,10 @@ async def admit_artifact_result_async(
     from kedi.artifacts.errors import ArtifactQuotaExceededError, ToolOutputTooLargeError
 
     if not isinstance(result, ArtifactStream) or not result.is_async:
-        return admit_artifact_result(
+        from ..execution import run_in_worker
+
+        return await run_in_worker(
+            admit_artifact_result,
             result,
             manager=manager,
             policy=policy,

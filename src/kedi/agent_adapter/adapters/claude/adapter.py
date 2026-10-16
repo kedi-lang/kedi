@@ -120,7 +120,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         self._model = model
         self._settings = claude_agent_settings(model_settings or {})
         self._extra_kwargs = dict(kwargs)
-        self._subagent_failure_policy = subagent_failure_policy
+        self._subagent_failure_policy: DelegationFailurePolicy = subagent_failure_policy
         self.codemode = normalize_codemode_settings(codemode)
         self._tool_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(

@@ -543,7 +543,7 @@ def main(
                         runtime_args=runtime_args,
                     )
                 finally:
-                    if no_cache:
+                    if no_cache and source is not None:
                         Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
                 click.echo(out)
                 if code != 0:
@@ -570,7 +570,7 @@ def main(
                         quiet=quiet,
                     )
                 finally:
-                    if no_cache:
+                    if no_cache and source is not None:
                         Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
                 if out:
                     if code != 0:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
@@ -12,11 +13,13 @@ from typing import (
     Callable,
     Coroutine,
     Iterator,
+    ParamSpec,
     TypeVar,
     cast,
 )
 
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 _RUN_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "kedi_run_deadline", default=None
@@ -44,6 +47,59 @@ def use_async_owner_loop() -> Iterator[None]:
         yield
     finally:
         _ASYNC_OWNER_LOOP.reset(token)
+
+
+async def run_in_worker(fn: Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs) -> _T:
+    """Offload sync work, cancelling nested async calls and joining cleanup on cancellation.
+
+    Python threads cannot be forcibly interrupted. A synchronous handler must return
+    before cancellation completes, but it never blocks the host event loop.
+    """
+    from .cancellation import (
+        RunCancellation,
+        check_run_cancelled,
+        current_run_cancellations,
+        use_run_cancellation,
+    )
+
+    cancellation = RunCancellation()
+    # An enclosing synchronous worker can be waiting on this host loop. Its
+    # executor may be saturated, so nested work needs an independent worker.
+    executor = (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="kedi-nested")
+        if current_run_cancellations()
+        else None
+    )
+
+    def invoke() -> _T:
+        check_run_cancelled()
+        return fn(*args, **kwargs)
+
+    try:
+        with use_async_owner_loop(), use_run_cancellation(cancellation):
+            worker = asyncio.get_running_loop().run_in_executor(
+                executor, contextvars.copy_context().run, invoke
+            )
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                cancellation.cancel()
+                while True:
+                    try:
+                        result = await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        if worker.done():
+                            break
+                    except BaseException:
+                        break
+                    else:
+                        if inspect.iscoroutine(result):
+                            result.close()
+                        break
+                raise
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
 
 
 class RunDeadlineExceeded(TimeoutError):

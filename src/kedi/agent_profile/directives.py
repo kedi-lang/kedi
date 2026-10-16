@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from ..agent_adapter.approvals.policy import ApprovalPolicy
+from ..agent_adapter.approvals.policy import ApprovalHandler, ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
 from ..agent_adapter.requirements import normalize_adapter_requirements
@@ -13,7 +13,7 @@ from ..errors import KediExecutionError
 from ..run_budget import RunBudget
 from .codemode import normalize_codemode_settings
 from .compaction import normalize_compaction_settings
-from .connection import A2AAuthConfig, A2AConnection
+from .connection import A2AAuthConfig, A2AAuthScheme, A2AConnection
 from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -369,7 +369,7 @@ def _a2a_auth_from_values(values: dict[str, Any]) -> A2AAuthConfig:
     if header is not None and not isinstance(header, str):
         raise KediExecutionError("A2A auth header must be a string")
     return A2AAuthConfig(
-        scheme=scheme,
+        scheme=cast(A2AAuthScheme, scheme),
         username=username,
         secret_env=env_name,
         secret_file=file_name,
@@ -421,7 +421,7 @@ def eval_approval_directive(
                 "approval directive inline Python must evaluate to a callable approval handler, "
                 f"got {type(handler).__name__}"
             )
-        return AgentProfile(approval=ApprovalPolicy.dynamic(handler))
+        return AgentProfile(approval=ApprovalPolicy.dynamic(cast(ApprovalHandler, handler)))
     if stmt.plain_value is None:
         raise ValueError("approval directive has no value")
     if stmt.plain_value == "allow":
@@ -739,7 +739,7 @@ def _member_to_patch(
                     "profile approval inline Python must evaluate to a callable approval handler, "
                     f"got {type(handler).__name__}"
                 )
-            return AgentProfile(approval=ApprovalPolicy.dynamic(handler))
+            return AgentProfile(approval=ApprovalPolicy.dynamic(cast(ApprovalHandler, handler)))
         if member.plain_value == "allow":
             return AgentProfile(approval=ApprovalPolicy.allow())
         if member.plain_value == "deny":

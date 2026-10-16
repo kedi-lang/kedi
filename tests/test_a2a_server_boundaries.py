@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from kedi.a2a import runtime, server
-from kedi.a2a.protocol import KEDI_STRUCTURED_OUTPUT_EXTENSION_URI, structured_output_request
+from kedi.a2a.protocol import (
+    DEFAULT_A2A_MAX_SCHEMA_BYTES,
+    KEDI_STRUCTURED_OUTPUT_EXTENSION_URI,
+    KEDI_STRUCTURED_OUTPUT_METADATA_KEY,
+    structured_output_request,
+)
 from kedi.agent_profile import AgentProfile
 from tests.test_a2a import _ServedAdapter
 
@@ -68,6 +73,18 @@ def test_output_schema_requires_negotiation_and_bounded_size(extensions, metadat
     with pytest.raises(ValueError):
         server._requested_output_schema(
             SimpleNamespace(requested_extensions=extensions, metadata=metadata)
+        )
+
+
+def test_legacy_struct_schema_cannot_bypass_the_schema_size_limit():
+    metadata = structured_output_request({"description": "x" * (DEFAULT_A2A_MAX_SCHEMA_BYTES + 1)})
+    del metadata[KEDI_STRUCTURED_OUTPUT_METADATA_KEY]["schemaJson"]
+    with pytest.raises(ValueError, match=f"exceeds {DEFAULT_A2A_MAX_SCHEMA_BYTES} bytes"):
+        server._requested_output_schema(
+            SimpleNamespace(
+                requested_extensions=[KEDI_STRUCTURED_OUTPUT_EXTENSION_URI],
+                metadata=metadata,
+            )
         )
 
 

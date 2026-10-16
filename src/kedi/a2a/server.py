@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from google.protobuf import struct_pb2
@@ -48,9 +48,10 @@ def create_a2a_app(
     """Build a Starlette A2A v1 application around one exported Kedi profile."""
 
     try:
+        from a2a.server.agent_execution import AgentExecutor
         from a2a.server.request_handlers import DefaultRequestHandler
         from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
-        from a2a.server.tasks import InMemoryTaskStore
+        from a2a.server.tasks import InMemoryTaskStore, TaskStore
         from starlette.applications import Starlette
         from starlette.middleware import Middleware
         from starlette.middleware.authentication import AuthenticationMiddleware
@@ -107,14 +108,17 @@ def create_a2a_app(
         program.configure_persistence(state)
     executor = _KediAgentExecutor(program, state=state)
     handler = DefaultRequestHandler(
-        agent_executor=executor,
-        task_store=(
+        # These wrappers implement the SDK interfaces structurally, without requiring
+        # optional SDK base classes when the server module is imported.
+        agent_executor=cast(AgentExecutor, executor),
+        task_store=cast(
+            TaskStore,
             state
             if state is not None
             else _BoundedTaskStore(
                 InMemoryTaskStore(),
                 max_tasks_per_principal=max_tasks_per_principal,
-            )
+            ),
         ),
         agent_card=card,
     )

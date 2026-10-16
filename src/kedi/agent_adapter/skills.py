@@ -6,8 +6,6 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
-from pydantic_ai import format_as_xml
-
 from kedi.agent_profile.skills import (
     DEFAULT_MAX_SKILLS,
     MAX_SKILL_BYTES,
@@ -309,6 +307,8 @@ def skill_instructions(*, store: SkillStore | None = None) -> str:
     }
     if names is not None:
         instructions["AvailableSkills"] = names
+    from pydantic_ai import format_as_xml
+
     return format_as_xml(
         instructions,
         root_tag="SkillInstructions",

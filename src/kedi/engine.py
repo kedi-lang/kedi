@@ -263,6 +263,10 @@ class RetryPolicy:
 
     @staticmethod
     def retry_after_of(exc: BaseException) -> float | None:
+        from .errors import KediExecutionError
+
+        if isinstance(exc, KediExecutionError) and isinstance(exc.original, BaseException):
+            exc = exc.original
         value = getattr(exc, "retry_after", None)
         try:
             return float(value) if value is not None else None
@@ -416,8 +420,17 @@ class JobManagerEngine(ThreadEngine):
                         or elapsed >= self.policy.deadline
                     ):
                         raise
+                    remaining = self.policy.deadline - elapsed
                     self._sleep(
-                        self.policy.backoff(attempt, retry_after=self.policy.retry_after_of(exc))
+                        min(
+                            remaining,
+                            self.policy.backoff(
+                                attempt, retry_after=self.policy.retry_after_of(exc)
+                            ),
+                        )
                     )
+                    # Do not admit another request after backoff consumed the budget.
+                    if self._clock() - start >= self.policy.deadline:
+                        raise
         finally:
             self.limiter.release()

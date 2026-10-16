@@ -161,6 +161,7 @@ class ConversationState:
         *,
         ticket: ConversationTurnTicket | None = None,
         lane_identity: str | None = None,
+        retain_failed_turn: bool = False,
     ) -> Iterator[AdapterConversationContext]:
         current_task = _current_async_task()
         if getattr(self._sync_turn_local, "active", False) or (
@@ -183,6 +184,7 @@ class ConversationState:
                     adapter_shortname,
                     lane,
                     succeeded=succeeded,
+                    retain_failed_turn=retain_failed_turn,
                 )
             )
 
@@ -457,6 +459,7 @@ class ConversationState:
         lane: str,
         *,
         succeeded: bool,
+        retain_failed_turn: bool = False,
     ) -> tuple[Callable[[], None], ...]:
         retired_cleanups: list[Callable[[], None]] = []
         with self._turn_condition:
@@ -500,7 +503,10 @@ class ConversationState:
                 # Keep the last committed session, but retire the uncommitted replacement.
                 retired_cleanups.append(context.cleanup)
             self._active_ticket = None
-            self._next_turn += 1
+            # A scheduled model job owns retirement until its retry policy settles.
+            # Keep its source-order slot while discarding this attempt's staged state.
+            if succeeded or not retain_failed_turn:
+                self._next_turn += 1
             self._advance_cancelled_tickets()
             self._turn_condition.notify_all()
         return tuple(retired_cleanups)

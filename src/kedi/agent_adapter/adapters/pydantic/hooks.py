@@ -59,7 +59,12 @@ from kedi.agent_adapter.hooks.tool_wrapper import (
     defer_result_observation,
     note_result_observer_failure,
 )
-from kedi.agent_adapter.tools.records import ToolCallTracker, attach_tool_call, track_tool_call
+from kedi.agent_adapter.tools.records import (
+    FailureStage,
+    ToolCallTracker,
+    attach_tool_call,
+    track_tool_call,
+)
 from kedi.agent_adapter.tools.specs import ToolSpec
 
 if TYPE_CHECKING:
@@ -186,7 +191,9 @@ class _KediHookCapability(AbstractCapability[Any]):
         if record is not None:
             assert tracker is not None
             if record.execution_state == "returned":
-                stage = getattr(error, "kedi_result_failure_stage", "result_validation")
+                stage: FailureStage = getattr(
+                    error, "kedi_result_failure_stage", "result_validation"
+                )
                 record = tracker.result_failed(stage) or record
                 attach_tool_call(error, record)
                 try:

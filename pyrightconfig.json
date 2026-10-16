@@ -5,5 +5,5 @@
   "extraPaths": ["src", "notebook/src"],
   "reportAny": "none",
   "reportExplicitAny": "none",
-  "reportArgumentType": "none",
+  "reportArgumentType": "error",
 }
