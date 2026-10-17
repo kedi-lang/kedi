@@ -9,17 +9,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import redirect_stdout
 import importlib.metadata
 import io
 import json
 import os
-from pathlib import Path
 import runpy
 import subprocess
 import sys
 import tempfile
 import traceback
+from contextlib import redirect_stdout
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "assets" / "examples"
@@ -30,19 +30,20 @@ def main() -> int:
     cli.add_argument("--report", type=Path)
     args = cli.parse_args()
     try:
-        import kedi
-        from kedi.agent_adapter import PydanticAdapter
-        from kedi.lang import compile_program, parse_program
         import pydantic_ai.models
-        from pydantic_ai.models.test import TestModel
-        from pydantic_ai.models.function import FunctionModel
         from pydantic_ai.messages import (
             ModelRequest,
             ModelResponse,
+            TextPart,
             ToolCallPart,
             ToolReturnPart,
-            TextPart,
         )
+        from pydantic_ai.models.function import FunctionModel
+        from pydantic_ai.models.test import TestModel
+
+        import kedi
+        from kedi.agent_adapter import PydanticAdapter
+        from kedi.lang import compile_program, parse_program
     except ImportError as exc:
         cli.exit(2, f"Missing validation dependency: {exc}\nUse the Kedi project interpreter.\n")
 

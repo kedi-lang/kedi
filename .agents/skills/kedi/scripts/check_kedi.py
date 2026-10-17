@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def check(path: Path, *, tree_only: bool = False) -> dict:
