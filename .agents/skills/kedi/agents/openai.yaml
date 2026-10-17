@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kedi Language"
+  short_description: "Write, validate, and run documented Kedi programs"
+  default_prompt: "Use $kedi to write and validate a Kedi program for this task."

@@ -1,0 +1,7 @@
+[note] = The release has one failing integration test.
+[decision] = hold
+> if: <note> states that all integration tests passed
+  [decision] := release
+> else:
+  [decision] := hold
+= `decision`

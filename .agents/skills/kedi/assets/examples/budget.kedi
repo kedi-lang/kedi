@@ -1,0 +1,6 @@
+> budget:
+  request_limit: 1
+
+[first] << Summarize the test status.
+[second] << Recommend an action for <first>.
+= `second`

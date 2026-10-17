@@ -1,0 +1,7 @@
+[notes: list[str]] = `["first record", "second record"]`
+[labels: list[str]] = `[""] * len(notes)`
+> loop [i]: `range(len(notes))`:
+  >> The label for <`notes[i]`> is [label: str].
+> map:
+  `labels[i] = label`
+= `labels`

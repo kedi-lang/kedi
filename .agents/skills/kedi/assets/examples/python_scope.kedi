@@ -1,0 +1,16 @@
+```
+from pathlib import Path
+```
+
+[count: int] = `0`
+```
+def increment(value):
+    return value + 1
+count = increment(count)
+count = increment(count)
+```
+
+[fixture: str] = ```
+return Path(__file__).with_name("note.txt").read_text(encoding="utf-8").strip()
+```
+= `{"count": count, "fixture": fixture}`

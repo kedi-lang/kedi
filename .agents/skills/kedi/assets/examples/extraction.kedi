@@ -1,0 +1,10 @@
+# Select an actual model in the host or CLI; verification uses a controlled model.
+~Action(task: Annotated[str, "Explicitly agreed task, not a suggestion"], owner: str | None)
+
+@extract_actions(notes: str) -> list[Action]:
+  > instructions: Extract only explicit commitments. Use null for an absent owner.
+  >> Read these meeting notes: <notes>
+  The agreed actions are [actions: list[Action]].
+  = `actions`
+
+= `extract_actions("Ada will update the parser tests. The migration guide also needs an update; no owner was assigned.")`

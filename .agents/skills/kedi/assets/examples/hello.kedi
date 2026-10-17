@@ -1,0 +1,4 @@
+@greet(name: str) -> str:
+  = Hello, <name>.
+
+= <greet(Kedi)>

@@ -66,6 +66,9 @@ jobs:
       - name: Run tests with coverage
         run: make check-coverage
 
+      - name: Verify bundled Kedi skill examples
+        run: uv run --locked --group dev --python 3.12 python .agents/skills/kedi/scripts/verify_examples.py
+
   notebook:
     name: Python 3.11 notebook integration
     runs-on: ubuntu-latest

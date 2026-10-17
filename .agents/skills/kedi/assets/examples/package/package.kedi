@@ -1,0 +1,4 @@
+> package: skill_demo:
+  version: 0.1.0
+  source: src/skill_demo
+  python: python@3.10-3.14

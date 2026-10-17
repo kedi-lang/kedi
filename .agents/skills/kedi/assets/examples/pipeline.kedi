@@ -1,0 +1,4 @@
+[ticket] = I cannot sign in after resetting my password.
+>> The category of <ticket> is [category: Literal["access", "billing", "other"]].
+>> For a ticket categorized as <category>, a short routing instruction is [instruction: str].
+= `{"category": category, "instruction": instruction}`

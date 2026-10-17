@@ -1,0 +1,902 @@
+{
+  "inventory": {
+    "status": "passed",
+    "tests": 5,
+    "parsed_files": 2,
+    "observed": {
+      "total_units": 21,
+      "reorder_names": [
+        "Pencils",
+        "Notebooks",
+        "Erasers"
+      ]
+    },
+    "files": {
+      "inventory.json": "[\n  {\"name\": \"Pencils\", \"quantity\": 2, \"reorder_threshold\": 5},\n  {\"name\": \"Folders\", \"quantity\": 12, \"reorder_threshold\": 4},\n  {\"name\": \"Notebooks\", \"quantity\": 3, \"reorder_threshold\": 3},\n  {\"name\": \"Markers\", \"quantity\": 4, \"reorder_threshold\": 1},\n  {\"name\": \"Erasers\", \"quantity\": 0, \"reorder_threshold\": 0}\n]\n",
+      "inventory.kedi": "# Reusable, deterministic inventory contracts and report calculation.\n~InventoryItem(name: str, quantity: int, reorder_threshold: int)\n~InventoryReport(total_units: int, reorder_names: list[str])\n\n@inventory_report(items: list[InventoryItem]) -> InventoryReport:\n  = `InventoryReport(total_units=sum(item.quantity for item in items), reorder_names=[item.name for item in items if item.quantity <= item.reorder_threshold])`\n\n> export:\n  InventoryItem\n  InventoryReport\n  inventory_report\n\n@test: inventory_report:\n  > case: sums_all_items_and_includes_threshold_equality:\n    ```\n    items = [\n        InventoryItem(name=\"Cables\", quantity=3, reorder_threshold=4),\n        InventoryItem(name=\"Desks\", quantity=5, reorder_threshold=2),\n        InventoryItem(name=\"Pens\", quantity=4, reorder_threshold=4),\n        InventoryItem(name=\"Staplers\", quantity=0, reorder_threshold=0),\n    ]\n    result = inventory_report(items)\n    assert isinstance(result, InventoryReport)\n    assert type(result.total_units) is int\n    assert result.total_units == 12\n    assert result.reorder_names == [\"Cables\", \"Pens\", \"Staplers\"]\n    ```\n\n  > case: empty_inventory:\n    ```\n    result = inventory_report([])\n    assert isinstance(result, InventoryReport)\n    assert result.total_units == 0\n    assert result.reorder_names == []\n    ```\n\n  > case: preserves_input_order_and_duplicate_names:\n    ```\n    items = [\n        InventoryItem(name=\"Zebra\", quantity=1, reorder_threshold=2),\n        InventoryItem(name=\"Apple\", quantity=2, reorder_threshold=3),\n        InventoryItem(name=\"Zebra\", quantity=3, reorder_threshold=4),\n    ]\n    result = inventory_report(items)\n    assert result.total_units == 6\n    assert result.reorder_names == [\"Zebra\", \"Apple\", \"Zebra\"]\n    ```\n\n  > case: no_items_need_reorder:\n    ```\n    result = inventory_report([InventoryItem(name=\"Paper\", quantity=8, reorder_threshold=3)])\n    assert result.total_units == 8\n    assert result.reorder_names == []\n    ```\n",
+      "main.kedi": "```\nimport json\nfrom pathlib import Path\n```\n\n> import: inventory:\n  InventoryItem\n  InventoryReport\n  inventory_report\n\n@load_inventory(path: str) -> list[InventoryItem]:\n  = `[InventoryItem.model_validate(row, strict=True) for row in json.loads(Path(path).read_text(encoding=\"utf-8\"))]`\n\n@main() -> InventoryReport:\n  [items: list[InventoryItem]] = `load_inventory(str(Path(__file__).with_name(\"inventory.json\")))`\n  = `inventory_report(items)`\n\n@test: main:\n  > case: adjacent_fixture_returns_native_report:\n    ```\n    result = main()\n    assert isinstance(result, InventoryReport)\n    assert result.total_units == 21\n    assert result.reorder_names == [\"Pencils\", \"Notebooks\", \"Erasers\"]\n    ```\n\n= `main()`\n",
+      "verify_native.py": "\"\"\"Execute the CLI source and assert its native return contract.\"\"\"\n\nimport asyncio\nfrom pathlib import Path\n\nfrom kedi.lang import compile_program, parse_program\nfrom pydantic import BaseModel\n\n\ndef main() -> None:\n    path = Path(__file__).with_name(\"main.kedi\").resolve()\n    runtime = compile_program(\n        parse_program(path.read_text(encoding=\"utf-8\"), source_path=str(path))\n    )\n    try:\n        result = runtime.run_main()\n        assert isinstance(result, BaseModel)\n        assert type(result).__name__ == \"InventoryReport\"\n        assert type(result.total_units) is int\n        assert type(result.reorder_names) is list\n        assert all(type(name) is str for name in result.reorder_names)\n        assert result.model_dump() == {\n            \"total_units\": 21,\n            \"reorder_names\": [\"Pencils\", \"Notebooks\", \"Erasers\"],\n        }\n        print(f\"Native {type(result).__name__}: {result.model_dump_json()}\")\n    finally:\n        asyncio.run(runtime.aclose())\n\n\nif __name__ == \"__main__\":\n    main()\n"
+    }
+  },
+  "support": {
+    "status": "passed after correcting fixture catalog assumption",
+    "fixture_correction": "Assert application tool presence; record runtime-owned artifact/messaging tools rather than requiring an exclusive one-element catalog.",
+    "files": {
+      "refund_policy.json": "{\n  \"policy_id\": \"REFUND-2026-01\",\n  \"product\": \"digital_course\",\n  \"refund_window_days\": 30,\n  \"requires_unused\": true,\n  \"eligible_action\": \"Approve the refund to the original payment method.\",\n  \"ineligible_action\": \"Escalate for a manual exception review; do not promise a refund.\"\n}\n",
+      "run_demo.py": "#!/usr/bin/env python3\n\"\"\"Execute the real Kedi tool/task path using credential-free model fixtures.\"\"\"\nfrom __future__ import annotations\n\nimport argparse\nimport asyncio\nfrom collections import Counter\nfrom hashlib import sha256\nfrom importlib.metadata import version\nimport json\nimport os\nfrom pathlib import Path\nfrom threading import Lock\n\nfrom kedi import AgentRunStateEvent, observe_agent_events\nfrom kedi.agent_adapter import PydanticAdapter\nfrom kedi.agent_adapter.execution import use_async_owner_loop\nfrom kedi.lang import compile_program, parse_program\nfrom pydantic import BaseModel\nimport pydantic_ai.models\nfrom pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart\nfrom pydantic_ai.models.function import FunctionModel\n\nROOT = Path(__file__).resolve().parent\nPROGRAM = ROOT / \"support_ticket.kedi\"\nPOLICY = ROOT / \"refund_policy.json\"\n\n\nasync def run_case(name: str, ticket: dict, *, disagree: bool = False, invent_owner: bool = False) -> dict:\n    expected_policy = json.loads(POLICY.read_text(encoding=\"utf-8\"))\n    policy_before = sha256(POLICY.read_bytes()).hexdigest()\n    events: list[dict] = []\n    lock = Lock()\n    entered: set[str] = set()\n    both_started = asyncio.Event()\n    calls: Counter = Counter()\n\n    def record(kind: str, **values) -> None:\n        with lock:\n            events.append({\"index\": len(events) + 1, \"kind\": kind, **values})\n\n    def observe(event) -> None:\n        if isinstance(event, AgentRunStateEvent):\n            record(\"agent_state\", run_id=event.run_id, parent_run_id=event.parent_run_id,\n                   state=event.state, sequence=event.sequence)\n\n    def tool_hook(event) -> None:\n        if event.event not in {\"pre_tool_use\", \"post_tool_use\", \"post_tool_use_failure\"}:\n            return None\n        values = {\"event\": event.event, \"tool_name\": event.tool_name,\n                  \"tool_call_id\": event.tool_call_id, \"run_id\": event.run_id,\n                  \"origin\": event.origin}\n        if event.event == \"post_tool_use\":\n            assert isinstance(event.result, BaseModel), \"Tool must return its native policy model\"\n            values[\"result\"] = event.result.model_dump()\n            assert values[\"result\"] == expected_policy\n        record(\"tool_hook\", **values)\n        return None\n\n    async def respond(messages, info):\n        context = str(getattr(info, \"instructions\", \"\")) + str(messages)\n        role = \"eligibility_reviewer\" if \"ELIGIBILITY_REVIEW\" in context else \"customer_care_reviewer\"\n        assert (\"ELIGIBILITY_REVIEW\" in context) != (\"CUSTOMER_CARE_REVIEW\" in context), \"Child scopes mixed\"\n        assert ticket[\"ticket_id\"] in context and ticket[\"message\"] in context, \"Missing explicit child input\"\n        exposed = {tool.name for tool in info.function_tools}\n        assert \"read_refund_policy\" in exposed, \"Required policy tool missing\"\n        record(\"exposed_tools\", subagent=role, names=sorted(exposed))\n        calls[role] += 1\n        returns = [part for message in messages if isinstance(message, ModelRequest)\n                   for part in message.parts if isinstance(part, ToolReturnPart)]\n        if not returns:\n            entered.add(role)\n            record(\"fixture_entered\", subagent=role)\n            if len(entered) == 2:\n                both_started.set()\n            # Neither child can request its policy until both have entered.\n            # A serial start/await implementation would time out here.\n            await asyncio.wait_for(both_started.wait(), timeout=10)\n            record(\"fixture_tool_request\", subagent=role)\n            return ModelResponse(parts=[ToolCallPart(\"read_refund_policy\", {}, tool_call_id=f\"policy-{role}\")])\n\n        assert len(returns) == 1 and returns[0].tool_name == \"read_refund_policy\"\n        content = returns[0].content\n        policy = content.model_dump() if isinstance(content, BaseModel) else content\n        if isinstance(policy, str):\n            policy = json.loads(policy)\n        assert policy == expected_policy, \"Fixture did not receive the real policy tool result\"\n        eligible = (ticket[\"product\"] == policy[\"product\"]\n                    and 0 <= ticket[\"days_since_purchase\"] <= policy[\"refund_window_days\"]\n                    and (not policy[\"requires_unused\"] or not ticket[\"used\"]))\n        if disagree and role == \"customer_care_reviewer\":\n            eligible = False\n        recommendation = {\n            \"decision\": \"approve\" if eligible else \"manual_review\",\n            \"reason\": (\"The unused purchase is within the 30-day policy window.\" if eligible\n                       else \"Request manual review before promising a refund.\"),\n            \"policy_id\": policy[\"policy_id\"],\n            \"next_action\": policy[\"eligible_action\"] if eligible else policy[\"ineligible_action\"],\n        }\n        if ticket.get(\"owner\") is not None:\n            recommendation[\"owner\"] = ticket[\"owner\"]\n        elif invent_owner:\n            recommendation[\"owner\"] = \"Invented fixture owner\"\n        # In the primary case owner is omitted, exercising the typed default.\n        record(\"fixture_final\", subagent=role, owner_field_present=\"owner\" in recommendation)\n        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {\n            \"task_summary\": f\"{role} read policy {policy['policy_id']} and completed its review.\",\n            \"final_result\": recommendation,\n        })])\n\n    runtime = None\n    with observe_agent_events(observe):\n        with use_async_owner_loop():\n            runtime = compile_program(\n                parse_program(PROGRAM.read_text(encoding=\"utf-8\"), source_path=str(PROGRAM)),\n                adapter=PydanticAdapter(FunctionModel(respond), hook_handler=tool_hook),\n                runtime_globals={\"ticket_input\": ticket},\n                subagent_max_concurrency=2,\n                subagent_timeout_seconds=20,\n            )\n            try:\n                result = await asyncio.to_thread(runtime.run_main)\n            finally:\n                await runtime.aclose()\n                record(\"runtime_closed\")\n\n    assert isinstance(result, BaseModel) and type(result).__name__ == \"TicketDecision\"\n    assert type(result.eligibility).__name__ == type(result.customer_care).__name__ == \"Recommendation\"\n    assert result.owner == result.eligibility.owner == result.customer_care.owner == ticket.get(\"owner\")\n    assert result.repeated_await_same_run\n    assert result.agreement == (not disagree)\n    assert len({run.run_id for run in result.child_runs}) == 2\n    assert {run.subagent for run in result.child_runs} == entered\n    assert calls == {\"eligibility_reviewer\": 2, \"customer_care_reviewer\": 2}\n    assert sha256(POLICY.read_bytes()).hexdigest() == policy_before\n    tool_events = [event for event in events if event[\"kind\"] == \"tool_hook\"]\n    assert Counter(event[\"event\"] for event in tool_events) == {\"pre_tool_use\": 2, \"post_tool_use\": 2}\n    assert len({event[\"tool_call_id\"] for event in tool_events}) == 2\n    first_tool = min(event[\"index\"] for event in events if event[\"kind\"] == \"fixture_tool_request\")\n    assert all(event[\"index\"] < first_tool for event in events if event[\"kind\"] == \"fixture_entered\")\n    states = [event for event in events if event[\"kind\"] == \"agent_state\"]\n    for run in result.child_runs:\n        assert [event[\"state\"] for event in states if event[\"run_id\"] == run.run_id] == [\"started\", \"completed\"]\n    if disagree:\n        assert result.next_action == \"Escalate the differing recommendations for manual review.\"\n    else:\n        assert result.eligibility.decision == \"approve\"\n        assert result.next_action == expected_policy[\"eligible_action\"]\n\n    return {\"case\": name, \"passed\": True, \"model_requests\": dict(calls),\n            \"policy_unchanged\": True, \"native_type\": type(result).__name__,\n            \"result\": result.model_dump(), \"events\": events}\n\n\nasync def main() -> None:\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument(\"--ticket\", type=Path, default=ROOT / \"ticket.json\")\n    parser.add_argument(\"--report\", type=Path, default=ROOT / \"demo_report.json\")\n    args = parser.parse_args()\n    # Fail closed if a fixture accidentally selects a real provider.\n    pydantic_ai.models.ALLOW_MODEL_REQUESTS = False\n    for name in (\"KEDI_ADAPTER\", \"KEDI_AGENT\", \"KEDI_ADAPTER_MODEL\"):\n        os.environ.pop(name, None)\n    ticket = json.loads(args.ticket.read_text(encoding=\"utf-8\"))\n    cases = [\n        await run_case(\"missing_owner\", {k: v for k, v in ticket.items() if k != \"owner\"}),\n        await run_case(\"explicit_owner\", {**ticket, \"owner\": \"Morgan\"}),\n        await run_case(\"disagreement\", {k: v for k, v in ticket.items() if k != \"owner\"}, disagree=True),\n        await run_case(\"invented_owner_is_removed\", {k: v for k, v in ticket.items() if k != \"owner\"}, invent_owner=True),\n    ]\n    report = {\"provider_requests_enabled\": False,\n              \"versions\": {name: version(name) for name in (\"kedi\", \"pydantic-ai-slim\", \"tree-sitter\", \"tree-sitter-kedi\")},\n              \"cases\": cases}\n    args.report.write_text(json.dumps(report, indent=2) + \"\\n\", encoding=\"utf-8\")\n    for case in cases:\n        print(f\"PASS {case['case']}: two child runs, two real policy reads, four fixture model requests; owner={case['result']['owner']!r}\")\n    print(json.dumps(cases[0][\"result\"], indent=2))\n    print(f\"Report: {args.report.resolve()}\")\n\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n",
+      "support_ticket.kedi": "# The host supplies ticket_input and a controlled Pydantic AI adapter.\n```\nimport json\nfrom pathlib import Path\n\npolicy_path = Path(__file__).with_name(\"refund_policy.json\")\n```\n\n~Ticket(ticket_id: str, product: str, days_since_purchase: int, used: bool, amount_usd: float, message: str, owner: str | None = `None`)\n~RefundPolicy(policy_id: str, product: str, refund_window_days: int, requires_unused: bool, eligible_action: str, ineligible_action: str)\n~Recommendation(decision: Literal[\"approve\", \"manual_review\"], reason: str, policy_id: str, next_action: str, owner: str | None = `None`)\n~ChildRun(subagent: str, run_id: str)\n~TicketDecision(ticket_id: str, eligibility: Recommendation, customer_care: Recommendation, agreement: bool, next_action: str, child_runs: list[ChildRun], repeated_await_same_run: bool, owner: str | None = `None`)\n\n@read_refund_policy() -> RefundPolicy:\n  ###\n  Read the local digital-course refund policy. This tool only reads a fixed\n  source-relative JSON file; it never issues a refund or modifies a ticket.\n  ###\n  > tool:\n    risk: read_only\n  = `RefundPolicy(**json.loads(policy_path.read_text(encoding=\"utf-8\")))`\n\n> profile: eligibility_reviewer:\n  ###\n  Independently assess a supplied ticket against the local refund policy.\n  ###\n  > instructions: ELIGIBILITY_REVIEW. Call read_refund_policy before recommending anything. Compare the supplied purchase age and usage to that policy. Cite its policy_id. Only recommend; do not claim a refund was executed. Copy owner only if explicitly supplied; otherwise omit it or use null.\n  > use: read_refund_policy\n  > output: Recommendation\n\n> profile: customer_care_reviewer:\n  ###\n  Independently assess the supported customer response and next action.\n  ###\n  > instructions: CUSTOMER_CARE_REVIEW. Call read_refund_policy before recommending anything. Use the supplied ticket and policy to recommend a customer-facing next action. Cite its policy_id. Only recommend; do not claim a refund was executed. Copy owner only if explicitly supplied; otherwise omit it or use null.\n  > use: read_refund_policy\n  > output: Recommendation\n\n> profile: support_coordinator:\n  > subagent: eligibility_reviewer\n  > subagent: customer_care_reviewer\n  > max_agents: 2\n\n@review_ticket(ticket: Ticket) -> TicketDecision:\n  > use: support_coordinator\n  > task [eligibility_job]: eligibility_reviewer:\n    >> Independently review this support ticket JSON: <`ticket.model_dump_json()`>\n    Return your Recommendation after reading the local policy.\n  > task [customer_care_job]: customer_care_reviewer:\n    >> Independently review this support ticket JSON: <`ticket.model_dump_json()`>\n    Return your Recommendation after reading the local policy.\n  > await [eligibility_result]: eligibility_job\n  > await [customer_care_result]: customer_care_job\n  > await [eligibility_again]: eligibility_job\n  = ```\n  eligibility = eligibility_result.output\n  customer_care = customer_care_result.output\n  assert isinstance(eligibility, Recommendation)\n  assert isinstance(customer_care, Recommendation)\n  # Enforce owner provenance even if a future live model invents an assignment.\n  eligibility = eligibility.model_copy(update={\"owner\": ticket.owner})\n  customer_care = customer_care.model_copy(update={\"owner\": ticket.owner})\n  agreement = eligibility.decision == customer_care.decision\n  next_action = eligibility.next_action if agreement else \"Escalate the differing recommendations for manual review.\"\n  return TicketDecision(\n      ticket_id=ticket.ticket_id,\n      eligibility=eligibility,\n      customer_care=customer_care,\n      agreement=agreement,\n      next_action=next_action,\n      child_runs=[\n          ChildRun(subagent=eligibility_result.subagent, run_id=eligibility_result.run_id),\n          ChildRun(subagent=customer_care_result.subagent, run_id=customer_care_result.run_id),\n      ],\n      repeated_await_same_run=eligibility_again.run_id == eligibility_result.run_id,\n      owner=ticket.owner,\n  )\n  ```\n\n= `review_ticket(Ticket(**ticket_input))`\n",
+      "ticket.json": "{\n  \"ticket_id\": \"SUP-1042\",\n  \"product\": \"digital_course\",\n  \"days_since_purchase\": 12,\n  \"used\": false,\n  \"amount_usd\": 49.0,\n  \"message\": \"I purchased the wrong course 12 days ago and have not opened it. Please refund it.\"\n}\n"
+    },
+    "report": {
+      "provider_requests_enabled": false,
+      "versions": {
+        "kedi": "0.4.0",
+        "pydantic-ai-slim": "2.54.0",
+        "tree-sitter": "0.25.2",
+        "tree-sitter-kedi": "0.4.1"
+      },
+      "cases": [
+        {
+          "case": "missing_owner",
+          "passed": true,
+          "model_requests": {
+            "eligibility_reviewer": 2,
+            "customer_care_reviewer": 2
+          },
+          "policy_unchanged": true,
+          "native_type": "TicketDecision",
+          "result": {
+            "ticket_id": "SUP-1042",
+            "eligibility": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": null
+            },
+            "customer_care": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": null
+            },
+            "agreement": true,
+            "next_action": "Approve the refund to the original payment method.",
+            "child_runs": [
+              {
+                "subagent": "eligibility_reviewer",
+                "run_id": "da1623e2896749ef86d0816a24c2f0fe"
+              },
+              {
+                "subagent": "customer_care_reviewer",
+                "run_id": "677eb2c6bc6746a09b4c6261aed3f5b8"
+              }
+            ],
+            "repeated_await_same_run": true,
+            "owner": null
+          },
+          "events": [
+            {
+              "index": 1,
+              "kind": "agent_state",
+              "run_id": "da1623e2896749ef86d0816a24c2f0fe",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 2,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 3,
+              "kind": "fixture_entered",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 4,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 5,
+              "kind": "fixture_entered",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 6,
+              "kind": "fixture_tool_request",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 7,
+              "kind": "fixture_tool_request",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 8,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "677eb2c6bc6746a09b4c6261aed3f5b8",
+              "origin": "kedi"
+            },
+            {
+              "index": 9,
+              "kind": "agent_state",
+              "run_id": "677eb2c6bc6746a09b4c6261aed3f5b8",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 10,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "da1623e2896749ef86d0816a24c2f0fe",
+              "origin": "kedi"
+            },
+            {
+              "index": 11,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "da1623e2896749ef86d0816a24c2f0fe",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 12,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "677eb2c6bc6746a09b4c6261aed3f5b8",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 13,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 14,
+              "kind": "fixture_final",
+              "subagent": "eligibility_reviewer",
+              "owner_field_present": false
+            },
+            {
+              "index": 15,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 16,
+              "kind": "fixture_final",
+              "subagent": "customer_care_reviewer",
+              "owner_field_present": false
+            },
+            {
+              "index": 17,
+              "kind": "agent_state",
+              "run_id": "da1623e2896749ef86d0816a24c2f0fe",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 18,
+              "kind": "agent_state",
+              "run_id": "677eb2c6bc6746a09b4c6261aed3f5b8",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 19,
+              "kind": "runtime_closed"
+            }
+          ]
+        },
+        {
+          "case": "explicit_owner",
+          "passed": true,
+          "model_requests": {
+            "eligibility_reviewer": 2,
+            "customer_care_reviewer": 2
+          },
+          "policy_unchanged": true,
+          "native_type": "TicketDecision",
+          "result": {
+            "ticket_id": "SUP-1042",
+            "eligibility": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": "Morgan"
+            },
+            "customer_care": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": "Morgan"
+            },
+            "agreement": true,
+            "next_action": "Approve the refund to the original payment method.",
+            "child_runs": [
+              {
+                "subagent": "eligibility_reviewer",
+                "run_id": "63446d4b66284b31a3e07d08bb3e2818"
+              },
+              {
+                "subagent": "customer_care_reviewer",
+                "run_id": "ac68531f419b492ab2b807d59c851c8e"
+              }
+            ],
+            "repeated_await_same_run": true,
+            "owner": "Morgan"
+          },
+          "events": [
+            {
+              "index": 1,
+              "kind": "agent_state",
+              "run_id": "63446d4b66284b31a3e07d08bb3e2818",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 2,
+              "kind": "agent_state",
+              "run_id": "ac68531f419b492ab2b807d59c851c8e",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 3,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 4,
+              "kind": "fixture_entered",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 5,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 6,
+              "kind": "fixture_entered",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 7,
+              "kind": "fixture_tool_request",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 8,
+              "kind": "fixture_tool_request",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 9,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "ac68531f419b492ab2b807d59c851c8e",
+              "origin": "kedi"
+            },
+            {
+              "index": 10,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "63446d4b66284b31a3e07d08bb3e2818",
+              "origin": "kedi"
+            },
+            {
+              "index": 11,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "63446d4b66284b31a3e07d08bb3e2818",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 12,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "ac68531f419b492ab2b807d59c851c8e",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 13,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 14,
+              "kind": "fixture_final",
+              "subagent": "eligibility_reviewer",
+              "owner_field_present": true
+            },
+            {
+              "index": 15,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 16,
+              "kind": "fixture_final",
+              "subagent": "customer_care_reviewer",
+              "owner_field_present": true
+            },
+            {
+              "index": 17,
+              "kind": "agent_state",
+              "run_id": "63446d4b66284b31a3e07d08bb3e2818",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 18,
+              "kind": "agent_state",
+              "run_id": "ac68531f419b492ab2b807d59c851c8e",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 19,
+              "kind": "runtime_closed"
+            }
+          ]
+        },
+        {
+          "case": "disagreement",
+          "passed": true,
+          "model_requests": {
+            "eligibility_reviewer": 2,
+            "customer_care_reviewer": 2
+          },
+          "policy_unchanged": true,
+          "native_type": "TicketDecision",
+          "result": {
+            "ticket_id": "SUP-1042",
+            "eligibility": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": null
+            },
+            "customer_care": {
+              "decision": "manual_review",
+              "reason": "Request manual review before promising a refund.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Escalate for a manual exception review; do not promise a refund.",
+              "owner": null
+            },
+            "agreement": false,
+            "next_action": "Escalate the differing recommendations for manual review.",
+            "child_runs": [
+              {
+                "subagent": "eligibility_reviewer",
+                "run_id": "645a00f09b6e4340887ef1b5111a321b"
+              },
+              {
+                "subagent": "customer_care_reviewer",
+                "run_id": "1a92162bb8eb4874a69e26075ec317a3"
+              }
+            ],
+            "repeated_await_same_run": true,
+            "owner": null
+          },
+          "events": [
+            {
+              "index": 1,
+              "kind": "agent_state",
+              "run_id": "645a00f09b6e4340887ef1b5111a321b",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 2,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 3,
+              "kind": "fixture_entered",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 4,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 5,
+              "kind": "fixture_entered",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 6,
+              "kind": "fixture_tool_request",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 7,
+              "kind": "fixture_tool_request",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 8,
+              "kind": "agent_state",
+              "run_id": "1a92162bb8eb4874a69e26075ec317a3",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 9,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "1a92162bb8eb4874a69e26075ec317a3",
+              "origin": "kedi"
+            },
+            {
+              "index": 10,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "645a00f09b6e4340887ef1b5111a321b",
+              "origin": "kedi"
+            },
+            {
+              "index": 11,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "645a00f09b6e4340887ef1b5111a321b",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 12,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "1a92162bb8eb4874a69e26075ec317a3",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 13,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 14,
+              "kind": "fixture_final",
+              "subagent": "eligibility_reviewer",
+              "owner_field_present": false
+            },
+            {
+              "index": 15,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 16,
+              "kind": "fixture_final",
+              "subagent": "customer_care_reviewer",
+              "owner_field_present": false
+            },
+            {
+              "index": 17,
+              "kind": "agent_state",
+              "run_id": "645a00f09b6e4340887ef1b5111a321b",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 18,
+              "kind": "agent_state",
+              "run_id": "1a92162bb8eb4874a69e26075ec317a3",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 19,
+              "kind": "runtime_closed"
+            }
+          ]
+        },
+        {
+          "case": "invented_owner_is_removed",
+          "passed": true,
+          "model_requests": {
+            "eligibility_reviewer": 2,
+            "customer_care_reviewer": 2
+          },
+          "policy_unchanged": true,
+          "native_type": "TicketDecision",
+          "result": {
+            "ticket_id": "SUP-1042",
+            "eligibility": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": null
+            },
+            "customer_care": {
+              "decision": "approve",
+              "reason": "The unused purchase is within the 30-day policy window.",
+              "policy_id": "REFUND-2026-01",
+              "next_action": "Approve the refund to the original payment method.",
+              "owner": null
+            },
+            "agreement": true,
+            "next_action": "Approve the refund to the original payment method.",
+            "child_runs": [
+              {
+                "subagent": "eligibility_reviewer",
+                "run_id": "75dfd21b38d749a2887871a67989ec03"
+              },
+              {
+                "subagent": "customer_care_reviewer",
+                "run_id": "beec365b97c84edd952c63c0a503c0fc"
+              }
+            ],
+            "repeated_await_same_run": true,
+            "owner": null
+          },
+          "events": [
+            {
+              "index": 1,
+              "kind": "agent_state",
+              "run_id": "75dfd21b38d749a2887871a67989ec03",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 2,
+              "kind": "agent_state",
+              "run_id": "beec365b97c84edd952c63c0a503c0fc",
+              "parent_run_id": null,
+              "state": "started",
+              "sequence": 1
+            },
+            {
+              "index": 3,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 4,
+              "kind": "fixture_entered",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 5,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 6,
+              "kind": "fixture_entered",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 7,
+              "kind": "fixture_tool_request",
+              "subagent": "customer_care_reviewer"
+            },
+            {
+              "index": 8,
+              "kind": "fixture_tool_request",
+              "subagent": "eligibility_reviewer"
+            },
+            {
+              "index": 9,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "beec365b97c84edd952c63c0a503c0fc",
+              "origin": "kedi"
+            },
+            {
+              "index": 10,
+              "kind": "tool_hook",
+              "event": "pre_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "75dfd21b38d749a2887871a67989ec03",
+              "origin": "kedi"
+            },
+            {
+              "index": 11,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-eligibility_reviewer",
+              "run_id": "75dfd21b38d749a2887871a67989ec03",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 12,
+              "kind": "tool_hook",
+              "event": "post_tool_use",
+              "tool_name": "read_refund_policy",
+              "tool_call_id": "policy-customer_care_reviewer",
+              "run_id": "beec365b97c84edd952c63c0a503c0fc",
+              "origin": "kedi",
+              "result": {
+                "policy_id": "REFUND-2026-01",
+                "product": "digital_course",
+                "refund_window_days": 30,
+                "requires_unused": true,
+                "eligible_action": "Approve the refund to the original payment method.",
+                "ineligible_action": "Escalate for a manual exception review; do not promise a refund."
+              }
+            },
+            {
+              "index": 13,
+              "kind": "exposed_tools",
+              "subagent": "eligibility_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 14,
+              "kind": "fixture_final",
+              "subagent": "eligibility_reviewer",
+              "owner_field_present": true
+            },
+            {
+              "index": 15,
+              "kind": "exposed_tools",
+              "subagent": "customer_care_reviewer",
+              "names": [
+                "read_artifact",
+                "read_refund_policy",
+                "release_artifact",
+                "run_artifact_code",
+                "search_artifacts",
+                "send_parent_message"
+              ]
+            },
+            {
+              "index": 16,
+              "kind": "fixture_final",
+              "subagent": "customer_care_reviewer",
+              "owner_field_present": true
+            },
+            {
+              "index": 17,
+              "kind": "agent_state",
+              "run_id": "75dfd21b38d749a2887871a67989ec03",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 18,
+              "kind": "agent_state",
+              "run_id": "beec365b97c84edd952c63c0a503c0fc",
+              "parent_run_id": null,
+              "state": "completed",
+              "sequence": 2
+            },
+            {
+              "index": 19,
+              "kind": "runtime_closed"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

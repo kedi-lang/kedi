@@ -1,0 +1,4 @@
+> import: pricing:
+  quote
+
+= `quote(1000, 10)`

@@ -1,0 +1,10 @@
+@unique_in_order(items: list[str]) -> list[str]:
+  > auto:
+    Remove duplicate strings while preserving first occurrence order.
+    Return an empty list for an empty input.
+
+@test: unique_in_order:
+  > case: order:
+    `assert unique_in_order(["b", "a", "b"]) == ["b", "a"]`
+  > case: empty:
+    `assert unique_in_order([]) == []`

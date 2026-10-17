@@ -1,0 +1,15 @@
+[status] = pending
+[count: int] = `0`
+
+> if: `True`:
+  [status] = local
+  [count] := `count + 1`
+
+> loop: `count < 3`:
+  [count] := `count + 1`
+
+[total: int] = `0`
+> loop [n]: `[1, 2, 3]`:
+  [total] := `total + n`
+
+= `{"status": status, "count": count, "total": total}`

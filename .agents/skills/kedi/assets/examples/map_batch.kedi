@@ -1,0 +1,9 @@
+[items: list[int]] = `[2, 3, 5]`
+[result: list[int]] = `[0] * len(items)`
+
+> loop [i]: `range(len(items))`:
+  [square: int] = `items[i] ** 2`
+> map:
+  `result[i] = square`
+
+= `result`

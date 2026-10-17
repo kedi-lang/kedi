@@ -1,0 +1,28 @@
+~Review(failures: list[str], may_release: bool)
+
+> profile: reviewer:
+    ###
+    Read the named test suite and report failures without inventing results.
+    ###
+    > adapter: pydantic
+    > use: read_evidence
+    > output: Review
+    > instructions:
+        Read evidence for the requested suite.
+        Release only if no tests failed.
+
+> profile: coordinator:
+    > adapter: pydantic
+    > subagent: reviewer
+    > max_agents: 2
+    > use: write_report
+    > approval: `approve_report`
+    > instructions:
+        Delegate the review and use its validated result.
+        Write failure names and the release decision to requested.txt.
+        Use write_report and return the actual saved path.
+        Never treat missing evidence as success.
+
+> use: coordinator
+[receipt] << Review suite parser and save its report.
+= <receipt>

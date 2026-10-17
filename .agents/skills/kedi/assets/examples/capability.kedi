@@ -1,0 +1,12 @@
+# Requires the documented next-release grammar; see references/pitfalls.md.
+> capability: evidence:
+  > instructions: Distinguish observed facts from unfinished checks.
+
+> profile: reviewer:
+  > instructions: Assess release readiness.
+  > use: evidence
+
+> use: reviewer
+>> Unit tests passed but staging has not been checked.
+The readiness is [readiness: Literal["ready", "pending"]].
+= `readiness`

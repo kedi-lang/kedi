@@ -1,0 +1,20 @@
+@normalize(value: str) -> str:
+  = `value.strip().lower()`
+
+@test: normalize:
+  > case: trim_and_lower:
+    `assert normalize("  KEDI  ") == "kedi"`
+  > case: empty:
+    `assert normalize("") == ""`
+
+@eval: normalize:
+  > data: cases:
+    = `[(" DOCS ", {"text": "docs"})]`
+  > test_data: cases:
+    = `[(" API ", {"text": "api"}), ("", {"text": ""})]`
+  > metric: exact(cases):
+    = ```
+    return normalize(cases) == expected["text"]
+    ```
+
+= `normalize(" Kedi ")`

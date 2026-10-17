@@ -1,0 +1,15 @@
+~Quote(subtotal: int, discount: int, total: int)
+
+@quote(subtotal: int, discount_percent: int = `0`) -> Quote:
+  [discount: int] = `subtotal * discount_percent // 100`
+  = `Quote(subtotal=subtotal, discount=discount, total=subtotal-discount)`
+
+> export:
+  Quote
+  quote
+
+@test: quote:
+  > case: discount:
+    `assert quote(1000, 10).total == 900`
+  > case: no_discount:
+    `assert quote(1000).total == 1000`

@@ -1,0 +1,10 @@
+```
+from kedi import Constraints
+```
+
+~Review(score: Annotated[float, "Quality score", `Constraints(ge=0, le=1)`], tags: list[str] = `[]`)
+
+[first: Review] = `Review(score=0.75)`
+[second: Review] = `Review(score=1.0)`
+`first.tags.append("checked")`
+= `{"first": first.model_dump(), "second": second.model_dump()}`

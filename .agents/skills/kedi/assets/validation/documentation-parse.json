@@ -1,0 +1,2840 @@
+[
+  {
+    "document": "agent-adapters/a2a.md",
+    "block": 1,
+    "source_line": 24,
+    "sha256": "fd209fa8012a0c13ada13d05b35035d4ca9bfebad3a3165899569e8847b680f4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/a2a.md",
+    "block": 2,
+    "source_line": 153,
+    "sha256": "e565ce1d97051f742cd206f52eb369c9fcdbd1b8ba7813d5b4497828a2887ae9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/a2a.md",
+    "block": 3,
+    "source_line": 193,
+    "sha256": "cb8c7fa448b49d0d7f92b8e6426e331d1ae1cd47921740df3fed4a41768753e2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/a2a.md",
+    "block": 4,
+    "source_line": 218,
+    "sha256": "86f7f182e6e310f6a252051f8f4d38100e5e714e0ec74e72d0333a9d0f40f3d3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/acp.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "1b7ea5e9cfa7be1cdda09e0152e413f46af38b6c0886e83b60c816e1e1d59680",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/acp.md",
+    "block": 2,
+    "source_line": 25,
+    "sha256": "3c28078d7d1728b7ee87e56028340dddb266db2c9e843ad161a84f891f221ae9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/acp.md",
+    "block": 3,
+    "source_line": 68,
+    "sha256": "f7d2f7208f2a63afa118019258a8264a1216393fe59231b02d3f73ced07b319d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/claude.md",
+    "block": 1,
+    "source_line": 22,
+    "sha256": "fb08a025ca20693ebfff315cb99c7f62e2a73e1db08859f1051b06c02e262cc6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/claude.md",
+    "block": 2,
+    "source_line": 37,
+    "sha256": "ae1fe6452262a8b0cbb25244a5c394286e2200df4932000a832eccb15601bb64",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/codex.md",
+    "block": 1,
+    "source_line": 22,
+    "sha256": "86c99f72e5d1d667f7c72f13179db31236764a108ebe4874afea4e5214ea2622",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/codex.md",
+    "block": 2,
+    "source_line": 35,
+    "sha256": "a031a713525e2659b8f074606f913a94762324c643adaf2a18ae45031d4155fb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/dspy.md",
+    "block": 1,
+    "source_line": 15,
+    "sha256": "d1ad0957c0c61835f9a4fac46ba6330eeba9f8aff6b0edfa043dbb9cf266440c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/dspy.md",
+    "block": 2,
+    "source_line": 37,
+    "sha256": "d3a7355188ad5e7141b8b88a952bbe35296affd43d2be92c615bcfa8d4414054",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/index.md",
+    "block": 1,
+    "source_line": 52,
+    "sha256": "be38a715236e11f85becab0dace6cd7768f5abd6f66f1a39215edeeeb8fc1e2c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/jev-claims.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "856f9e301aa56f7ed48296cf65be61221832b06038c5f7fd107cf0bc133096c8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/jev-criteria.md",
+    "block": 1,
+    "source_line": 15,
+    "sha256": "db2021ba003847b59b68be0813654521b8d63f9cc2c0a9427f376736fe525b7f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/jev-criteria.md",
+    "block": 2,
+    "source_line": 35,
+    "sha256": "9384c79ce01981e3e0eb80118c02f7750a2bf2297b35ae918c234be2d5d5dc98",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/jev-evidence.md",
+    "block": 1,
+    "source_line": 10,
+    "sha256": "e269227b964d3eb598d99e2b92d8e7264e043edc8fb7a37e78a0f5533d5e3f95",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/jev-extraction.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "5cc9dfd5cf1ba2373fcf8cae4be997f36d25d992dae803e3a6116338682ce5fa",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/jev-workflow.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "7861e426a6fafe29c2717928ee5cc152e639350f2181c4fda4d89697614b91bc",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/langchain.md",
+    "block": 1,
+    "source_line": 15,
+    "sha256": "423d4586f2dda5c41790e4d7b85538942c37f325b5990619f0add7f4ef83a89f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/laya.md",
+    "block": 1,
+    "source_line": 27,
+    "sha256": "c0494df916b01d86e4361563bf177a1d81df32a5bf4ed5b703040ee7c390ca47",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/pydantic-ai.md",
+    "block": 1,
+    "source_line": 20,
+    "sha256": "8535e27f3fe3691553aa368ec6eb0972a99111094cb938f3b46f71e7c8671a41",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/pydantic-ai.md",
+    "block": 2,
+    "source_line": 44,
+    "sha256": "96af04875fff48837fb5d21e18af330d40b856928efdcacfec357c7103b7db4c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/pydantic-ai.md",
+    "block": 3,
+    "source_line": 74,
+    "sha256": "6d58201a235ee597685e5b9aca075ae26f351e6bc8e4ab4cb74ac28e13f1dcbb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agent-adapters/pydantic-ai.md",
+    "block": 4,
+    "source_line": 90,
+    "sha256": "2429ef81f6d6cc2e820a8ccd848557ceba7430db5196b8eef8a5099197c69450",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/approvals.md",
+    "block": 1,
+    "source_line": 43,
+    "sha256": "9e9da901193c63fcc222633465d2ac17a6e6206990231500ba85dc13d6a44e6d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/approvals.md",
+    "block": 2,
+    "source_line": 50,
+    "sha256": "ca4cbe02340ce1ae1515e0d2ddf5ee593f5e10fd41f3a2113d1e817da7a72f44",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/approvals.md",
+    "block": 3,
+    "source_line": 61,
+    "sha256": "a233378533098dda4ffb75a82141d043e27cbc2601757e37e85a815506f286bd",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "2ff29af9b5774cc893216a44d62adfb6ed354859208ab67144c941482607ea0a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 2,
+    "source_line": 21,
+    "sha256": "eb7744de27f30bbfce78d2c42b29b6b03757a7afdc6d19dc04b9acc2f5b8b40b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 3,
+    "source_line": 40,
+    "sha256": "69b5f23d2c88cf895ecc94b48268a92a4f80c2fb6e5700dcff6eb5acd3c9b67d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 4,
+    "source_line": 46,
+    "sha256": "6159ad3b447c7150fb14b73ce1f23179859ac8c3d0846503cfda01f0184c7adb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 5,
+    "source_line": 61,
+    "sha256": "ab9b1fc02c86aa9be3a8612c708b8e9bb2c08e38290b81344c8d2ee27e4730f2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 6,
+    "source_line": 79,
+    "sha256": "205d13fd9cb59f2bec6379d777cd57bf8b5794156a156eadc2b3bb29341bb251",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 7,
+    "source_line": 95,
+    "sha256": "269597bbbe5d02e1a1932a10b2aacc66b10ebfa3b3914789206eba35a383dcd3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/backend-selection.md",
+    "block": 8,
+    "source_line": 144,
+    "sha256": "4018b81588b07e1d3fc0c859dbc2316b753e6a1f8be7020721d45a0d86a6722b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/capabilities.md",
+    "block": 1,
+    "source_line": 16,
+    "sha256": "3438389502fca45b0cba8ffbbb83105aec72bcbf1cf0201eb8a10fc9224b26fc",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/capabilities.md",
+    "block": 2,
+    "source_line": 51,
+    "sha256": "46d4612d64ef14ee720becbc73c1daa8d1127ce93fd7fabe73ef38982ddfe4f5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/capabilities.md",
+    "block": 3,
+    "source_line": 80,
+    "sha256": "c35a2b6fb8092996fd10157a130445d19eb9a62fecd434a5c2a479d97f9216d5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/capabilities.md",
+    "block": 4,
+    "source_line": 145,
+    "sha256": "20ad706918d2350c7bde8264fb190fb44d6578a4974d1e417afd1e64aaa528e4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/capabilities.md",
+    "block": 5,
+    "source_line": 182,
+    "sha256": "bb9cac8e6928573f67d8bca3699e9836d373093befff5d50819086c42a56c3cc",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/capabilities.md",
+    "block": 6,
+    "source_line": 210,
+    "sha256": "7034409dd4616f54b5494e2980a71666dba74a2b9f23e153447fafe66dff06a4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/codemode.md",
+    "block": 1,
+    "source_line": 22,
+    "sha256": "6d58201a235ee597685e5b9aca075ae26f351e6bc8e4ab4cb74ac28e13f1dcbb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/codemode.md",
+    "block": 2,
+    "source_line": 33,
+    "sha256": "339f4e0e57dadefe86fa29ba0c78da10035f12744b3838fc1155483c0730f7a6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/codemode.md",
+    "block": 3,
+    "source_line": 97,
+    "sha256": "e2137d1aca14204c943fce1fa68d7e942eebf230fc16a903f7ed9c278e187d3f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/dynamic-workflows.md",
+    "block": 1,
+    "source_line": 15,
+    "sha256": "e0c4dfa79ca6597290d51441fe1e004bb7d1ee5ea7109c3ada1ce2d07b0e40e4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/hooks.md",
+    "block": 1,
+    "source_line": 30,
+    "sha256": "8f9574ebd315c4958a0ef35f78e7f215b2f6d217ddca39508b860685cf2e9d89",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/hooks.md",
+    "block": 2,
+    "source_line": 66,
+    "sha256": "ad125664087d74cf56065a49b031165a4ce33b82a8639d8eb7c6e302922a1fc0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/index.md",
+    "block": 1,
+    "source_line": 43,
+    "sha256": "3ca9a32d5e9f109e40115ea7217250eac09b31c9f0bc8fedeebeda4c13657897",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/index.md",
+    "block": 2,
+    "source_line": 58,
+    "sha256": "7b51854b3c3385b9d92442f544360fb92111c7aec112685b30567edce756ca1f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 1,
+    "source_line": 18,
+    "sha256": "7d00fa4ad4bfe3462e09fdf50d477948f7e64945502a895ce592a36f5bc950de",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 2,
+    "source_line": 27,
+    "sha256": "d97ea7ce2c7de1f8bb79c4cea168088b7c005c55f426f259c6cb575dd82b2567",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 3,
+    "source_line": 50,
+    "sha256": "38d6158cdc80840eb89e42b30139210137a31050a69f1c74cc6eb5b0d88490c3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 4,
+    "source_line": 89,
+    "sha256": "2036722274da3c5d7d6b6548ffefe271b2249c617b8fa210cdf6f14c6b8877a7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 5,
+    "source_line": 101,
+    "sha256": "859ed87f39de858423702ee1583089a5324554d071f3e809256f6737c4d533fb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 6,
+    "source_line": 116,
+    "sha256": "65156e63e2b9e1bcec664098fb726226709f5c99b4823f7d6abd78280615ea0b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/instructions-and-settings.md",
+    "block": 7,
+    "source_line": 153,
+    "sha256": "73b42ad7799e05af8f122419e736dd3a23a7ee7cf78133a6f1eb8f49dc7d81db",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/mcp.md",
+    "block": 1,
+    "source_line": 14,
+    "sha256": "0a4aa48daf95712845855bd2a232b1f3fef1b96ca4631121f170b592bc0ec371",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/mcp.md",
+    "block": 2,
+    "source_line": 27,
+    "sha256": "15d68a21abecc99e57f1d71a2c61d6c5be27b69400699c8811c5e364bb8f2e03",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/mcp.md",
+    "block": 3,
+    "source_line": 37,
+    "sha256": "bfdf12b55fc3bfba10b151d18b479fd191ddffff7bdb82b2521c0faae9660362",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/mcp.md",
+    "block": 4,
+    "source_line": 57,
+    "sha256": "afbb54c45bfcaf71896947dad0996be6cd8487a173ff4085edd4a7fbe0cddfa1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/mcp.md",
+    "block": 5,
+    "source_line": 71,
+    "sha256": "d5646b2467ca8e4b144d081b907a9e081a826f3c446968b9b409f6c09e970fc8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/models-and-reasoning.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "8535e27f3fe3691553aa368ec6eb0972a99111094cb938f3b46f71e7c8671a41",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/models-and-reasoning.md",
+    "block": 2,
+    "source_line": 19,
+    "sha256": "5b9a97962996bc231199f343a7edf4e352fa2f795f8041faa83282b2c240fc13",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/models-and-reasoning.md",
+    "block": 3,
+    "source_line": 37,
+    "sha256": "fc0a3e6dcda71977d48b76a8183f9b0168a95587fea534907c8d484d942e5288",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/models-and-reasoning.md",
+    "block": 4,
+    "source_line": 59,
+    "sha256": "41e3883c78555028cdc0aa9f48fcb6c54fddf7260037d736548559fd7259cc50",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/models-and-reasoning.md",
+    "block": 5,
+    "source_line": 65,
+    "sha256": "c258ea29a53f29e58a27f998bafc1cdba90e254600e03395f6bc2ccd26c693c7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/models-and-reasoning.md",
+    "block": 6,
+    "source_line": 77,
+    "sha256": "95b81f0a6a47f6224bd14f8a6b6f6df75a32906583b089ae57f25d844436388f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/profiles.md",
+    "block": 1,
+    "source_line": 24,
+    "sha256": "295089bc9d788a3b02a10a5355a59dab668b5ea37bec93926fa4737730b3b3d3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/profiles.md",
+    "block": 2,
+    "source_line": 66,
+    "sha256": "22a70432e9a376f77368e94026537a0c32a6536061b00333a15ef15b4e828934",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/profiles.md",
+    "block": 3,
+    "source_line": 104,
+    "sha256": "c5bf4df28eb33991feca69c99768adc01ecfec5981f084c43e4c58e2fedbe293",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/profiles.md",
+    "block": 4,
+    "source_line": 119,
+    "sha256": "1a494c23290d8faad6045b4cd6328fcea0fe1a75f5a259f43e7fa894ce75d8f2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/profiles.md",
+    "block": 5,
+    "source_line": 148,
+    "sha256": "6b9d7acf626f827ad02a6562c875160d4d38498e963980e16ac0e187ad531de6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/profiles.md",
+    "block": 6,
+    "source_line": 174,
+    "sha256": "c6b43a8c2ba67bae80cd15b973eb96c2a6ecfda480186a333745a2842c449372",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/reviewed-evidence.md",
+    "block": 1,
+    "source_line": 14,
+    "sha256": "c836f5eb93a4557a49cdfe4c9951530bd2a18633a655349026ba8b5787f3f856",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/scoping-and-capabilities.md",
+    "block": 1,
+    "source_line": 12,
+    "sha256": "654b7ff7fd3ad0a4d38bf95e60e38b1635fcb86e8f59ccc181d44bd51b9a3d8e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/scoping-and-capabilities.md",
+    "block": 2,
+    "source_line": 30,
+    "sha256": "37aef6881bb859475a96adfa393909f655c0b4ce2aea98efd772437772986bea",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/scoping-and-capabilities.md",
+    "block": 3,
+    "source_line": 52,
+    "sha256": "59c9751f08469a8c9d011177a37f28cffb1e96c5ec997bd57f8a23e1a7630a62",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/scoping-and-capabilities.md",
+    "block": 4,
+    "source_line": 111,
+    "sha256": "ba587899612d4a563ed6cee6e5dfe5ca5ae7fdc28a8fb5e6b11f252c16335e09",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/scoping-and-capabilities.md",
+    "block": 5,
+    "source_line": 162,
+    "sha256": "a4dca386ad976df5a6ae6381a98c36f724588953027ae1fb0a3709aef6c60bf8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/skills.md",
+    "block": 1,
+    "source_line": 36,
+    "sha256": "bfe323cb62b8f4a7b2d91c0414f5057d073ee726917439e2507c992453a95e20",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/skills.md",
+    "block": 2,
+    "source_line": 48,
+    "sha256": "b303d7412c13f66b756d0bb5a05d7b55a73e75d9eed7c8081c7ab3061c736f9d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/skills.md",
+    "block": 3,
+    "source_line": 56,
+    "sha256": "cb2c27a8f6b3de1b5fea28b9349166e61353d2d5152c58ba0e98e0c4e4bdd745",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-limits.md",
+    "block": 1,
+    "source_line": 30,
+    "sha256": "1d200d99a2d4a7415854986a5bd3b682f660ef331b2a87dcb1bb0e3717fd0ec7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-messaging.md",
+    "block": 1,
+    "source_line": 10,
+    "sha256": "3850f167a5117da9ae20198c26090043ccf6f77246cc4bde65a8e439dea8740a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-messaging.md",
+    "block": 2,
+    "source_line": 46,
+    "sha256": "adc3423b860a225702b6306735d09afe07342c2dcb0bed45eda2141334a2c732",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-messaging.md",
+    "block": 3,
+    "source_line": 64,
+    "sha256": "8ad90060a7e6c3f11ffc9bd6a8cb04d190727ff105d8cc8bc288b46d8d87a1f5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-processing.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "896432c49cdeb63f878858903395b9fee2fba0c1741a3ed1b1ddc38e37c37ac2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-results.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "572f83ea6623f31d12d5dec58c6f5984a43ea315412d7150285270b425bbfec6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagent-tasks.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "dc79242815c83a42a0cf8ab84a0c64d7753d6606a1e8d1b77b0b58e38da529c5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/subagents.md",
+    "block": 1,
+    "source_line": 10,
+    "sha256": "32cc21db96d256b6bdb8c23f5a7d6c93b9a0321eb4b2a154148b354964afe494",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tool-reasons.md",
+    "block": 1,
+    "source_line": 13,
+    "sha256": "9ab1e430688c8d8f58d8239d43d51e4a5bf6fb1c4b4e21ef9380fed80e4d1f11",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tool-reasons.md",
+    "block": 2,
+    "source_line": 47,
+    "sha256": "853a9d14334768b4dbc24ca677134e8270f2cea1eb5c0d9cacdaf8b8768c04ae",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tools-and-use.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "9d881bbb7ed4f12b4469897193d8efa0384f87b3f9c054092bd6ccf95fa5687c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tools-and-use.md",
+    "block": 2,
+    "source_line": 45,
+    "sha256": "1a3ade7abc12530b208973394744f5c1550b5d711491ca6e39b10998f7c1cd31",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tools-and-use.md",
+    "block": 3,
+    "source_line": 88,
+    "sha256": "e44f9fb540c57ef4bd0b70314b7f4fe3f770b784612a34ae97d8c0b5da12f51f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tools-and-use.md",
+    "block": 4,
+    "source_line": 98,
+    "sha256": "952d084d63045b35f05c0c7f01a77467c489cc9a92e0d0f3c53ac0e29e5e760c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tools-and-use.md",
+    "block": 5,
+    "source_line": 112,
+    "sha256": "dd1f8c6e943ee4fa8fac2cbccedd4330fd0c56f0b65fee2315946d573746cfe9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "agentic-engineering/tools-and-use.md",
+    "block": 6,
+    "source_line": 146,
+    "sha256": "3a5000032c0dd8cf3ffbf2391679c6b705e8d06907cd21134bf78db568c2672a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/control-flow.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "cfda062c4c200135c519d1b8849fb9ee38cf09ce5bf1e7c81ca7d7049b6a7ba8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/control-flow.md",
+    "block": 2,
+    "source_line": 32,
+    "sha256": "0c0643ea3a89a1202e985fc0f74aee37aace3bccb6c11ace83317d4e0c39fcee",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/control-flow.md",
+    "block": 3,
+    "source_line": 54,
+    "sha256": "285f773c8f64b8e85984ffd74058e7af3eb541f2895293bc6b72a86b3dd3d5dd",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/control-flow.md",
+    "block": 4,
+    "source_line": 81,
+    "sha256": "285bc766ba550300eb61581346625274f6402756883d84c65c157dc9a6df50a3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/index.md",
+    "block": 1,
+    "source_line": 23,
+    "sha256": "6a48865136cec039a4d5688e300c89c7e9c313efc6f02635c97db62a7e9e470a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/index.md",
+    "block": 2,
+    "source_line": 29,
+    "sha256": "52769c145620bc2d42f37c4e12d72eb95cd4983f0b410bbc5e7ed53a073d4918",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/index.md",
+    "block": 3,
+    "source_line": 42,
+    "sha256": "0e52b6310a3e471829a46280b6d526eec2396afe877f3bb6e59cb22d3f0e538e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/index.md",
+    "block": 4,
+    "source_line": 65,
+    "sha256": "cbeaa1aa61d6275764b52fcbd361646ae1c9155dc89b9fd6f04d82594ce52920",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/loops-and-map.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "54d1893c6f711e66d384fc15f5b8ddc03d889523d5c3356e5500861e6e056391",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/loops-and-map.md",
+    "block": 2,
+    "source_line": 25,
+    "sha256": "fe939124ba901cc86a19ffba9bbd2c280c492328b66a5ed398b247424926c4e1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/loops-and-map.md",
+    "block": 3,
+    "source_line": 39,
+    "sha256": "1b04e4397750f562aeb4a42c20b3af0bfc1c2ea70accc594c69b5a18dcd07acc",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/loops-and-map.md",
+    "block": 4,
+    "source_line": 61,
+    "sha256": "92c58cb78cb727ce5ebc054c509803a86722277dc59a130b3a469f658287df4f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/loops-and-map.md",
+    "block": 5,
+    "source_line": 82,
+    "sha256": "c8794471f46307619d9dcf6a92fc33511823a3dfc0684074c99cfc09db160604",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/loops-and-map.md",
+    "block": 6,
+    "source_line": 122,
+    "sha256": "eb06aa3036d81abc22e0b1d5470748ddb0b4ccefd812761c5da2dac6cad3ccd2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "effb1c44a4ad7f6a9331dde94bcd3e91f4df8b2ca9404c68a15705ee460c04ff",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 2,
+    "source_line": 20,
+    "sha256": "0ace00699666d95a022c7540997a9fe9f62dc747c0550c79eef4a281a6555b8b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 3,
+    "source_line": 35,
+    "sha256": "fb961aab96f166423be00f9a205241bb931d3150ef125b223a3adcb9a3d79996",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 4,
+    "source_line": 51,
+    "sha256": "3d6734af9e23524e8f5d44e3518a124bb6d3b4370db0ea3338edd99cbbc1300e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 5,
+    "source_line": 72,
+    "sha256": "c080b7e1093059d49d275bc57cef578030f92d162be35dceeefb2b38d870ee06",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 6,
+    "source_line": 99,
+    "sha256": "11c44d3846b43102d38889ccd0bc0a90a88f85bdf746baf2ef3568877b8059af",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 7,
+    "source_line": 112,
+    "sha256": "6e6de22aad012a4b6986d03f734ef76a93ae4dd46ff0ee9ffd1d92baf4195786",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 8,
+    "source_line": 119,
+    "sha256": "3d107f190b275ab8ae6276f65be182524946826c44d28c20ea54b4de2cb8ae7c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 9,
+    "source_line": 129,
+    "sha256": "74111fcfda3718fb8791c298e5568e562f6a4bb3442d3aa5c4bb81ca0bf6dcbe",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/multiline-and-escaping.md",
+    "block": 10,
+    "source_line": 152,
+    "sha256": "93cfbd6d125db8c7f3b897ca1030f40427ed66d9bd5a0db7b433236baf952ece",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 1,
+    "source_line": 12,
+    "sha256": "887d571a051136abd6e5ce5fd1c0f0031e1e3951dab6f56833982b8292cbeeb8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 2,
+    "source_line": 29,
+    "sha256": "62c4f90b44d3164f5e20a9cc4eae191d400e92ccb608b3af97300165ed4c24ea",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 3,
+    "source_line": 35,
+    "sha256": "903f12db22b43c43438318b1439219a72731faa66c2ca3bbf9e4b61e2fa40aa7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 4,
+    "source_line": 49,
+    "sha256": "c83fb80f89fc23c09d6f7820984610116f0b483de9a483ec6f3dc38c7a7bdab0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 5,
+    "source_line": 67,
+    "sha256": "fb9fea3ad9aef0ab881a1b3f786c34316b8306278d54ba75462a6f0b286a7537",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 6,
+    "source_line": 85,
+    "sha256": "4f20df67872f6079c80504eb5741675bf33c6c5f3fde1de3a6d93e9f9d5cd263",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 7,
+    "source_line": 94,
+    "sha256": "4344bbaefa819008c6eb17565dbcd356df223716897fe458952841b7b6ae392f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 8,
+    "source_line": 107,
+    "sha256": "873e747074cb1344c4e713061a423396ec71648ed2541c2358180d1b1dcf71df",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 9,
+    "source_line": 121,
+    "sha256": "c122bb4619a7822d5a52897a1dbac6c49256e0be2a1c31085f307971f17cee35",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 10,
+    "source_line": 137,
+    "sha256": "cdde369c447a37ba4e7170e279467a318cb9c0040de9f3edd5a129d79b6f065a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 11,
+    "source_line": 152,
+    "sha256": "9bd0212da24a8457e1d87c9e0d63b31bc38763a22599aaf3b6a690b67f1000b9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 12,
+    "source_line": 163,
+    "sha256": "4369a7b6a5212a2f1a2b5dc06f69a55b2b7250907f7ce94058107278dd7de505",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 13,
+    "source_line": 171,
+    "sha256": "83725fda683876cbb32b46e12551f9a1c5e23e7cea51c2a088b8a0f5bd62b743",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 14,
+    "source_line": 180,
+    "sha256": "aa577ab97ea868b0e51319effcc4b015ab1d1e0c47b31c61d87474ed3da88e5a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 15,
+    "source_line": 199,
+    "sha256": "a78315d7e671288844d1a8884f38b0ed35f17cf0a3a71cf96f7dc4544e4c96b7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/outputs-and-assignments.md",
+    "block": 16,
+    "source_line": 206,
+    "sha256": "cbc3b6ff0b33587f5e34b7bc41cf28fa38408a3fdb720ef97f9bbd0242d2fbd9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "3bdd22602001e4cc63dc8584f19e17e5f4f24c1cd611f93779b513bfd34fed81",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 2,
+    "source_line": 19,
+    "sha256": "1e44d8190dbfce0bb5bb67946ad1f4e0608eb07bb976879993c3ad29f08fd57f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 3,
+    "source_line": 31,
+    "sha256": "4e77ce1e726cd2169ecb648d5fe9fc917b360dcdfacd8643aa560260a279998d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 4,
+    "source_line": 43,
+    "sha256": "e9a9682f5e84664ec0fb5c48f81607f04a2754170fd0c181816b1e225f45a359",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 5,
+    "source_line": 63,
+    "sha256": "70db65c0d658669c5a409d80e73008f90bbb13ecb04fdfb214aeb21dfdf1e69a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 6,
+    "source_line": 73,
+    "sha256": "67422e0362934c5d72764a1318576e0fe1a5b0cc1cc7869a4b655f2db34e72d3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 7,
+    "source_line": 84,
+    "sha256": "74be09a5cb4e7de33cd18db02ce770493015567113eebce32cac46a2dc432d9a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 8,
+    "source_line": 103,
+    "sha256": "7de7d2f729991bb85c82a16df1d6eb4d75bf4f9e331e0b2c347fd758c5123eae",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 9,
+    "source_line": 110,
+    "sha256": "1e24616539d0d17454331111a270cc56da5349c2b77e4d0d6acaae47bbf8f2c5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 10,
+    "source_line": 117,
+    "sha256": "be5ba974ba62849225fc639159d8ccc2c42700ca9848279ad5d0b9ab2b7feb3d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 11,
+    "source_line": 135,
+    "sha256": "97241bfb5582be0f76815ec6bfc34e595da890b971d0ea878e1bbf50364167a2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 12,
+    "source_line": 157,
+    "sha256": "c06ac6fdefb74acabfb4cc147a5daa1b450b257003a8a3ac9791abb611af9ed5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/parameters-and-returns.md",
+    "block": 13,
+    "source_line": 171,
+    "sha256": "74b1524c7aa07afe6b3cd0fefbd83f22b59429864c5f2bb5f1609d7f6119de16",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "c74cc772cbc12ecf74603e531a7c0e3311a886a3c17ecffb688ab5c196d2a71a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 2,
+    "source_line": 27,
+    "sha256": "35db869f5c75e3e9c96beec70845b5a2e32cbb9c24d877ec3b53b667903d2026",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 3,
+    "source_line": 48,
+    "sha256": "129961734c41de27525f4708b519f52032825ac594537b35953a6e290370b88f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 4,
+    "source_line": 70,
+    "sha256": "8f30cbd1cd0e89e150b7668edc7eb5b6b4b4539b0f059a9a2751386bdb4742b9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 5,
+    "source_line": 91,
+    "sha256": "cf3baf7effe1b67e384101ddc2431b453b28b088c8a3b0d0d4c9ac055c644581",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 6,
+    "source_line": 113,
+    "sha256": "bdeed42cc1965bc53b72821521493f2fb6663c5c53889408dca48c463018fb16",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 7,
+    "source_line": 136,
+    "sha256": "2b5a822719a59732dc31a7c8aa0b91e1725f8a122978c20bfc01bbd5eb6c3951",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 8,
+    "source_line": 152,
+    "sha256": "fa0c0c84c8e24cea3f07676eb4a8d71ecea7c17dc009c3d0338c8f0eb49497b0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/procedures.md",
+    "block": 9,
+    "source_line": 177,
+    "sha256": "6cfc689b591a1ef43edd73b3cc76bfb228a0678a873b8f189856abd6f6c1d66e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/scopes-and-bindings.md",
+    "block": 1,
+    "source_line": 10,
+    "sha256": "304874491bc8aca12873dc093b86a369b2038b131d8f87aed56171bd5079fe47",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/scopes-and-bindings.md",
+    "block": 2,
+    "source_line": 29,
+    "sha256": "29af7d208bc1a5862ffe86fa67af06fb74fe307948513832adec9b36e65e8150",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "81d0ebe142e93236e2a7c2b90daa3d980acf769f5653e60d48f0a09435f107f5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 2,
+    "source_line": 27,
+    "sha256": "67d9a34632e190084465d7ecd362cbc09eb37ef07486486ac4132d7ff81246b1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 3,
+    "source_line": 57,
+    "sha256": "66b30f85230a920b8969b5ee3b5f7bc3ccd0cffd2b03c43aa68c81bb0e533469",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 4,
+    "source_line": 63,
+    "sha256": "0ac3ab06d6955b36a6e3e152427f489131f3bf90a2fee28c115c545140d51d8f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 5,
+    "source_line": 74,
+    "sha256": "30988075d448cf2746dc97cb2f67e3e56b56fdfa90f7c1db38b19064e4b6ff7b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 6,
+    "source_line": 90,
+    "sha256": "456fe26d0c52916dbdba691afcf1efaaed708bfd3a66c29c7bd0456382ba5b90",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/source-structure.md",
+    "block": 7,
+    "source_line": 106,
+    "sha256": "7a0d0365154789a2b266c8a178599e51a85696362a8f0c5838366b6b44622c5a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "f1b316f2e1ef996402f9ae378a6c8b888dee939334f85d5c4828037b5664c718",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 2,
+    "source_line": 23,
+    "sha256": "f366a1d55d3c19abdd86c4be950f734500d4e749cf6086d214f5e2a6d25d3c98",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 3,
+    "source_line": 40,
+    "sha256": "5d2ae1d5b5308ef4b522d8af5f3341b5f6db9915585146a507824b79007150c4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 4,
+    "source_line": 51,
+    "sha256": "f276a13efe964f53fe7c85b6f8eb28bdca4856f9f45b6c3e0ca68543008eb360",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 5,
+    "source_line": 66,
+    "sha256": "e3acc58131ae92a3837fd8311faf996e9ecaba4aac71fb8d2b20b686a3933a18",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 6,
+    "source_line": 80,
+    "sha256": "c28b8da854619fc3f66061fee7dbc2fe9424338cc81c6212774e885bc39e91b9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 7,
+    "source_line": 99,
+    "sha256": "867a8652c38a0a482bbf31f684d6fcdd098536bf4e6350f11677769ecbcf7c8f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 8,
+    "source_line": 128,
+    "sha256": "c2d03eb516987a39fb0a4c9d5a7e2c57f0fb9f019077d779cdff591e30f8b445",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 9,
+    "source_line": 142,
+    "sha256": "a7dc91499f8598cd60b554da3d46d3f8fb63ed7efe0da1b600c65779ccce8686",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/substitutions-and-calls.md",
+    "block": 10,
+    "source_line": 157,
+    "sha256": "d86601a20e76f3967ca53fce89389b835d196cff85a9b0b1c7b24110f6157673",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/templates-and-invokes.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "05bbf293fbee31b38808aaa0ddaec44e1e894a08924db4ee559f168d2ba40427",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/templates-and-invokes.md",
+    "block": 2,
+    "source_line": 22,
+    "sha256": "aa17c5920fac735d3c52f7af3f02a3e53889aa33378946e6d0124fe6c98ef519",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/templates-and-invokes.md",
+    "block": 3,
+    "source_line": 38,
+    "sha256": "bb687a2570d308c2352dd56d06a7c81f09406a4bf062d2328a59d9e19415fdcb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/templates-and-invokes.md",
+    "block": 4,
+    "source_line": 52,
+    "sha256": "5811c8e04a1e7a8bee1289136fab050447a744689ae5cde5b897d7e0d6fb462d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/templates-and-invokes.md",
+    "block": 5,
+    "source_line": 88,
+    "sha256": "884bfd24b56e39de28c4177e4ff56731fbe19ce985148900960b81b6f74d12d5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 1,
+    "source_line": 18,
+    "sha256": "dd1591b95c9d0212bb74bd5dc665f8a1bb05c076269811c96919db34931068d6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 2,
+    "source_line": 39,
+    "sha256": "dd14ec7f590eac4a70bc1b987efdb332bfe0dc21e58e31ee3dc46a68ba50865d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 3,
+    "source_line": 53,
+    "sha256": "13e7c45b97eabf4d5b09fca2245b504313850171a738014ab98f6d7aa3006ee9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 4,
+    "source_line": 71,
+    "sha256": "e648d09789b612dc2e84f1b2be97c14048d38aa22d87a1e26725c905f0d453c8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 5,
+    "source_line": 97,
+    "sha256": "bd7344f6a28d5597d2451e9680d30751cfb72164d1e8b28d15df53f1522cc883",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 6,
+    "source_line": 110,
+    "sha256": "8ebf9b325dfc4ad058139e534ed8d47006eda2090b02d23abe343b247ce1f18c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 7,
+    "source_line": 129,
+    "sha256": "cec51fcf8e69f357845677a816ca8478612228c006eb8e8396fdc9f416d5825c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 8,
+    "source_line": 151,
+    "sha256": "311d82ccb1de0277ef041eca060a75a21fbf9d7a8affbc4927b7089d6489b794",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 9,
+    "source_line": 179,
+    "sha256": "67112f993d0356eee602f8dbfb3108be1d9d05193909aa1143b7018ed3de82c8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 10,
+    "source_line": 194,
+    "sha256": "4291b743b08cbfc07bc15a6507f6dd9227eeb8434167f1e2b48ac4ae43ca2bea",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "core-language/types.md",
+    "block": 11,
+    "source_line": 214,
+    "sha256": "fae96d74111787b0d0ebbc5ff23ef9f449d5a507e73ef707d1f91e7f680ff8c9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/ai-generated-procedures.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "cfb86dc07c6af6761aee7fa08ce9c429fdd6b9bb8bd7df31c38bb1537c6c0c16",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/ai-generated-procedures.md",
+    "block": 2,
+    "source_line": 27,
+    "sha256": "2ddf84cd5aab624ff73a110b0cb0bd5813ed034e7ea8557ebff6ffc4c734e109",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "e0ac0639047b83e82a0de8311f4539a3e02d84a68aafea442c250c073aede688",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 2,
+    "source_line": 31,
+    "sha256": "bfa7434cc64f7eb7cd9451a079aee578982687092318664e6c4d81ab89d4a3e9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 3,
+    "source_line": 61,
+    "sha256": "e8490b2dfe69871c45d2f30fb093010ccf485815f3fd3cff229a5179014daa7e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 4,
+    "source_line": 78,
+    "sha256": "e249f58bf1075716baacb5275875b9691f35f989f90d7eae28347e606ddf464a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 5,
+    "source_line": 115,
+    "sha256": "3b4e8c727ca57096b40f114aa9fd987b208551a0792a1802cddc9fc8599012e8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 6,
+    "source_line": 126,
+    "sha256": "48aa19bd3bbaebd0879ae04c5e1399a0b36a80989b5749a9466333d4f9f1b1a0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 7,
+    "source_line": 150,
+    "sha256": "7d9f141938be703266d865e0697dbcaff8a579315e3ed1bd8499c933469f0d33",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 8,
+    "source_line": 173,
+    "sha256": "af250e4c2d2114b231dfbcf64946f0a99d0c86f47c378f45574039ac00ad05f5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 9,
+    "source_line": 179,
+    "sha256": "3b7166a1296ca153a640d98c5e7d3d2ee3f509e7d9fb958750d2ca30679d6cf7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 10,
+    "source_line": 192,
+    "sha256": "469257d274c8195bc1803d9e6f91f7c95e8ea1d5bc7deb3d6ac23b4f41f82fa4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/datasets-and-metrics.md",
+    "block": 11,
+    "source_line": 215,
+    "sha256": "6ea1d1a973987c075192667b8533c830be115de6668b626582d36bec8f37f762",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/evaluation-suites.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "c0ed6719a8c3867f803ae79f6bd3a65af2a7a8ddc51abd73d1f9c1ff8b879180",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/evaluation-suites.md",
+    "block": 2,
+    "source_line": 40,
+    "sha256": "26e23cc861667b15529536ce39381814f9f8856ef6a21a36aaa8a3dc29492bb3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/evaluation-suites.md",
+    "block": 3,
+    "source_line": 67,
+    "sha256": "a9e10ff7da8cb7047853d867f098e88af25e6c02dbaaa2bbd4d45e607d35f14b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/index.md",
+    "block": 1,
+    "source_line": 25,
+    "sha256": "7f42f6f2129245fdf5c2b8ab9ab79be9d93816693d166c9d895ed19faf286ffb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/index.md",
+    "block": 2,
+    "source_line": 43,
+    "sha256": "4f6eb2ef1d32763b23474306f59a0ff94568cc8c6749c078178ffdcaa1ec944a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/index.md",
+    "block": 3,
+    "source_line": 64,
+    "sha256": "453501f5be760386020a37c332840252dc2e32e5c05ce96c32dd9e948c1c50f9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/index.md",
+    "block": 4,
+    "source_line": 81,
+    "sha256": "01f4a29a41b0ff00b28ebfb1eb616b0a10972dfaae0a2e8048e6779e3913203f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/prompt-optimization.md",
+    "block": 1,
+    "source_line": 7,
+    "sha256": "67514c13eb0d3d3e5099f90561741efa14ead501ebef2d3d3956d47f7cadc8ce",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/prompt-optimization.md",
+    "block": 2,
+    "source_line": 42,
+    "sha256": "5e2b4ac2a164b22b7926512fe93cbe5cf9267f985e4529b557d6e67918914513",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/prompt-optimization.md",
+    "block": 3,
+    "source_line": 68,
+    "sha256": "5b9340d9df780d4a2a8a938b12b0d30fdeed2d09a7a6fcef45db88d0bc83872e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/prompt-optimization.md",
+    "block": 4,
+    "source_line": 91,
+    "sha256": "01f0cf942aa76ec4a18e3cfd53637dbf4039be2a0ae7dbbe5ca4e617674fbc14",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/prompt-optimization.md",
+    "block": 5,
+    "source_line": 113,
+    "sha256": "64354468c73c39d87b45e33997ab38f147a3aab820c01419bbc388f772200017",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/test-blocks.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "b3e85720fba835fa01e75337f1fc7b311d7a4dc2f7e1db099b3c5b6922a742be",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/test-blocks.md",
+    "block": 2,
+    "source_line": 30,
+    "sha256": "cb3d20fe7f325bdf8551e905eb949d92c221c2dedfedc6e473e830dd4ef452a0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/test-blocks.md",
+    "block": 3,
+    "source_line": 47,
+    "sha256": "473c874ad7b31f7d27e4452383b2f9c16bbd8cc3c4e4cabaea86500fd9fe66b3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/test-blocks.md",
+    "block": 4,
+    "source_line": 78,
+    "sha256": "1b364b1708adbcf844b0a9584f221622ca9beb8500b5552f0ce6e1afc2fe783b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/validation-workflow.md",
+    "block": 1,
+    "source_line": 10,
+    "sha256": "c6622872f9ad86a122e28aede827da6e0be52c6a83919d66fb55888ce95688e2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "evals-and-optimization/validation-workflow.md",
+    "block": 2,
+    "source_line": 59,
+    "sha256": "b3b9f42e1d607dbcf290c7b6b66e32a98a8c20d8c069a9b14cbcf3328017a776",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/agent-delegation.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "710cf63eed69ec16e347d3d62590f8219d7ac17a08e7b467463c300d41589e0f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/complete-program.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "4779ab726e8b52f19532f7cdf85c55b5073838c554a571790979b9dab4ebf3c4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/evaluation-and-optimization.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "710d2abe5cce37312111f8a29a3ebaa9872e91b84a8126b8eee4ca93b1411fe1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/modules-and-packaging.md",
+    "block": 1,
+    "source_line": 23,
+    "sha256": "1ad75d536c6bcabe226f4f27d2907969539ce624fd72970a968e16bc92f87bbb",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/modules-and-packaging.md",
+    "block": 2,
+    "source_line": 48,
+    "sha256": "7b51605b41b89ee37a94884ef6345838e8653c91bca7a06c3030c9c2980bd606",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/modules-and-packaging.md",
+    "block": 3,
+    "source_line": 60,
+    "sha256": "e36525eb7d91ed94686cab9aab5543dc14c331557a3bd086b7bb632e6e000d3a",
+    "parse": "parse-pass",
+    "execution": "not individually executed",
+    "required_filename": "package.kedi"
+  },
+  {
+    "document": "examples/modules-and-packaging.md",
+    "block": 4,
+    "source_line": 82,
+    "sha256": "d46759598f555f852eb50ed53a0b41c33b8b6469062cbbe3b5cfec4d91971f0d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/modules-and-packaging.md",
+    "block": 5,
+    "source_line": 111,
+    "sha256": "6d8f2c945530416ea50339ee9c70c4a1d829b77dad538194f9776f4509bbe4c1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/structured-extraction.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "f0117efb0af66e43304dd21e557912ab53e8e4b7d264ea6cbcdc1d37ad6e6c6c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/structured-extraction.md",
+    "block": 2,
+    "source_line": 53,
+    "sha256": "842fed62dcd2867bcc14d2709f312c7951eba696f17c00e350eadce04a1ba0ea",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/structured-extraction.md",
+    "block": 3,
+    "source_line": 59,
+    "sha256": "65d82a937cb226762252ae19cfec3a20844acf600a647d060b8951ea9ccd2260",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/structured-extraction.md",
+    "block": 4,
+    "source_line": 71,
+    "sha256": "983912c88e9a1a2f27673bab5037a39efc98e818fd76b746892109b1899ea270",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/structured-extraction.md",
+    "block": 5,
+    "source_line": 86,
+    "sha256": "cd59947c9cca9cf94057bd6e2be41633825ba4d0c02cf37307533979c2e39c67",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/structured-extraction.md",
+    "block": 6,
+    "source_line": 107,
+    "sha256": "ba2014ffa82443b99eeebc0691a1aa752d43c521a2c8123e74d085d8a68ac694",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/tools-and-approvals.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "31354377804d0a5564ce1f5f3507c3e0125bf72e750718e92d6aea1d6b3c1e07",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/tools-and-approvals.md",
+    "block": 2,
+    "source_line": 88,
+    "sha256": "8236c619b2fa48a6fe71441aa30efee4d271fc05f049060fe1920350d1341ce6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "examples/tools-and-approvals.md",
+    "block": 3,
+    "source_line": 108,
+    "sha256": "ca4cbe02340ce1ae1515e0d2ddf5ee593f5e10fd41f3a2113d1e817da7a72f44",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 1,
+    "source_line": 14,
+    "sha256": "d84337cbc156c5bcaf91f0718c227cdabc9752497c617574b3313ebe9c9c4ca1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 2,
+    "source_line": 52,
+    "sha256": "0d6eb104fb7668cc6c7f75f987dd5623b383ae938b1122242f824ac1007b132a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 3,
+    "source_line": 67,
+    "sha256": "67911b635b8920433a823b15169c6e1c9c87fbd04a20f7856038279d80540bfa",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 4,
+    "source_line": 104,
+    "sha256": "52ff95b67bf6808dd5a7652c590e401fe0dff1fa47deb32c212b8c7b6c47e63b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 5,
+    "source_line": 117,
+    "sha256": "7472233853e2aa1567c63c4007bfc2ebf9940d65cb4f9d5132c25e26340eb3d0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 6,
+    "source_line": 133,
+    "sha256": "d8c2fec26226fa0502e12c38a04d6d3b42bb0717c1b09e4604c43cdccc341e53",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 7,
+    "source_line": 148,
+    "sha256": "9164f41e6344dfedd0e0d305842586098c5785d0c174ee10fdb22c5287229221",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/first-program.md",
+    "block": 8,
+    "source_line": 160,
+    "sha256": "2428c0ea816a4d3cd49194b1beb2ed198440e89d1238769d9ce643af72fa001f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/index.md",
+    "block": 1,
+    "source_line": 14,
+    "sha256": "83dfb85606b6cd2c39de7c924371de3ad7557a65c8cb22004c7fce955cd01e2f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/index.md",
+    "block": 2,
+    "source_line": 52,
+    "sha256": "d1be22f8fb4aff4f6bef6bd81602efc0ea5ac93d89c6b2ea9837afa7546561ce",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/index.md",
+    "block": 3,
+    "source_line": 60,
+    "sha256": "7579545e29ab7da5bd234fde7bb85afbc355d0b66f7aacebba0c38f2e58e1fc7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/projects-and-execution.md",
+    "block": 1,
+    "source_line": 23,
+    "sha256": "6568cc02da2bd7935595903cc92677290383f4d456453321b1b7314d4b470f8d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "getting-started/projects-and-execution.md",
+    "block": 2,
+    "source_line": 33,
+    "sha256": "e71d318a037521a85124ce59e164df6deeeaeb27aaa4ead6fbc77543dc9ce879",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "index.md",
+    "block": 1,
+    "source_line": 28,
+    "sha256": "571ae60aed56858439473a9f5275ee8b8bd2d5b9b0868aa265c785048c2e3092",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "index.md",
+    "block": 2,
+    "source_line": 67,
+    "sha256": "e87e756e885733e8fc31e59ff6055bc9c558f9ffc01b834d55b9332af57e3f15",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "index.md",
+    "block": 3,
+    "source_line": 84,
+    "sha256": "afe3b228525a66b0d7bc14f2a3d9b878baf70937cfcce34aa8b1a19a45fae272",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/built-in-modules.md",
+    "block": 1,
+    "source_line": 12,
+    "sha256": "2187e40563d42124f20a86a51fa8c6ae8e6eb6ea1c7d5a18c482f6baaaa0b107",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/built-in-modules.md",
+    "block": 2,
+    "source_line": 26,
+    "sha256": "03f58efe937bac4c16b0cf69683892e173e24ec4635dda48d94b9a6a54c85197",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/built-in-modules.md",
+    "block": 3,
+    "source_line": 43,
+    "sha256": "fa085a80234e92f4f89b913ca297088668461d62fbb036079bfc9616e82e93d9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/built-in-modules.md",
+    "block": 4,
+    "source_line": 64,
+    "sha256": "904cd56d6201dddcacb153003f2fd60f5e52208f31d3d68965778523c5214b54",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/built-in-modules.md",
+    "block": 5,
+    "source_line": 90,
+    "sha256": "1e5d88eb00eeecb034cc3ec8da308d8a11302f900673b1f767226ef9125e8a8f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/filesystem.md",
+    "block": 1,
+    "source_line": 23,
+    "sha256": "e83932fb25260b930485a10061b05ddac904fc4a1bb7b246574b2348cf8ff26b",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/filesystem.md",
+    "block": 2,
+    "source_line": 56,
+    "sha256": "eaeffcd2d122d71f690b89724c4c709e5a58617d55576b26280ab89c2479f0b8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/imports-and-exports.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "c65ed4bc01765b5a9565176723ac258878117a0ee4128ea7806749670156c54c",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/imports-and-exports.md",
+    "block": 2,
+    "source_line": 24,
+    "sha256": "6fa83340b3a4b6c5038697e3823b6ff119706c7c78a4114192737932b2d7072f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/imports-and-exports.md",
+    "block": 3,
+    "source_line": 49,
+    "sha256": "fd4bb71211eb0cb0bd244e05ea9a8440f1a115a06701c5492d014453474e6c95",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/imports-and-exports.md",
+    "block": 4,
+    "source_line": 67,
+    "sha256": "db68e1b5857a538367b08a425a714563c4a9b68269b0e6b3f94d4551de28fb1a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/imports-and-exports.md",
+    "block": 5,
+    "source_line": 86,
+    "sha256": "0c6521fc6c520bccfcbfea425ee622f98c99a45c815dd8fbde312ed4caed9870",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/imports-and-exports.md",
+    "block": 6,
+    "source_line": 106,
+    "sha256": "4666d6102a8f3694f6696e317bd0c57fa24109fc71c5c3c410294fdedc0fc19f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/index.md",
+    "block": 1,
+    "source_line": 12,
+    "sha256": "065a013e9235b6823d3de2db6fd734214fd34db4a76c0e08ba7a39c806ad3856",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/index.md",
+    "block": 2,
+    "source_line": 27,
+    "sha256": "4ca5aa743e9b2a4f62f17b644264ec90ff24975f8cfaff595d384b6da710a170",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/installation-and-registries.md",
+    "block": 1,
+    "source_line": 44,
+    "sha256": "affc32a68426c2c374597bafdc29f26ba3e2f093de81314f3f5c51f049118ac0",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/local-package.md",
+    "block": 1,
+    "source_line": 20,
+    "sha256": "c667d0bc6c66faa781d510179555541a7b38955f0214dd30411712b663d45d25",
+    "parse": "parse-pass",
+    "execution": "not individually executed",
+    "required_filename": "package.kedi"
+  },
+  {
+    "document": "modules-and-packaging/local-package.md",
+    "block": 2,
+    "source_line": 29,
+    "sha256": "580de2c09dbcda7fcc715a5829d3a5ff34d0f8d8fa073799293bb3ed8a49f1d7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/local-package.md",
+    "block": 3,
+    "source_line": 39,
+    "sha256": "79809b8c4a5279cf63812824bd4c403e5d968aaf0981de2158d3919590206e51",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/local-package.md",
+    "block": 4,
+    "source_line": 49,
+    "sha256": "f1dd8365e1dad7215395d95ab76288c11aec5460b80d7b830b462fc620e26208",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/modules.md",
+    "block": 1,
+    "source_line": 21,
+    "sha256": "daf092301dd7c0e08eeaa8074bc51a97e4e21f1b8555348ae675bda7ffbfe405",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/modules.md",
+    "block": 2,
+    "source_line": 69,
+    "sha256": "15a38a3e575a0c522d28621c2291f870beceffb5275102efa0a60d028077ef15",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/modules.md",
+    "block": 3,
+    "source_line": 99,
+    "sha256": "e25e1751014460860b5e9cbd71dcdcfc612ce7d0c3cb1c4122c113ea7ef51796",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "modules-and-packaging/package-manifests.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "1da0ae8bfe00140b06d03ae3df93b96aee64f6a6d63f857391e6591eefac5958",
+    "parse": "parse-pass",
+    "execution": "not individually executed",
+    "required_filename": "package.kedi"
+  },
+  {
+    "document": "modules-and-packaging/package-manifests.md",
+    "block": 2,
+    "source_line": 42,
+    "sha256": "fc9671dbbf46668db2e838e746988efa0742ba140db86a313a1e48aa0bf07217",
+    "parse": "parse-pass",
+    "execution": "not individually executed",
+    "required_filename": "package.kedi"
+  },
+  {
+    "document": "modules-and-packaging/package-manifests.md",
+    "block": 3,
+    "source_line": 89,
+    "sha256": "d6464797555026036cab7ea981bb3f46e49282fbbce0269c94e7f1b08c371cc8",
+    "parse": "parse-pass",
+    "execution": "not individually executed",
+    "required_filename": "package.kedi"
+  },
+  {
+    "document": "python-api/bind.md",
+    "block": 1,
+    "source_line": 18,
+    "sha256": "7ad81bb4339e1ea1fd19fa4e784ef3a5a4170470ad8cb364ec9bd7a49666b233",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/index.md",
+    "block": 1,
+    "source_line": 25,
+    "sha256": "518dcc64017f0ed78be33d0d40b8b8dfd8cd6a50549840499014d813c8346d80",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/index.md",
+    "block": 2,
+    "source_line": 56,
+    "sha256": "3e0adf34f44d1172e8cc608742d5adede74f049440505c3f2d44317ed12b558e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 1,
+    "source_line": 8,
+    "sha256": "4b3f4366c4c6143b0f7844bed5006b6e7516003c36a58bbb0d57bd2adcaa0d2e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 2,
+    "source_line": 22,
+    "sha256": "679c77500706a72f9f5cdffd0cf742549190818091d253467df9fc96c05ece2f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 3,
+    "source_line": 36,
+    "sha256": "ec5e006b05935951341b2650360ebbca8aae25e9e6a1ecb02ca0e94046c6f0c1",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 4,
+    "source_line": 43,
+    "sha256": "917ed82616e30f3b5e8360f3b151ace2649a6206049f566db8b39ff18f13fe44",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 5,
+    "source_line": 54,
+    "sha256": "a422b3dc447d8ab6678f6f246a5b27d3520d1309d2c87972dbbaf9c17df29b86",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 6,
+    "source_line": 61,
+    "sha256": "064c98e81997019c0113f242dd2814c1d60e6d264e9c34efedb8cef89aae45f6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 7,
+    "source_line": 73,
+    "sha256": "40a58e1a8733024cfa96a555c6541f972da0ab7cc2db850353ec0db1569c8f7d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 8,
+    "source_line": 84,
+    "sha256": "a0035401c5c1b26ad09da98a3ac40ad914d4fd44bcb116775d4658298cc432f5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 9,
+    "source_line": 99,
+    "sha256": "3aa103a4164286d930b0b3bff9bd631f6a5ac1311174d9cf5d3f8cfb29fed265",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 10,
+    "source_line": 118,
+    "sha256": "c3e5fc510ff2cf033b795d09227d214629d5effd6d3f4518e004137da97af638",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 11,
+    "source_line": 138,
+    "sha256": "fbc4c62ef2536bb56143b5a44078fd86c874d667a38c02e8d6a7d4f6b13ea794",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/inline-expressions.md",
+    "block": 12,
+    "source_line": 160,
+    "sha256": "aa90ad00f3e52e24b843f2e252cbe48c389c7a3d9c364e6bc2a622c8cdc14ee2",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 1,
+    "source_line": 12,
+    "sha256": "ef6bd9aa041ecc6eceeefaa902c402a1260996064fa5ebb8d41baa8817ac4081",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 2,
+    "source_line": 36,
+    "sha256": "caa0d19cabfdfbe8e87a4f3e66a6d57d03c72741ef316327e31d231eab6e0d39",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 3,
+    "source_line": 77,
+    "sha256": "d281db40b56d3f17efba9c066a1881c56c468faba8c8cf610470c9bc236a5e03",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 4,
+    "source_line": 98,
+    "sha256": "13ee157fc3f022b52ebf026c41cceb30fadeb74dc7b8fc9d71961974342cbe54",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 5,
+    "source_line": 126,
+    "sha256": "edcaec2da1d20ab93bc6eba8cbece154b8ce66ee38899dda31654d16caede31a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 6,
+    "source_line": 136,
+    "sha256": "229c2466ff47dac1d81816aec689b552b47f2908c7643c0c98b468de765b0296",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 7,
+    "source_line": 163,
+    "sha256": "025b5109612264fd7e9694d310e5e8c1416e4af7a9fc9aba6c1ea21e7fbc63fc",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 8,
+    "source_line": 181,
+    "sha256": "99b9a89a0bcdd181e29add3258310247bff2afe5850826eb70778e271dc84e47",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/prelude-globals-and-scope.md",
+    "block": 9,
+    "source_line": 195,
+    "sha256": "7c08a7ff4188cf81d0137384d35bc08d4129d75cb6cb64e30df9a75f3b2fea80",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "fa7472883c7e945453c75b7cd5565f3f9ecdf35c2ac319c07b60af5efa62be67",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 2,
+    "source_line": 32,
+    "sha256": "ca4974ccf02001a7de8d42d7da4ef1ebcc6504f50ad00fe552d051d6c1be886f",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 3,
+    "source_line": 44,
+    "sha256": "0ccf6df67cf74a72f7b25b811f8273f85beac1682a89008e7eeedefdc855e808",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 4,
+    "source_line": 63,
+    "sha256": "075741bd9e60532c983f25a074e3d386e10d432d1a76785e97b1cff847623dd8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 5,
+    "source_line": 78,
+    "sha256": "c2cdd9837759bb712e870c8d2fb7f34660afff98cc1a7b9aa18c56bd16cd61e7",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 6,
+    "source_line": 94,
+    "sha256": "a1f7d33ddf8bdd5b70a8cd6ce1c613bbfdf3d715a4568bf413898af99b9a174a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 7,
+    "source_line": 113,
+    "sha256": "36e957f794bb9e4c406c0899735dc2638d058aaa614f746e6cd96ec201b7d32e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 8,
+    "source_line": 131,
+    "sha256": "aacbe4e1f51f0fa880b6c9b544cca1cfdd010bdb3f9b5134ca0b63913b8b0ad5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "python-interop/python-blocks.md",
+    "block": 9,
+    "source_line": 154,
+    "sha256": "08134c1a20397fd992e35b4cc986784e2d8c3905456364804a3b602ac2976138",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/cli.md",
+    "block": 1,
+    "source_line": 117,
+    "sha256": "91172eeee9e7b3098ae32a1e79930522f7ffe5daa3bf21793e3b6714e41fc7b8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/directives.md",
+    "block": 1,
+    "source_line": 77,
+    "sha256": "c9541494daf7e4212271b583883859bdc97edaf483eac9763c4c3313bd78767a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/directives.md",
+    "block": 2,
+    "source_line": 161,
+    "sha256": "3d730f011418153c2a1f2f44968a59c69014a67c4b9aea4225d047f14abf53c5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/package-manifest.md",
+    "block": 1,
+    "source_line": 5,
+    "sha256": "8ae2655748e4e40e113ff892e0f1749bd3f4c41474236da5575069be80afba86",
+    "parse": "parse-pass",
+    "execution": "not individually executed",
+    "required_filename": "package.kedi"
+  },
+  {
+    "document": "reference/syntax.md",
+    "block": 1,
+    "source_line": 47,
+    "sha256": "cc88e9e275b8ec06bf6d5ec6e1776b20b2c4fd0e1eefd1f9fa8e67adaaf84e48",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/syntax.md",
+    "block": 2,
+    "source_line": 61,
+    "sha256": "490a0390d9fba2f4888e7caed8572b1941ba802382f65238d664f6778b5fc6f5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/syntax.md",
+    "block": 3,
+    "source_line": 70,
+    "sha256": "ecb23bc1a0397df27b0ff58db7c87057f35760cc7ea5a73d9201242a260d0d7d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "reference/syntax.md",
+    "block": 4,
+    "source_line": 98,
+    "sha256": "801aa146ef3725e9d5a79f3630c02c4c510cf241b3a62dce5ede2a1530de97e3",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/artifact-policy.md",
+    "block": 1,
+    "source_line": 45,
+    "sha256": "74778557c1e627ca98774f09239523553cf24113654a8b8081f7cc9deac824d5",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/artifact-policy.md",
+    "block": 2,
+    "source_line": 65,
+    "sha256": "e45b3eea5351c019d61f5695a7c0c6dab72bd9c4329a9611a38cc6a74d8f1d5a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/artifact-policy.md",
+    "block": 3,
+    "source_line": 100,
+    "sha256": "23350f527de28f8a0504cf7d1db39b71cd5c1daf8480980b9e585b8a599a9d16",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/artifact-policy.md",
+    "block": 4,
+    "source_line": 112,
+    "sha256": "c9ec744f8ae70f734a373fd96f4b265d1e3438f90cceddc26650715e3c4390ff",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/artifact-reduction.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "2ac1a1780298e69692140a5bcbbe8bad9c45e4a2adb93c0c29f9eabf1051c633",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/artifact-retrieval.md",
+    "block": 1,
+    "source_line": 62,
+    "sha256": "0c3d5b85d40b662155f12bbc83e74f04067a7d9591cf655445603d77fd87487d",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/compaction.md",
+    "block": 1,
+    "source_line": 15,
+    "sha256": "34450d875629e19dd730fff15fbd8a956011761277b051c19a7aa0f4a34b2fd9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/compaction.md",
+    "block": 2,
+    "source_line": 36,
+    "sha256": "870d7f2472d94fd376fd093f305b7396365b7671d4e61baae258a050ec2ba436",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/concurrency.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "e7cacf71fa632d7049fe706d0c0d3c89a16fd5b07c9c4c33f955e4e8129ca20e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/concurrency.md",
+    "block": 2,
+    "source_line": 52,
+    "sha256": "fa5e6d5ac247b12f7254b77af463896ce11485e9664f0f37860c1aa58220a74e",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/errors-and-debugging.md",
+    "block": 1,
+    "source_line": 68,
+    "sha256": "7570235dad82bf29be3e006c68db45c93649cf7bea2fc4a9073cc0cd1cf3fe3a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/execution-and-dataflow.md",
+    "block": 1,
+    "source_line": 27,
+    "sha256": "a56d5da38a44ff61dad19d0414cc84b1fdba27da8abcd1d4140d1d8f32304445",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/execution-and-dataflow.md",
+    "block": 2,
+    "source_line": 54,
+    "sha256": "d0cbcc1176ee7f392b312c3d9eb9bf46120c2a9d4786439691df7ad16c460454",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/execution-and-dataflow.md",
+    "block": 3,
+    "source_line": 70,
+    "sha256": "a16c3b2d6e13d84183e0bade3cc4eb1e61f53bbcfd6ea9ce6f0a8083b52f4b83",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/execution-and-dataflow.md",
+    "block": 4,
+    "source_line": 83,
+    "sha256": "46266358354bff13061b4d9e086869c55e7651b474c1558714ce0ea00ca864f6",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/history.md",
+    "block": 1,
+    "source_line": 11,
+    "sha256": "3bc11c61f02ad9ac27144d306018695d57498a2195ee8e65d28c939a2efc3ab4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/history.md",
+    "block": 2,
+    "source_line": 72,
+    "sha256": "b7032dfab12baeb7c7a60ecbd97b990890c93abe06be4867dcc9e7cd01e57257",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/history.md",
+    "block": 3,
+    "source_line": 106,
+    "sha256": "178ea39cf21469d29566d29a86f3ad34351e90f91327167dabec74568bc322e8",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/run-budgets.md",
+    "block": 1,
+    "source_line": 9,
+    "sha256": "0c1496af3b6a60ac657bf561f3adb2f78c7bc925bcdf57b0cf4a10679ff25dd9",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/tool-artifacts.md",
+    "block": 1,
+    "source_line": 105,
+    "sha256": "a98c2a849a220e9a87a0f58bb6dc55ad66dbb09d4c0f5b33e5b8fcf803c41219",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "runtime/tool-artifacts.md",
+    "block": 2,
+    "source_line": 123,
+    "sha256": "1f0982f6b175dfb75d4e3d80d38f13cad15ee9dccfa8209cdea0150e39ddaf00",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "tooling/debugger.md",
+    "block": 1,
+    "source_line": 38,
+    "sha256": "28a800390834b177e930a6aa0b2492487d0cbe4f6414ae15ee4e2e22f25588ea",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "tooling/debugger.md",
+    "block": 2,
+    "source_line": 124,
+    "sha256": "c9989575a88d5126cd8279915b72893d71a30b7d20cd29ec303fecd62074148a",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "tooling/notebook.md",
+    "block": 1,
+    "source_line": 115,
+    "sha256": "80e3d561109234735b38013c524ca04a255cff5cb13cbe950e66d31914c9fdf4",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "tooling/notebook.md",
+    "block": 2,
+    "source_line": 121,
+    "sha256": "12dcfbc2c59298e030bdf48a81a55844ef9714faf88650408357f2c7260b3bec",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  },
+  {
+    "document": "tooling/run-and-parse.md",
+    "block": 1,
+    "source_line": 31,
+    "sha256": "0580ef1319ba605b4667200c5190d8ac722e7e17d45da800238c645cd7c859aa",
+    "parse": "parse-pass",
+    "execution": "not individually executed"
+  }
+]

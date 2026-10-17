@@ -1,0 +1,5 @@
+@greet(name: str) -> str:
+  = Package hello, <name>.
+
+> export:
+  greet

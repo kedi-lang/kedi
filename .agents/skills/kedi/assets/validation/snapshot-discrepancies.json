@@ -1,0 +1,27 @@
+[
+  {
+    "id": "imported-keyword-call",
+    "intended": "Imported Kedi procedure callable accepts Python keyword arguments.",
+    "observed": "TypeError: _make_generic_proc_wrapper.<locals>.wrapper() got an unexpected keyword argument discount_percent",
+    "files": {
+      "pricing.kedi": "~Quote(subtotal: int, discount: int, total: int)\n\n@quote(subtotal: int, discount_percent: int = `0`) -> Quote:\n  [discount: int] = `subtotal * discount_percent // 100`\n  = `Quote(subtotal=subtotal, discount=discount, total=subtotal-discount)`\n\n> export:\n  Quote\n  quote\n\n@test: quote:\n  > case: discount:\n    `assert quote(1000, 10).total == 900`\n  > case: no_discount:\n    `assert quote(1000).total == 1000`\n",
+      "main.kedi": "> import: pricing:\n  quote\n= `quote(1000, discount_percent=10)`\n"
+    },
+    "workaround": "Use quote(1000, 10)."
+  },
+  {
+    "id": "nested-global-writeback",
+    "intended": "count == 2 after nested function writes.",
+    "observed": 0,
+    "expected": 2,
+    "source": "[count: int] = `0`\n```\ndef increment():\n    global count\n    count += 1\nincrement()\nincrement()\n```\n= `count`\n",
+    "workaround": "Return a value from helper and directly assign count in enclosing Python block."
+  },
+  {
+    "id": "metric-inline-followed-main",
+    "intended": "Valid metric followed by independent main return.",
+    "observed": "KediParseError: unexpected syntax on the metric return.",
+    "source": "@normalize(value: str) -> str:\n  = `value.strip().lower()`\n\n@eval: normalize:\n  > data: cases:\n    = `[(\" KEDI \", {\"text\": \"kedi\"})]`\n  > metric: exact(cases):\n    = `normalize(cases) == expected[\"text\"]`\n\n= `normalize(\" Kedi \")`\n",
+    "workaround": "Use a fenced Python return for the metric or put no main return after the suite."
+  }
+]

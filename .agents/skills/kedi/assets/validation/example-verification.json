@@ -1,0 +1,151 @@
+{
+  "versions": {
+    "kedi": "0.4.0",
+    "tree-sitter": "0.25.2",
+    "tree-sitter-kedi": "0.4.1",
+    "pydantic": "2.13.5",
+    "pydantic-ai-slim": "2.54.0"
+  },
+  "python": "3.12.14",
+  "live_provider_calls": false,
+  "checks": [
+    {
+      "name": "all example files: CST and Kedi AST",
+      "ok": true
+    },
+    {
+      "name": "hello.kedi",
+      "ok": true
+    },
+    {
+      "name": "control_flow.kedi",
+      "ok": true
+    },
+    {
+      "name": "map_batch.kedi",
+      "ok": true
+    },
+    {
+      "name": "python_scope.kedi",
+      "ok": true
+    },
+    {
+      "name": "constraints.kedi",
+      "ok": true
+    },
+    {
+      "name": "public_api.kedi",
+      "ok": true
+    },
+    {
+      "name": "native models and sole call RHS",
+      "ok": true
+    },
+    {
+      "name": "relative module import and positional call",
+      "ok": true
+    },
+    {
+      "name": "native return vs rendered variable RHS",
+      "ok": true
+    },
+    {
+      "name": "CLI typed argument conversion and defaults",
+      "ok": true
+    },
+    {
+      "name": "native @test suites and held-out @eval",
+      "ok": true
+    },
+    {
+      "name": "package install and import in isolated registry",
+      "ok": true
+    },
+    {
+      "name": "Python query and file bind",
+      "ok": true
+    },
+    {
+      "name": "typed nested extraction",
+      "ok": true
+    },
+    {
+      "name": "dependent structured model pipeline",
+      "ok": true
+    },
+    {
+      "name": "raw invokes and ordered stateful history",
+      "ok": true
+    },
+    {
+      "name": "model-classified branch",
+      "ok": true
+    },
+    {
+      "name": "model map preserves iteration association",
+      "ok": true
+    },
+    {
+      "name": "profile uses real read-only tool body",
+      "ok": true
+    },
+    {
+      "name": "two native tasks and typed await results",
+      "ok": true
+    },
+    {
+      "name": "version-gated eager capability composition",
+      "ok": true
+    },
+    {
+      "name": "request budget rejects dependent second generation",
+      "ok": true
+    },
+    {
+      "name": "optimize span executes original typed template",
+      "ok": true
+    },
+    {
+      "name": "reject removed system directive",
+      "ok": true
+    },
+    {
+      "name": "reject bare template",
+      "ok": true
+    },
+    {
+      "name": "reject typed assignment",
+      "ok": true
+    },
+    {
+      "name": "reject orphan map",
+      "ok": true
+    },
+    {
+      "name": "reject unreachable statement",
+      "ok": true
+    },
+    {
+      "name": "reject raw capture with output fields",
+      "ok": true
+    },
+    {
+      "name": "reject string supplied to int parameter",
+      "ok": true
+    },
+    {
+      "name": "reject unannotated non-string return",
+      "ok": true
+    },
+    {
+      "name": "reject truthy non-bool condition",
+      "ok": true
+    },
+    {
+      "name": "reject assignment violates type",
+      "ok": true
+    }
+  ],
+  "passed": 34,
+  "total": 34
+}

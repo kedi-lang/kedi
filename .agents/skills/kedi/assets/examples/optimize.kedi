@@ -1,0 +1,16 @@
+@extract_owner(ticket: str) -> str:
+  > optimize: owner:
+    >> The owner explicitly named in <ticket> is [owner: str].
+  = `owner`
+
+@eval: extract_owner:
+  > data: tickets:
+    = `[("Owner: Ada", {"owner": "Ada"})]`
+  > test_data: tickets:
+    = `[("Assigned to Ada", {"owner": "Ada"})]`
+  > metric: exact(tickets):
+    = ```
+    return extract_owner(tickets) == expected["owner"]
+    ```
+
+= `extract_owner("Owner: Ada")`

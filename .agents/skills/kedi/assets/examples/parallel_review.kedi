@@ -1,0 +1,27 @@
+~Review(issue: str, recommendation: str)
+~CombinedReview(security: Review, reliability: Review)
+
+> profile: security:
+  > instructions: Review authorization and data exposure in the supplied change.
+
+> profile: reliability:
+  > instructions: Review failure handling and resource cleanup in the supplied change.
+
+> profile: coordinator:
+  > subagent: security
+  > subagent: reliability
+  > max_agents: 2
+
+@review_change(change: str) -> CombinedReview:
+  > use: coordinator
+  > task [security_job]: security:
+    >> Review this change: <change>
+    The actionable finding is [review: Review].
+  > task [reliability_job]: reliability:
+    >> Review this change: <change>
+    The actionable finding is [review: Review].
+  > await [security_result]: security_job
+  > await [reliability_result]: reliability_job
+  = `CombinedReview(security=security_result.output.review, reliability=reliability_result.output.review)`
+
+= `review_change("An endpoint accepts any account id. It closes its connection only on success.")`

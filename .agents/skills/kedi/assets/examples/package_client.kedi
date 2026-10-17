@@ -1,0 +1,4 @@
+> import: skill_demo:
+  greet
+
+= <greet(Kedi)>

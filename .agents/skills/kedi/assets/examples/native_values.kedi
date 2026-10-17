@@ -1,0 +1,9 @@
+~Line(label: str, units: int, unit_price: int)
+~Invoice(total: int, labels: list[str])
+
+@invoice(lines: list[Line]) -> Invoice:
+  = `Invoice(total=sum(line.units * line.unit_price for line in lines), labels=[line.label for line in lines])`
+
+[lines: list[Line]] = `[Line(label="book", units=2, unit_price=15), Line(label="pen", units=3, unit_price=2)]`
+[result: Invoice] = <invoice(`lines`)>
+= `result`

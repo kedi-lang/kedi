@@ -1,0 +1,22 @@
+```
+release_index = {"1.4.0": "Typed child results and cancellation cleanup."}
+```
+
+@lookup_release(version: str) -> str:
+  ###
+  Read the local release notes for one exact version.
+
+  Args:
+    version: Exact release version in the local index.
+  ###
+  > tool:
+    risk: read_only
+  = `release_index[version]`
+
+> profile: release_assistant:
+  > instructions: Call lookup_release for version 1.4.0 before answering. Use only its result.
+  > use: lookup_release
+
+> use: release_assistant
+>> A summary of release 1.4.0 is [summary: str].
+= `summary`
