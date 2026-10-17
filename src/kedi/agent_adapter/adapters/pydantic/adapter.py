@@ -27,6 +27,7 @@ from pydantic_ai import (
     AgentRetries,
     AgentSpec,
     CancellationToken,
+    Conversation,
 )
 from pydantic_ai.agent.abstract import AgentInstructions, AgentMetadata, RunOutputDataT
 from pydantic_ai.capabilities import (
@@ -564,6 +565,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         user_prompt: str | Sequence[UserContent] | None = None,
         *,
         output_type: None = None,
+        conversation: Conversation | None = None,
         message_history: Sequence[ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
@@ -590,6 +592,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         user_prompt: str | Sequence[UserContent] | None = None,
         *,
         output_type: OutputSpec[RunOutputDataT],
+        conversation: Conversation | None = None,
         message_history: Sequence[ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
@@ -615,6 +618,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         user_prompt: str | Sequence[UserContent] | None = None,
         *,
         output_type: OutputSpec[Any] | None = None,
+        conversation: Conversation | None = None,
         message_history: Sequence[ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
@@ -642,6 +646,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             user_prompt,
             {
                 "output_type": output_type,
+                "conversation": conversation,
                 "message_history": message_history,
                 "deferred_tool_results": deferred_tool_results,
                 "conversation_id": conversation_id,

@@ -982,9 +982,7 @@ def _create_subagent_task(
 ) -> asyncio.Task[DelegationResult]:
     """Create a task in an explicitly retained ContextVar context."""
 
-    # Creating inside the copied context works on every supported Python
-    # version, including 3.10 where ``asyncio.create_task(context=...)`` is
-    # unavailable. The task itself remains owned by the current event loop.
+    # Create inside the retained context while keeping ownership in the current loop.
     return cast(
         asyncio.Task[DelegationResult],
         context.run(asyncio.create_task, coroutine, name=name),

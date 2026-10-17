@@ -150,6 +150,33 @@ def test_native_call_arguments_have_documented_precedence() -> None:
     assert observed == [("Explicit instruction.", {"temperature": 0.9, "seed": 7})]
 
 
+@pytest.mark.parametrize("surface", ["run", "iter"])
+def test_native_conversation_preserves_history_identity_and_usage(surface: str) -> None:
+    adapter = PydanticAdapter(TestModel(call_tools=[], custom_output_text="ok"))
+
+    async def run() -> None:
+        first = await adapter.run("First turn")
+        conversation = first.conversation
+        assert conversation.usage.requests == 1
+
+        if surface == "run":
+            second = await adapter.run("Second turn", conversation=conversation)
+        else:
+            async with adapter.iter("Second turn", conversation=conversation) as agent_run:
+                async for _node in agent_run:
+                    pass
+            assert agent_run.result is not None
+            second = agent_run.result
+
+        assert second.output == "ok"
+        assert second.conversation.conversation_id == conversation.conversation_id
+        assert second.conversation.usage.requests == 2
+        assert second.all_messages()[: len(first.all_messages())] == first.all_messages()
+        assert len(second.all_messages()) > len(first.all_messages())
+
+    asyncio.run(run())
+
+
 def test_constructor_preserves_native_provider_model_settings() -> None:
     settings = {
         "openai_prompt_cache_key": "stable-conversation",

@@ -7,17 +7,12 @@ import math
 import os
 import re
 import shlex
-import sys
 import tempfile
 import time
+import tomllib
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised by the Python 3.10 compatibility job.
-    import tomli as tomllib
 
 from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[unresolved-import]
 from harbor.agents.model_connection import ModelConnectionSpec  # ty: ignore[unresolved-import]

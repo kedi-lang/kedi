@@ -9,7 +9,7 @@ environment, and executes outside the checkout with Python isolated mode.
 No editable installation, model credentials, or live model calls are needed.
 
 The cross-platform equivalent, including Windows, is
-`python scripts/check_distribution.py --python 3.10`. It does not require Bash
+`python scripts/check_distribution.py --python 3.11`. It does not require Bash
 or Make. Wheel building requires a C compiler for the parser; ordinary users
 installing published platform wheels do not need that compiler.
 
@@ -19,37 +19,26 @@ optional-command help without installing the optional integrations. All three
 installed console entrypoints are executed: `kedi`, `kedi-terminal-bench`, and
 `kedi-lsp` (including an initialize/shutdown/exit protocol exchange).
 `uv pip check` verifies the production dependency graph before any test-only
-dependencies are installed. CI runs the same check on Python 3.10 through 3.14.
+dependencies are installed. CI runs the same check on Python 3.11 through 3.14.
 `make check-release` includes this gate.
 
-## Linux and Windows CI
+## Supported Python CI
 
-The `platform-python310` matrix expands to two separate jobs, on `ubuntu-latest`
-and `windows-latest`, both using Python 3.10. Each job first builds and installs
-candidate wheels in a clean environment and verifies entrypoints. It then
-installs the locked development dependencies and runs the complete checkout
-test suite with cassette recording disabled. These are separate environments:
-the clean installation must not inherit optional SDKs from development.
+Kedi requires Python 3.11 or newer. The Linux compatibility matrix covers
+Python 3.11 through 3.14, running the complete checkout test suite and clean
+candidate-wheel installation checks. The quality-check matrix uses the same
+versions. The former Python 3.10 job has been removed.
 
-Neither job uses `continue-on-error`. Harbor's sandbox process-group and shell
-lifecycle tests are POSIX-only and are explicitly skipped on native Windows;
-they still run on Linux. Portable Harbor metadata, routing, and model tests
-remain enabled on Windows. This does not claim native Windows support for the
-Linux Harbor sandbox runner.
-JUnit results are uploaded for diagnosis. The existing Linux compatibility
-matrix covers Python 3.11 through 3.14; Python 3.10 is covered by the new job.
-Platform jobs use a pinned pytest-timeout plugin to limit individual tests to
-150 seconds and the test session to 15 minutes. Timeout reports include thread
-stack traces; large response fixtures use short parameter IDs to keep CI logs
-and JUnit reports bounded.
-Configuring a job is not proof it has passed: native Windows and Linux results
-must be checked after the changes and submodule revisions are pushed.
+Clean installation and checkout tests use separate environments: the candidate
+wheel must not inherit optional SDKs from development. Python 3.12 also runs
+the full line/branch coverage gate. Notebook integration runs on Python 3.11;
+the optional Harbor host integration requires Python 3.12.
 
-The initial run `36058616061` passed the complete Linux Python 3.10 job. Windows
-passed clean installation, dependency validation, all entrypoints, and the LSP
-lifecycle, then stopped during test collection because a POSIX Harbor test
-referenced `SIGKILL`. The Windows test suite must be rerun after the platform
-guards are applied; the successful installation alone is not a suite pass.
+Windows CI is currently disabled. The distribution driver still supports
+Windows paths, but a passing Linux job does not establish native Windows
+compatibility. Harbor's sandbox process-group and shell lifecycle tests remain
+POSIX-only. Check CI results after pushing; workflow configuration alone is
+not evidence of a passing run.
 
 ## Parser Version Blocker
 
@@ -68,7 +57,10 @@ This gate is not a substitute for live model tests, notebook browser tests,
 editor interaction tests, or platform-specific extension packaging checks.
 Those remain separate release checks.
 
-## Local Verification, 2026-09-24
+## Historical Local Verification, 2026-09-24
+
+These results predate the Python 3.11 minimum and do not describe the current
+support policy.
 
 - Clean candidate-wheel checks passed on Python 3.10, 3.11, 3.12, and 3.14
   (macOS ARM64). These are installation and behavioral smoke checks, not full

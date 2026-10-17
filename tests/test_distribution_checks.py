@@ -28,14 +28,14 @@ def test_clean_distribution_uses_platform_paths_and_local_wheels(
 
     monkeypatch.setattr(check_distribution, "os", SimpleNamespace(name=platform, environ={}))
     monkeypatch.setattr(
-        check_distribution.sys, "argv", ["check_distribution.py", "--python", "3.10"]
+        check_distribution.sys, "argv", ["check_distribution.py", "--python", "3.11"]
     )
     monkeypatch.setattr(check_distribution.subprocess, "run", run)
     check_distribution.main()
 
     assert len(calls) == 6
     for command, _ in calls[:3]:
-        assert command[command.index("--python") + 1] == "3.10"
+        assert command[command.index("--python") + 1] == "3.11"
     install, directory = calls[3]
     python = directory / "venv" / python_path
     assert install[:5] == ["uv", "pip", "install", "--python", str(python)]
@@ -64,7 +64,7 @@ def test_distribution_build_failure_propagates_and_cleans_temporary_files(
         raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(
-        check_distribution.sys, "argv", ["check_distribution.py", "--python", "3.10"]
+        check_distribution.sys, "argv", ["check_distribution.py", "--python", "3.11"]
     )
     monkeypatch.setattr(check_distribution.subprocess, "run", fail)
     with pytest.raises(subprocess.CalledProcessError):

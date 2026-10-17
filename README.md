@@ -12,7 +12,7 @@ A typed orchestration language for LLM programs.</p>
 
 <p align="center">
   <a href="https://pypi.org/project/kedi/"><img src="https://img.shields.io/pypi/v/kedi?color=168577" alt="PyPI version"></a>
-  <a href="https://github.com/kedi-lang/kedi/blob/stable/pyproject.toml"><img src="https://img.shields.io/badge/python-3.10%2B-3776ab" alt="Python 3.10 or newer"></a>
+  <a href="https://github.com/kedi-lang/kedi/blob/stable/pyproject.toml"><img src="https://img.shields.io/badge/python-3.11%2B-3776ab" alt="Python 3.11 or newer"></a>
   <a href="https://github.com/kedi-lang/kedi/actions/workflows/tests.yml"><img src="https://github.com/kedi-lang/kedi/actions/workflows/tests.yml/badge.svg?branch=stable" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-555" alt="Apache 2.0 license"></a>
 </p>

@@ -3,7 +3,7 @@ GREEN := \033[1;32m
 RESET := \033[0m
 
 UV ?= uv
-PYTHON_VERSIONS ?= 3.10 3.11 3.12 3.13 3.14
+PYTHON_VERSIONS ?= 3.11 3.12 3.13 3.14
 MATRIX_ENV_ROOT ?= /tmp/kedi-python-matrix
 
 .PHONY: all format check-formatted lint ty basedpyright check check-docs check-release tests coverage check-coverage check-matrix playground-tree-sitter prod

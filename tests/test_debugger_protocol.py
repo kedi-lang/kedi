@@ -409,6 +409,32 @@ def configure(client: Client, program: Path, **arguments: Any) -> None:
     client.until(event="stopped")
 
 
+def test_shutdown_delivers_response_queued_after_writer_timeout(monkeypatch) -> None:
+    output = io.BytesIO()
+    adapter = DebugAdapter(io.BytesIO(), output)
+    message = {"type": "response", "request_seq": 1, "success": True}
+    get = adapter._outgoing.get
+    timed_out = False
+
+    def race(*args, **kwargs):
+        nonlocal timed_out
+        if not timed_out:
+            timed_out = True
+            # Shutdown enqueues its response after get() times out, before the flag check.
+            adapter._outgoing.put(message)
+            adapter._outgoing.put(None)
+            adapter._closed.set()
+            raise queue.Empty
+        return get(*args, **kwargs)
+
+    monkeypatch.setattr(adapter._outgoing, "get", race)
+    adapter._write_client()
+
+    output.seek(0)
+    assert read_message(output) == message
+    assert read_message(output) is None
+
+
 def test_initialize_and_disconnect_without_runtime_dependencies() -> None:
     environment = {**os.environ, "PYTHONPATH": str(DEBUGGER_SRC)}
     initialize = {"seq": 1, "type": "request", "command": "initialize", "arguments": {}}
@@ -846,6 +872,47 @@ def test_nonconsuming_client_has_bounded_backpressure_and_cleanup(
             released.set()
     finally:
         released.set()
+
+
+@pytest.mark.parametrize("state", ["exited", "exiting", "running"])
+@pytest.mark.parametrize("denied_signal", ["SIGTERM", "SIGKILL"])
+def test_posix_group_permission_error_requires_confirmed_worker_exit(
+    monkeypatch, state, denied_signal
+) -> None:
+    from types import SimpleNamespace
+
+    import kedi_debugger.server as server
+
+    process = Mock()
+    process.pid = 123456
+    process.returncode = 0 if state == "exited" else None
+    process.poll.side_effect = lambda: process.returncode
+
+    def wait(*, timeout):
+        if state == "running" or (state == "exiting" and process.wait.call_count == 1):
+            raise subprocess.TimeoutExpired("worker", timeout)
+        process.returncode = 0
+        return 0
+
+    process.wait.side_effect = wait
+    calls = []
+
+    def signal_group(pid, signal):
+        assert pid == process.pid
+        calls.append(signal)
+        if signal == getattr(server.signal, denied_signal):
+            raise PermissionError("Cannot signal group")
+
+    monkeypatch.setattr(server, "os", SimpleNamespace(name="posix", killpg=signal_group))
+    adapter = DebugAdapter(io.BytesIO(), io.BytesIO())
+    adapter._process = process
+    if state != "running":
+        adapter._stop_worker()
+        assert calls == [server.signal.SIGTERM, server.signal.SIGKILL]
+    else:
+        with pytest.raises(PermissionError, match="Cannot signal group"):
+            adapter._stop_worker()
+    process.kill.assert_not_called()
 
 
 @pytest.mark.parametrize("result", ["success", "already_exited", "failure", "nonzero"])

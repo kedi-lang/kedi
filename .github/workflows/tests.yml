@@ -39,51 +39,6 @@ jobs:
       - name: Validate installed release wheels outside the checkout
         run: python scripts/check_distribution.py --python ${{ matrix.python-version }}
 
-  platform-python310:
-    name: Python 3.10 install and tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          submodules: recursive
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          version: "0.11.21"
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.10"
-
-      - name: Verify clean wheel installation, dependencies, and entrypoints
-        run: python scripts/check_distribution.py --python 3.10
-
-      - name: Install locked test dependencies
-        run: uv sync --locked --dev --python 3.10
-
-      - name: Run complete test suite
-        run: >-
-          uv run --locked --with pytest-timeout==2.4.0 --group dev --python 3.10
-          pytest --record-mode=none -q --tb=short -p no:cov
-          --timeout=150 --session-timeout=900 -o faulthandler_timeout=120
-          --junitxml=test-results.xml
-
-      - name: Upload test results
-        if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: python310-tests-${{ matrix.os }}
-          path: test-results.xml
-          if-no-files-found: ignore
-
   coverage:
     # Python 3.11 misattributes exit arcs after async context managers.
     # Keep compatibility testing there, but measure branches on Python 3.12.
