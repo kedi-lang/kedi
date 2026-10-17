@@ -717,11 +717,11 @@ name = "codex-auth-helper"
 version = "1.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "httpx", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "httpx", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev')" },
-    { name = "openai", version = "3.31.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-4-kedi-codex-model' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "pydantic-ai-slim", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "typing-extensions", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "openai", version = "3.31.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "pydantic-ai-slim", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "typing-extensions", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/80/47/0edb7a7adafee1f9d419e7b7892887ae8dfc95586721604217baadbeaee1/codex_auth_helper-1.10.1.tar.gz", hash = "sha256:9ee11caab511c7e204bccc8155b2e3d3b0044d729d1a547bc1bb1e31f3056239", size = 33364, upload-time = "2026-10-06T01:07:14.862Z" }
 wheels = [
@@ -730,7 +730,7 @@ wheels = [
 
 [package.optional-dependencies]
 websocket = [
-    { name = "openai", version = "3.31.0", source = { registry = "https://pypi.org/simple" }, extra = ["realtime"], marker = "extra == 'extra-4-kedi-codex-model' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "openai", version = "3.31.0", source = { registry = "https://pypi.org/simple" }, extra = ["realtime"], marker = "extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
 ]
 
 [[package]]
@@ -2179,6 +2179,7 @@ dev = [
     { name = "basedpyright" },
     { name = "cassetter", extra = ["httpx"], marker = "(extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra != 'extra-4-kedi-typesafe' and extra == 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
     { name = "claude-agent-sdk" },
+    { name = "codex-auth-helper", extra = ["websocket"], marker = "(extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra != 'extra-4-kedi-typesafe' and extra == 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
     { name = "coverage" },
     { name = "dspy" },
     { name = "groq" },
@@ -2250,6 +2251,7 @@ dev = [
     { name = "basedpyright", specifier = "==1.39.6" },
     { name = "cassetter", extras = ["httpx"], specifier = "==0.5.0" },
     { name = "claude-agent-sdk", specifier = "==0.2.163" },
+    { name = "codex-auth-helper", extras = ["websocket"], specifier = "==1.10.1" },
     { name = "coverage", specifier = "==7.14.1" },
     { name = "dspy", specifier = "==3.4.0" },
     { name = "groq", specifier = "==1.7.0" },

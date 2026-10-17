@@ -185,6 +185,7 @@ dev = [
     "basedpyright==1.39.6",
     "cassetter[httpx]==0.5.0",
     "claude-agent-sdk==0.2.163",
+    "codex-auth-helper[websocket]==1.10.1",
     "coverage==7.14.1",
     "dspy==3.4.0",
     "groq==1.7.0",
