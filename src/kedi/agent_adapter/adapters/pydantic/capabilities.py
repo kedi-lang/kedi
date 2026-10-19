@@ -6,15 +6,19 @@ from typing import (
     Any,
 )
 
+from jsonschema.validators import validator_for
+from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai.capabilities import (
     AbstractCapability,
     HandleDeferredToolCalls,
+    OutputContext,
     ValidatedToolArgs,
     WrapRunHandler,
     WrapToolExecuteHandler,
 )
 from pydantic_ai.exceptions import (
     ApprovalRequired,
+    ModelRetry,
 )
 from pydantic_ai.messages import (
     ModelResponse,
@@ -44,6 +48,7 @@ from kedi.agent_adapter.tools.execution import (
 from kedi.agent_adapter.tools.scope import current_artifact_admission
 from kedi.agent_adapter.tools.specs import tool_has_artifact_boundary
 from kedi.artifacts.policy import warn_unmatched_tool_exclusions
+from kedi.agent_adapter.subagents import SubagentOutputState
 
 from .tools import _validate_required_tool_calls
 
@@ -51,6 +56,65 @@ if TYPE_CHECKING:
     from pydantic_ai.agent import AgentRunResult
 
     from kedi.agent_adapter.adapters.pydantic.adapter import PydanticAdapter
+
+
+class _SubagentOutputValidation(AbstractCapability[Any]):
+    """Enforce the full child schema inside the native output retry loop."""
+
+    def __init__(
+        self, schema: dict[str, Any], output_state: SubagentOutputState | None = None
+    ) -> None:
+        self.validator = validator_for(schema)(schema)
+        self.output_state = output_state
+
+    async def after_output_validate(
+        self,
+        ctx: RunContext[Any],
+        *,
+        output_context: OutputContext,
+        output: Any,
+    ) -> Any:
+        issues = []
+        for issue in self.validator.iter_errors(output):
+            detail = (
+                f"length {len(issue.instance)} exceeds maxLength {issue.validator_value}"
+                if issue.validator == "maxLength" and isinstance(issue.instance, str)
+                else issue.message[:320]
+            )
+            issues.append(f"{issue.json_path}: {detail}")
+            if len(issues) == 8:
+                break
+        if issues:
+            feedback = "\n".join(issues)
+            raise ModelRetry(
+                "Subagent output does not match its JSON Schema:\n"
+                f"{feedback[:3600]}\n"
+                "Return a corrected object with task_summary and final_result as root siblings."
+            )
+        if self.output_state is not None:
+            try:
+                typed = self.output_state.validate_candidate(output["final_result"])
+            except PydanticValidationError as exc:
+                issues = [
+                    f"final_result.{'.'.join(map(str, error['loc']))}: {error['msg'][:320]}"
+                    for error in exc.errors(include_input=False, include_url=False)[:8]
+                ]
+                raise ModelRetry(
+                    "Subagent final_result failed native validation:\n" + "\n".join(issues)[:3600]
+                ) from exc
+            normalized = {
+                **output,
+                "final_result": self.output_state.adapter.dump_python(typed, mode="json"),
+            }
+            normalized_errors = list(self.validator.iter_errors(normalized))
+            if normalized_errors:
+                raise ModelRetry(
+                    "Subagent final_result serialization violates its JSON Schema at "
+                    f"{normalized_errors[0].json_path}: {normalized_errors[0].message[:320]}"
+                )
+            self.output_state.typed_output = typed
+            return normalized
+        return output
 
 
 class _KediTelemetryCapability(AbstractCapability[Any]):

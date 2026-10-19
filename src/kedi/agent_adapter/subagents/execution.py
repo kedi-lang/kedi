@@ -7,17 +7,21 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pydantic import TypeAdapter
+
 from kedi.agent_adapter.events import bind_agent_run, current_agent_run_identity
 from kedi.agent_adapter.invocation import observe_invocations
 from kedi.agent_adapter.subagents import (
     DelegationResult,
     SubagentConversationContext,
     SubagentExecutionRequest,
+    SubagentOutputState,
     SubagentTurn,
     SupportsSubagentExecution,
     effective_final_schema,
     validate_structured_result,
     wrapped_final_schema,
+    _NO_TYPED_OUTPUT,
 )
 from kedi.agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
 from kedi.agent_adapter.subagents.context import SubagentExecutionContext, _subagent_execution_scope
@@ -72,6 +76,7 @@ async def _execute_run(
     subagent: str,
     task: str,
     final_schema: dict[str, Any] | None,
+    output_state: SubagentOutputState | None,
     parent_profile: Any,
     parent_ceiling: SubagentSafetyCeiling,
     budgets: tuple[DelegationBudget, ...],
@@ -113,7 +118,10 @@ async def _execute_run(
                     _hook_enforcement=enforcement,
                 )
             child_profile, child_ceiling = parent_ceiling.constrain_child(child_profile)
+            uses_profile_output = final_schema is None and child_profile.output_type is not None
             final_schema = effective_final_schema(child_profile, final_schema)
+            if output_state is None and uses_profile_output:
+                output_state = SubagentOutputState(TypeAdapter(child_profile.output_type))
             span.set_attribute(
                 "kedi.subagent.structured_output",
                 final_schema is not None,
@@ -162,6 +170,8 @@ async def _execute_run(
                     ):
                         attempt_task = task
                         while True:
+                            if output_state is not None:
+                                output_state.typed_output = _NO_TYPED_OUTPUT
                             revision = control.begin_attempt()
                             inputs = control.take_pending()
                             if inputs:
@@ -177,6 +187,7 @@ async def _execute_run(
                                         subagent=subagent,
                                         task=attempt_task,
                                         final_schema=final_schema,
+                                        output_state=output_state,
                                         adapter=child_adapter,
                                         profile=child_profile,
                                         tools=child_tools,
@@ -264,6 +275,7 @@ async def _run_child(
     subagent: str,
     task: str,
     final_schema: dict[str, Any] | None,
+    output_state: SubagentOutputState | None,
     adapter: SupportsSubagentExecution,
     profile: Any,
     tools: tuple[Any, ...],
@@ -284,6 +296,7 @@ async def _run_child(
         instructions=instructions,
         approval_ceiling=approval_ceiling,
         usage_limits=remaining,
+        output_state=output_state,
         conversation=conversation,
     )
     effective_task = task
@@ -314,6 +327,13 @@ async def _run_child(
             **run_kwargs,
         )
         result = validate_structured_result(produced, schema)
+        if output_state is not None and output_state.typed_output is _NO_TYPED_OUTPUT:
+            typed = output_state.validate_candidate(result["final_result"])
+            result = validate_structured_result(
+                {**result, "final_result": output_state.adapter.dump_python(typed, mode="json")},
+                schema,
+            )
+            output_state.typed_output = typed
         return DelegationResult(
             run_id=run_id,
             subagent=subagent,

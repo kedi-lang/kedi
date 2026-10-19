@@ -43,7 +43,7 @@ if TYPE_CHECKING:
         OutputContract,
         PromptDraft,
     )
-    from kedi.agent_adapter.subagents import DelegationResult
+    from kedi.agent_adapter.subagents import DelegationResult, SubagentOutputState
     from kedi.agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
     from kedi.agent_adapter.tools.specs import ToolSpec
@@ -642,6 +642,7 @@ class KediRuntime:
         subagent: str,
         task: str,
         final_schema: dict[str, Any] | None,
+        output_state: SubagentOutputState | None = None,
         parent_profile: Any,
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
@@ -654,6 +655,7 @@ class KediRuntime:
             subagent=subagent,
             task=task,
             final_schema=final_schema,
+            output_state=output_state,
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,

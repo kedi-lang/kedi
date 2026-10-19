@@ -12,7 +12,7 @@ Export a facade of typed procedures/models/profiles. Imported profiles retain th
 
 A manifest is **exactly `package.kedi`**, with one `> package: name:` and metadata only. No executable statements/imports. Names use lowercase letters/digits/underscores and start with a letter. `source` is a literal relative directory contained in the package root and must contain `main.kedi`. No parent traversal, symlink escape, or sparse patterns.
 
-Supported metadata: author, contact, license, version, source, python, python_dependencies. Version follows PEP 440. Python requirements use `python@3.11` or inclusive `python@3.11-3.14`, not general pip version syntax. Dependencies are PEP 508 strings and **are not installed by `kedi install`**.
+Supported metadata: author, contact, license, version, source, python, python_dependencies. Version follows PEP 440. Python requirements use `python@3.11` or inclusive `python@3.11-3.14`, not general pip version syntax. Dependencies are PEP 508 strings; `kedi install` and `kedi add` install them into the interpreter running Kedi using its pip or `uv pip --python`. Imports and manifest inspection never install dependencies. A dependency failure preserves the previous Kedi package, but Python environment changes are not rolled back by Kedi.
 
 ```bash
 kedi parse path/to/package.kedi

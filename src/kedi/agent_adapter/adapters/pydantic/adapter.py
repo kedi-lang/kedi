@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from copy import deepcopy
 from collections.abc import AsyncGenerator
 from contextlib import (
     AbstractAsyncContextManager,
@@ -58,6 +59,7 @@ from kedi.agent_adapter.adapters.pydantic.capabilities import (
     _KediAgentEventCapability,
     _KediDeferredApprovalCapability,
     _KediExternalApprovalCapability,
+    _SubagentOutputValidation,
 )
 from kedi.agent_adapter.adapters.pydantic.compat import (
     application_toolset_count,
@@ -113,7 +115,11 @@ from kedi.agent_adapter.models import (
 from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.responses_session import model_responses_session as _model_responses_session
 from kedi.agent_adapter.responses_session import model_responses_turn as _model_responses_turn
-from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
+from kedi.agent_adapter.subagents import (
+    SubagentConversationContext,
+    SubagentExecutionRequest,
+    SubagentOutputState,
+)
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tools.execution import (
@@ -274,6 +280,10 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             f"kedi_pydantic_subagent_conversation_{id(self)}",
             default=None,
         )
+        self._subagent_output_state_var: ContextVar[SubagentOutputState | None] = ContextVar(
+            f"kedi_pydantic_subagent_output_state_{id(self)}",
+            default=None,
+        )
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         if approval_resolution not in {"kedi", "external"}:
@@ -376,6 +386,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
         token = self._subagent_conversation_var.set(request.conversation)
+        output_token = self._subagent_output_state_var.set(request.output_state)
         approval_token = self._approval_resolution_var.set(
             self.subagent_approval_resolution or self.approval_resolution
         )
@@ -388,6 +399,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             ):
                 yield
         finally:
+            self._subagent_output_state_var.reset(output_token)
             self._approval_resolution_var.reset(approval_token)
             self._subagent_conversation_var.reset(token)
 
@@ -439,9 +451,25 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     ) -> Mapping[str, Any]:
         from pydantic_ai.output import StructuredDict
 
+        output_state = self._subagent_output_state_var.get()
+        kwargs["capabilities"] = _with_capability(
+            kwargs.get("capabilities"),
+            _SubagentOutputValidation,
+            lambda: _SubagentOutputValidation(output_schema, output_state),
+        )
+        transport_schema = deepcopy(output_schema)
+        if (
+            transport_schema.get("title") == "KediSubagentResult"
+            and isinstance(transport_schema.get("properties"), dict)
+            and isinstance(transport_schema["properties"].get("task_summary"), dict)
+            and transport_schema["properties"]["task_summary"].get("maxLength") == 1000
+        ):
+            summary = transport_schema["properties"]["task_summary"]
+            summary.pop("maxLength")
+            summary["description"] = summary.get("description", "") + " Maximum 1000 characters."
         result = await self.produce(
             template=template,
-            output_type=cast(Any, StructuredDict(output_schema)),
+            output_type=cast(Any, StructuredDict(transport_schema)),
             **kwargs,
         )
         if not isinstance(result, Mapping):

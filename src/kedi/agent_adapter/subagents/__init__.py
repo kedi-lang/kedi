@@ -25,6 +25,20 @@ if TYPE_CHECKING:
 MAX_FINAL_SCHEMA_BYTES = 32 * 1024
 MAX_FINAL_SCHEMA_DEPTH = 16
 
+_NO_TYPED_OUTPUT = object()
+
+
+@dataclass(slots=True)
+class SubagentOutputState:
+    """Run-local native validation result; never included in persisted child state."""
+
+    adapter: TypeAdapter[Any]
+    typed_output: Any = _NO_TYPED_OUTPUT
+
+    def validate_candidate(self, value: Any) -> Any:
+        """Validate decoded wire JSON while preserving strict native output types."""
+        return self.adapter.validate_json(json.dumps(value, allow_nan=False), strict=True)
+
 
 def effective_final_schema(
     profile: AgentProfile,
@@ -84,6 +98,7 @@ class SubagentExecutionRequest:
     instructions: str | None
     approval_ceiling: tuple[ApprovalPolicy | None, ...]
     usage_limits: SubagentUsageLimits
+    output_state: SubagentOutputState | None = None
     conversation: SubagentConversationContext = field(
         default_factory=lambda: SubagentConversationContext(
             conversation_id=uuid4().hex,

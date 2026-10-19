@@ -384,9 +384,6 @@ class CodeModeSession:
             raise CodeModeExecutionError(
                 f"CodeMode accepts at most {self.limits.max_code_chars} code characters"
             )
-        if restart:
-            await self.reset()
-
         called_tools = self._called_catalog_tools(code)
         unhydrated = sorted(tool.name for tool in called_tools if tool.name not in self._hydrated)
         if unhydrated:
@@ -405,6 +402,8 @@ class CodeModeSession:
         call_count = 0
         total_result_bytes = 0
         host_error: Exception | None = None
+        # Monty can cancel callbacks before feed_run reports cancellation.
+        dispatch_cancelled = False
         handoffs: list[ToolResultHandoff] = []
 
         async def dispatch(
@@ -421,21 +420,13 @@ class CodeModeSession:
                     f"CodeMode allows at most {self.limits.max_nested_calls} nested calls per execution"
                 )
 
-            async def perform() -> Any:
-                task = asyncio.current_task()
-                if task is not None:  # pragma: no branch - coroutine always has a running task
-                    self._active_host_tasks.add(task)
-                try:
-                    return await invoke(tool.name, kwargs)
-                finally:
-                    if task is not None:
-                        self._active_host_tasks.discard(task)
-
             handoff = ToolResultHandoff()
             handoffs.append(handoff)
             with defer_tool_handoff(handoff):
                 async with dispatch_slots, dispatch_gate.enter(sequential=tool.sequential):
-                    result = await perform()
+                    if dispatch_cancelled:
+                        raise asyncio.CancelledError
+                    result = await invoke(tool.name, kwargs)
             try:
                 jsonable, size = _json_boundary_value(result)
                 if size > self.limits.max_tool_result_bytes:
@@ -458,13 +449,22 @@ class CodeModeSession:
             return jsonable
 
         async def call(tool: CodeModeTool, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-            nonlocal host_error
+            nonlocal host_error, dispatch_cancelled
+            task = asyncio.current_task()
+            if task is not None:  # pragma: no branch - coroutine always has a running task
+                self._active_host_tasks.add(task)
             try:
                 return await dispatch(tool, args, kwargs)
+            except asyncio.CancelledError:
+                dispatch_cancelled = True
+                raise
             except Exception as exc:
                 if host_error is None or isinstance(exc, (KediExecutionError, CodeModeResultError)):
                     host_error = exc
                 raise
+            finally:
+                if task is not None:
+                    self._active_host_tasks.discard(task)
 
         external_lookup: dict[str, Any] = {}
         for tool in hydrated_tools:
@@ -480,6 +480,8 @@ class CodeModeSession:
             },
         ) as active:
             async with self._execution_lock:
+                if restart:
+                    await self.reset()
                 session = await self._get_monty_session()
                 capture = CollectString(max_bytes=self.limits.max_print_bytes)
                 error: str | None = None
@@ -492,6 +494,7 @@ class CodeModeSession:
                     )
                     accepted = True
                 except asyncio.CancelledError:
+                    dispatch_cancelled = True
                     await self._cancel_host_tasks()
                     await self.reset()
                     raise

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from .lang import PackageMetadata
+from .package_dependencies import install_python_dependencies
 from .package_manifest import (
     PACKAGE_MANIFEST_NAME,
     load_package_manifest,
@@ -295,6 +296,7 @@ def install_package(
             source_revision=source_revision,
             registry_record=registry_record,
         )
+        install_python_dependencies(prepared.metadata.python_dependencies)
         _commit_staged_package(root, prepared.metadata.name, staging, target)
     except Exception:
         if staging.exists() or staging.is_symlink():

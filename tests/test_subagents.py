@@ -604,6 +604,26 @@ def test_explicit_delegation_schema_overrides_profile_output_type() -> None:
     assert effective_final_schema(profile, explicit) is explicit
 
 
+def test_explicit_delegation_does_not_apply_profile_python_validator() -> None:
+    source = _profiles_source().replace(
+        "    > instructions: Work carefully.\n",
+        "    > instructions: Work carefully.\n    > output: str\n",
+    )
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(parse_program(source), adapter=adapter)
+    manager_definition = runtime._profile_registry["manager"]
+    manager = eval_profile_definition(runtime, manager_definition, build_capture_env(runtime))
+    tool = runtime._resolve_agent_tool_specs(manager, adapter)[0]
+    explicit = {
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    result = asyncio.run(tool.fn(subagent="worker", task="Build a value", final_schema=explicit))
+    assert result["final_result"] == {"value": 7}
+
+
 def test_profile_output_type_must_have_a_json_schema() -> None:
     profile = AgentProfile(name="broken", output_type=SimpleNamespace())
 

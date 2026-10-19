@@ -422,6 +422,54 @@ def test_codemode_replaces_session_after_worker_timeout() -> None:
     asyncio.run(run())
 
 
+def test_codemode_restart_waits_for_active_execution() -> None:
+    async def run() -> None:
+        session = CodeModeSession()
+        session.update_tools([_integer_tool("slow")])
+        session.get_tool_schema(tool_names=["slow"])
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls: list[int] = []
+
+        async def invoke(_name: str, arguments: dict[str, Any]) -> int:
+            calls.append(arguments["value"])
+            started.set()
+            await release.wait()
+            return arguments["value"]
+
+        tasks: list[asyncio.Task[Any]] = []
+        try:
+            tasks.append(
+                asyncio.create_task(
+                    session.execute_code(
+                        code="previous = await slow(value=7)\nprevious", invoke=invoke
+                    )
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=5)
+            tasks.append(
+                asyncio.create_task(session.execute_code(code="42", invoke=invoke, restart=True))
+            )
+            await asyncio.sleep(0)
+            release.set()
+
+            assert await asyncio.wait_for(asyncio.gather(*tasks), timeout=5) == [7, 42]
+            assert calls == [7]
+            assert session.hydrated_names == frozenset({"slow"})
+            assert await session.execute_code(code="previous", invoke=invoke) == {
+                "output": "",
+                "error": "NameError: name 'previous' is not defined",
+            }
+        finally:
+            release.set()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await session.close()
+
+    asyncio.run(run())
+
+
 def test_codemode_chains_dependent_tools_and_bounds_parallel_fanout() -> None:
     async def run() -> None:
         session = CodeModeSession(CodeModeLimits(max_nested_calls=8, max_concurrent_calls=2))
@@ -771,6 +819,49 @@ def test_codemode_direct_cancellation_cancels_active_host_call() -> None:
             await asyncio.wait_for(task, timeout=5)
         await asyncio.wait_for(cancelled.wait(), timeout=5)
         await session.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("sequential", [False, True])
+def test_codemode_cancellation_does_not_start_queued_tools(sequential: bool) -> None:
+    async def run() -> None:
+        session = CodeModeSession(CodeModeLimits(max_concurrent_calls=4))
+        session.update_tools([_integer_tool("slow", sequential=sequential)])
+        session.get_tool_schema(tool_names=["slow"])
+        started: list[int] = []
+        finished: list[int] = []
+        ready = asyncio.Event()
+        expected_active = 1 if sequential else 4
+
+        async def invoke(_name: str, arguments: dict[str, Any]) -> Any:
+            value = arguments["value"]
+            started.append(value)
+            if len(started) == expected_active:
+                ready.set()
+            try:
+                await asyncio.Future()
+            finally:
+                finished.append(value)
+
+        task = asyncio.create_task(
+            session.execute_code(
+                code="import asyncio\nawait asyncio.gather(*[slow(value=i) for i in range(16)])",
+                invoke=invoke,
+            )
+        )
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+            assert await session.execute_code(code="6 * 7", invoke=invoke) == 42
+            assert len(started) == expected_active
+            assert sorted(finished) == sorted(started)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await session.close()
 
     asyncio.run(run())
 

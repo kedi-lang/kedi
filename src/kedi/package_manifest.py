@@ -50,9 +50,8 @@ def validate_package_metadata(
 ) -> None:
     """Validate metadata that tree-sitter syntax alone cannot prove.
 
-    Manifests record metadata rather than installing Python dependencies.  We do
-    nevertheless parse dependency declarations eagerly so invalid package data
-    never reaches the local registry.
+    Parse dependency declarations eagerly so invalid package data never reaches
+    the installer. Reading a manifest does not install its dependencies.
     """
     validate_package_name(metadata.name)
 

@@ -19,7 +19,11 @@ from kedi.agent_adapter.execution import (
     _resolve_deadline,
     current_async_owner_loop,
 )
-from kedi.agent_adapter.subagents import DelegationResult
+from kedi.agent_adapter.subagents import (
+    DelegationResult,
+    SubagentOutputState,
+    _NO_TYPED_OUTPUT,
+)
 from kedi.agent_adapter.subagents.attempts import track_delegation_attempt
 from kedi.agent_adapter.subagents.budget import DelegationBudget
 from kedi.agent_adapter.subagents.control import (
@@ -52,12 +56,12 @@ class SubagentTask:
         self,
         owner: NativeSubagentOwner,
         run_id: str,
-        output_adapter: TypeAdapter[Any] | None = None,
+        output_state: SubagentOutputState | None = None,
     ) -> None:
         self._owner = owner
         self.run_id = run_id
         self._result: SubagentResult | None = None
-        self._output_adapter = output_adapter
+        self._output_state = output_state
 
     @property
     def task_id(self) -> str:
@@ -80,9 +84,12 @@ class SubagentTask:
                 # Another waiter may have published the result while this one was suspended.
                 if self._result is None:
                     result = _result_value(raw)
-                    if self._output_adapter is not None:
-                        output = self._output_adapter.validate_python(result.output, strict=True)
-                        result = replace(result, output=output)
+                    if self._output_state is not None:
+                        if self._output_state.typed_output is _NO_TYPED_OUTPUT:
+                            raise RuntimeError(
+                                "Subagent completed without native output validation"
+                            )
+                        result = replace(result, output=deepcopy(self._output_state.typed_output))
                     self._result = result
             except asyncio.CancelledError:
                 # Cancelling a waiter is not the same as observing a cancelled child.
@@ -205,6 +212,7 @@ class NativeSubagentOwner:
                 )
             if output_adapter is None and child_profile.output_type is not None:
                 output_adapter = TypeAdapter(child_profile.output_type)
+        output_state = SubagentOutputState(output_adapter) if output_adapter is not None else None
         with (
             live_input_scope(current_live_input() or self.inbox),
             track_delegation_attempt(requested_profile=subagent, task=task),
@@ -214,6 +222,7 @@ class NativeSubagentOwner:
                 subagent=subagent,
                 task=task,
                 final_schema=final_schema,
+                output_state=output_state,
                 parent_profile=parent_profile,
                 parent_budget=self.budget_for(parent_profile),
                 parent_concurrency=self._concurrency,
@@ -221,7 +230,7 @@ class NativeSubagentOwner:
                 evaluated_profile=child_profile,
                 retain_for_native_owner=True,
             )
-        native_task = SubagentTask(self, handle.run_id, output_adapter)
+        native_task = SubagentTask(self, handle.run_id, output_state)
         self._tasks[handle.run_id] = native_task
         register_process_child(native_task)
         return native_task

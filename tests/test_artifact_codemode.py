@@ -143,6 +143,40 @@ def test_artifact_code_failure_does_not_poison_reused_pool() -> None:
         manager.close()
 
 
+@pytest.mark.parametrize(
+    ("code", "limits", "error"),
+    [
+        (
+            "while True:\n    pass",
+            ArtifactCodeLimits(max_duration_seconds=0.03),
+            "time limit exceeded",
+        ),
+        (
+            "'x' * 2_000_000",
+            ArtifactCodeLimits(max_memory_bytes=1_000_000),
+            "memory limit exceeded",
+        ),
+        (
+            "def recurse():\n    return recurse()\nrecurse()",
+            ArtifactCodeLimits(max_recursion_depth=30),
+            "maximum recursion depth exceeded",
+        ),
+    ],
+)
+def test_artifact_code_recovers_after_resource_limit(
+    code: str, limits: ArtifactCodeLimits, error: str
+) -> None:
+    manager = ArtifactManager()
+    runtime = ArtifactCodeRuntime(limits=limits)
+    try:
+        with pytest.raises(ArtifactCodeError, match=error):
+            runtime.execute(manager=manager, artifact_refs=[], code=code)
+        assert runtime.execute(manager=manager, artifact_refs=[], code="6 * 7").result == 42
+    finally:
+        runtime.close()
+        manager.close()
+
+
 @pytest.mark.parametrize("code", ["eval('1 + 1')", "exec('value = 2')\nvalue"])
 def test_dynamic_code_stays_inside_monty(code: str) -> None:
     manager = ArtifactManager()
@@ -199,6 +233,9 @@ def test_compute_rejects_invalid_parent_provenance_depth(depth: object) -> None:
         "import os\nos.environ['KEDI_MONTY_SECRET']",
         "import socket",
         "import subprocess",
+        "import json\njson.load(open({path!r}))",
+        "import os\nos.listdir({path!r})",
+        "import os.path\nos.path.getsize({path!r})",
     ],
 )
 def test_artifact_code_has_no_host_access(

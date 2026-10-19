@@ -14,6 +14,7 @@ from kedi.agent_adapter.invocation import InvocationUsage
 from kedi.agent_adapter.subagents import (
     DelegationResult,
     SubagentConversationContext,
+    SubagentOutputState,
     SubagentTurn,
     SupportsSubagentExecution,
     new_subagent_run_id,
@@ -248,6 +249,7 @@ class SubagentCoordinator:
         root_run_id_override: str | None = None,
         evaluated_profile: Any | None = None,
         retain_for_native_owner: bool = False,
+        output_state: SubagentOutputState | None = None,
     ) -> SubagentHandle:
         with self._coordination_lock:
             if self._closed:
@@ -343,6 +345,7 @@ class SubagentCoordinator:
                 subagent=subagent,
                 task=task,
                 final_schema=final_schema,
+                output_state=output_state,
                 parent_profile=parent_profile,
                 parent_ceiling=parent_ceiling,
                 budgets=budgets,
@@ -676,6 +679,7 @@ class SubagentCoordinator:
         concurrency: DelegationConcurrency,
         stack: tuple[tuple[str, str], ...],
         conversation_id: str,
+        output_state: SubagentOutputState | None = None,
     ) -> DelegationResult:
         return await _execution._execute_run(
             self,
@@ -688,6 +692,7 @@ class SubagentCoordinator:
             subagent=subagent,
             task=task,
             final_schema=final_schema,
+            output_state=output_state,
             parent_profile=parent_profile,
             parent_ceiling=parent_ceiling,
             budgets=budgets,
@@ -786,6 +791,7 @@ class SubagentCoordinator:
         instructions: str | None,
         approval_ceiling: tuple[Any, ...],
         conversation: SubagentConversationContext,
+        output_state: SubagentOutputState | None = None,
     ) -> DelegationResult:
         return await _execution._run_child(
             self,
@@ -793,6 +799,7 @@ class SubagentCoordinator:
             subagent=subagent,
             task=task,
             final_schema=final_schema,
+            output_state=output_state,
             adapter=adapter,
             profile=profile,
             tools=tools,
