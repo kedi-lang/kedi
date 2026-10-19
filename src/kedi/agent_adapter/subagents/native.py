@@ -20,9 +20,9 @@ from kedi.agent_adapter.execution import (
     current_async_owner_loop,
 )
 from kedi.agent_adapter.subagents import (
+    _NO_TYPED_OUTPUT,
     DelegationResult,
     SubagentOutputState,
-    _NO_TYPED_OUTPUT,
 )
 from kedi.agent_adapter.subagents.attempts import track_delegation_attempt
 from kedi.agent_adapter.subagents.budget import DelegationBudget

@@ -36,6 +36,7 @@ from kedi.agent_adapter.adapters.pydantic.tools import (
     _approval_request_payload,
 )
 from kedi.agent_adapter.events import AgentMessageResolver
+from kedi.agent_adapter.subagents import SubagentOutputState
 from kedi.agent_adapter.telemetry import (
     native_agent_span_scope,
     native_tool_span_scope,
@@ -48,7 +49,6 @@ from kedi.agent_adapter.tools.execution import (
 from kedi.agent_adapter.tools.scope import current_artifact_admission
 from kedi.agent_adapter.tools.specs import tool_has_artifact_boundary
 from kedi.artifacts.policy import warn_unmatched_tool_exclusions
-from kedi.agent_adapter.subagents import SubagentOutputState
 
 from .tools import _validate_required_tool_calls
 

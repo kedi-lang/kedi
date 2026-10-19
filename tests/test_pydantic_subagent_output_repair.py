@@ -21,10 +21,9 @@ from pydantic_ai.usage import RequestUsage
 
 from kedi.agent_adapter import PydanticAdapter
 from kedi.agent_adapter.execution import use_async_owner_loop
-from kedi.agent_adapter.subagents.runs import SubagentCompleted, SubagentFailed
-from kedi.agent_adapter.subagents import wrapped_final_schema
-from kedi.agent_adapter.subagents import DelegationResult, SubagentOutputState
+from kedi.agent_adapter.subagents import DelegationResult, SubagentOutputState, wrapped_final_schema
 from kedi.agent_adapter.subagents.native import SubagentTask
+from kedi.agent_adapter.subagents.runs import SubagentCompleted, SubagentFailed
 from kedi.lang import compile_program, parse_program
 
 FINAL_SCHEMA = {

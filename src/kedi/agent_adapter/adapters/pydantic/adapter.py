@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-from copy import deepcopy
 from collections.abc import AsyncGenerator
 from contextlib import (
     AbstractAsyncContextManager,
@@ -11,6 +10,7 @@ from contextlib import (
     nullcontext,
 )
 from contextvars import ContextVar
+from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,

@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from kedi.agent_adapter.events import bind_agent_run, current_agent_run_identity
 from kedi.agent_adapter.invocation import observe_invocations
 from kedi.agent_adapter.subagents import (
+    _NO_TYPED_OUTPUT,
     DelegationResult,
     SubagentConversationContext,
     SubagentExecutionRequest,
@@ -21,7 +22,6 @@ from kedi.agent_adapter.subagents import (
     effective_final_schema,
     validate_structured_result,
     wrapped_final_schema,
-    _NO_TYPED_OUTPUT,
 )
 from kedi.agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
 from kedi.agent_adapter.subagents.context import SubagentExecutionContext, _subagent_execution_scope
