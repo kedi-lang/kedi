@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Literal
 
 import click
 from click.core import ParameterSource
@@ -302,6 +303,17 @@ def _run_notebook_command(arguments: list[str]) -> int:
     help="Resume an interactive session snapshot",
 )
 @click.option(
+    "--snapshot-format",
+    type=click.Choice(["portable", "python"]),
+    default=None,
+    help="Interactive snapshot format (portable by default; retains loaded Python mode)",
+)
+@click.option(
+    "--trust-snapshot",
+    is_flag=True,
+    help="Allow executable Python snapshot loading; requires --idle --load",
+)
+@click.option(
     "--highlight/--no-color",
     "highlight_idle",
     default=True,
@@ -345,6 +357,8 @@ def main(
     idle_mode: bool = False,
     record_idle: bool = False,
     load_session_path: Path | None = None,
+    snapshot_format: Literal["portable", "python"] | None = None,
+    trust_snapshot: bool = False,
     highlight_idle: bool = True,
     quiet: bool = False,
     parse_only: bool = False,
@@ -382,6 +396,8 @@ def main(
         else:
             click.echo(ctx.get_help())
         return 0
+    if trust_snapshot and (not idle_mode or load_session_path is None):
+        raise click.UsageError("--trust-snapshot requires --idle --load.")
     if idle_mode:
         if source is not None or command_source is not None:
             raise click.UsageError("--idle does not accept SOURCE or -c/--command.")
@@ -394,15 +410,20 @@ def main(
                 record=record_idle,
                 load_path=load_session_path,
                 highlight=highlight_idle,
+                snapshot_format=snapshot_format,
+                trust_snapshot=trust_snapshot,
             )
         except SessionPersistenceError as exc:
             raise click.ClickException(str(exc)) from exc
     if (
         record_idle
         or load_session_path is not None
+        or snapshot_format is not None
         or ctx.get_parameter_source("highlight_idle") is ParameterSource.COMMANDLINE
     ):
-        raise click.UsageError("--record, --load, --highlight, and --no-color require --idle.")
+        raise click.UsageError(
+            "--record, --load, --snapshot-format, --highlight, and --no-color require --idle."
+        )
     if source == "debug" and command_source is None:
         if list(ctx.args) != ["--stdio"]:
             raise click.UsageError("Usage: kedi debug --stdio (launch a program from your editor)")

@@ -57,6 +57,10 @@ class SessionLoadError(SessionPersistenceError):
     """A session snapshot is invalid, incompatible, or cannot be restored."""
 
 
+class SnapshotTrustRequired(SessionLoadError):
+    """An executable Python snapshot was loaded without explicit trust."""
+
+
 class UnsupportedSessionValue(TypeError):
     """One value cannot be represented without changing its semantics."""
 

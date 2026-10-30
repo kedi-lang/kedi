@@ -10,7 +10,7 @@ import sys
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, TextIO
+from typing import TYPE_CHECKING, Callable, Literal, TextIO
 
 from ._version import __version__
 from .error_rendering import render_execution_error, render_parse_error
@@ -47,6 +47,7 @@ class IdleConsole:
         multiline_reader: Callable[[str], str] | None = None,
         session_path: str | Path | None = None,
         highlight: bool = True,
+        snapshot_format: Literal["portable", "python"] | None = None,
     ) -> None:
         self._session = session
         self._stdin = stdin
@@ -61,6 +62,9 @@ class IdleConsole:
         self._prompt_input: PromptToolkitInput | None = None
         self._session_path = (
             None if session_path is None else Path(session_path).expanduser().resolve()
+        )
+        self._snapshot_format: Literal["portable", "python"] = (
+            session._snapshot_format if snapshot_format is None else snapshot_format
         )
 
     @property
@@ -171,15 +175,23 @@ class IdleConsole:
         """Persist the current session and print the command that resumes it."""
         path = self._session_path or _default_session_path()
         try:
-            dumped = self._session.dump(path).resolve()
+            dumped = self._session.dump(path, format=self._snapshot_format).resolve()
         except Exception as exc:
             self._stderr.write(f"Session dump failed:\n{exc}\n")
             return None
         self._session_path = dumped
         self._stdout.write(f"Session dumped to {dumped}\n")
+        trust_option = " --trust-snapshot" if self._snapshot_format == "python" else ""
         self._stdout.write(
-            f"To resume session, run -- kedi --idle --load {shlex.quote(str(dumped))}\n"
+            f"To resume session, run -- kedi --idle --load {shlex.quote(str(dumped))}"
+            f"{trust_option}\n"
         )
+        if self._snapshot_format == "python":
+            self._stdout.write(
+                "Warning: loading this Python snapshot can execute arbitrary Python code "
+                "and its saved values may contain credentials. Trust only snapshots "
+                "from a trusted source.\n"
+            )
         return dumped
 
     def _execute(self, source: str) -> None:
@@ -313,23 +325,35 @@ def run_idle(
     record: bool = False,
     load_path: str | Path | None = None,
     highlight: bool = True,
+    snapshot_format: Literal["portable", "python"] | None = None,
+    trust_snapshot: bool = False,
 ) -> int:
     """Run a terminal Kedi session with Python-style prompts."""
+    from ._interactive.persistence import SnapshotTrustRequired
     from .api import interactive
     from .interactive_session import load_session
 
     save_history = _configure_readline()
     try:
-        session = (
-            load_session(load_path)
-            if load_path is not None
-            else interactive(adapter=adapter, model=model)
-        )
+        try:
+            session = (
+                load_session(load_path, trusted=trust_snapshot)
+                if load_path is not None
+                else interactive(adapter=adapter, model=model)
+            )
+        except SnapshotTrustRequired as exc:
+            # The API names trusted=True; the terminal user needs the CLI flag.
+            raise SnapshotTrustRequired(
+                "This is a Python snapshot; loading it can execute arbitrary Python code "
+                "and its saved values may contain credentials. Rerun with --trust-snapshot "
+                "only if you trust its source."
+            ) from exc
         with session as active_session:
             console = IdleConsole(
                 active_session,
                 session_path=load_path,
                 highlight=highlight,
+                snapshot_format=snapshot_format,
             )
             try:
                 console.interact()

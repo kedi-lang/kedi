@@ -59,6 +59,8 @@ def test_idle_console_buffers_template_condition_header_without_trailing_colon(
     seen: list[str] = []
 
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, source: str) -> None:
             seen.append(source)
 
@@ -105,6 +107,8 @@ def test_idle_console_ignores_blank_explicit_multiline_fragment() -> None:
     lines = iter([":multiline", ":exit"])
 
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise AssertionError("blank multiline source must not execute")
 
@@ -146,7 +150,7 @@ def test_idle_console_lazily_shares_prompt_toolkit_input(monkeypatch: Any) -> No
     monkeypatch.setattr(stdin, "isatty", lambda: True)
     monkeypatch.setattr(stdout, "isatty", lambda: True)
     console = IdleConsole(
-        object(),  # type: ignore[arg-type]
+        SimpleNamespace(_snapshot_format="portable"),  # type: ignore[arg-type]
         stdin=stdin,
         stdout=stdout,
         stderr=StringIO(),
@@ -164,7 +168,7 @@ def test_idle_redirected_streams_use_plain_input(monkeypatch, input_tty, output_
     monkeypatch.setattr(stdin, "isatty", lambda: input_tty)
     monkeypatch.setattr(stdout, "isatty", lambda: output_tty)
     monkeypatch.setattr(builtins, "input", lambda prompt: f"plain:{prompt}")
-    console = IdleConsole(object(), stdin=stdin, stdout=stdout)  # type: ignore[arg-type]
+    console = IdleConsole(SimpleNamespace(_snapshot_format="portable"), stdin=stdin, stdout=stdout)  # type: ignore[arg-type]
 
     assert console._read_line("+++ ") == "plain:+++ "
     assert console._prompt_input is None
@@ -180,7 +184,9 @@ def test_idle_color_preference_covers_input_and_errors(monkeypatch, highlight, n
         monkeypatch.setenv("NO_COLOR", no_color)
     stderr = StringIO()
     monkeypatch.setattr(stderr, "isatty", lambda: True)
-    console = IdleConsole(object(), stderr=stderr, highlight=highlight)  # type: ignore[arg-type]
+    console = IdleConsole(
+        SimpleNamespace(_snapshot_format="portable"), stderr=stderr, highlight=highlight
+    )  # type: ignore[arg-type]
 
     assert console._highlight is (highlight and not bool(no_color))
     assert console._use_color() is (highlight and not bool(no_color))
@@ -189,7 +195,9 @@ def test_idle_color_preference_covers_input_and_errors(monkeypatch, highlight, n
 
 
 def test_idle_console_multiline_command_selects_continuation_prompt() -> None:
-    console = IdleConsole(object(), stdout=StringIO(), stderr=StringIO())  # type: ignore[arg-type]
+    console = IdleConsole(
+        SimpleNamespace(_snapshot_format="portable"), stdout=StringIO(), stderr=StringIO()
+    )  # type: ignore[arg-type]
 
     assert console.push(":multiline") is True
     assert console.prompt == "... "
@@ -197,7 +205,9 @@ def test_idle_console_multiline_command_selects_continuation_prompt() -> None:
 
 def test_idle_console_multiline_command_validates_usage() -> None:
     stderr = StringIO()
-    console = IdleConsole(object(), stdout=StringIO(), stderr=stderr)  # type: ignore[arg-type]
+    console = IdleConsole(
+        SimpleNamespace(_snapshot_format="portable"), stdout=StringIO(), stderr=stderr
+    )  # type: ignore[arg-type]
 
     assert console.push(":multiline now") is False
     assert stderr.getvalue() == "Usage: :multiline\n"
@@ -450,6 +460,8 @@ def test_highlighted_line_input_preserves_unicode_backspace_and_delete(
 )
 def test_idle_console_detects_incomplete_fragments(source: str) -> None:
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise AssertionError("incomplete source must not execute")
 
@@ -462,6 +474,8 @@ def test_idle_console_does_not_treat_natural_language_apostrophe_as_continuation
     seen: list[str] = []
 
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, source: str) -> None:
             seen.append(source)
 
@@ -479,6 +493,8 @@ def test_idle_console_renders_parse_execution_and_generic_errors() -> None:
         console.push("> show: `1 / 0`")
 
     class BrokenSession:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise ValueError("broken backend")
 
@@ -493,6 +509,8 @@ def test_idle_console_renders_parse_execution_and_generic_errors() -> None:
 
 def test_idle_console_handles_keyboard_interrupt_from_execution() -> None:
     class InterruptedSession:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise KeyboardInterrupt
 
@@ -542,7 +560,7 @@ def test_idle_console_eof_exits_with_terminal_newline() -> None:
 
     stdout = StringIO()
     console = IdleConsole(
-        object(),  # type: ignore[arg-type]
+        SimpleNamespace(_snapshot_format="portable"),  # type: ignore[arg-type]
         stdout=stdout,
         stderr=StringIO(),
         input_reader=read,
@@ -561,7 +579,7 @@ def test_idle_console_interact_can_exit_without_banner() -> None:
         return ":exit"
 
     console = IdleConsole(
-        object(),  # type: ignore[arg-type]
+        SimpleNamespace(_snapshot_format="portable"),  # type: ignore[arg-type]
         stdout=StringIO(),
         stderr=StringIO(),
         input_reader=read,
@@ -575,6 +593,8 @@ def test_idle_console_interact_can_exit_without_banner() -> None:
 
 def test_idle_console_exit_command_stops_interaction() -> None:
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise AssertionError("exit commands must not execute")
 
@@ -590,6 +610,8 @@ def test_idle_console_does_not_special_case_python_exit_calls(source: str) -> No
     seen: list[str] = []
 
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, fragment: str) -> None:
             seen.append(fragment)
 
@@ -602,6 +624,8 @@ def test_idle_console_does_not_special_case_python_exit_calls(source: str) -> No
 
 def test_idle_console_ignores_blank_primary_input() -> None:
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise AssertionError("no source should execute")
 
@@ -613,6 +637,8 @@ def test_idle_console_ignores_blank_primary_input() -> None:
 @pytest.mark.parametrize("command", ["help", " help() "])
 def test_idle_console_help_commands_explain_continuation(command: str) -> None:
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise AssertionError("help commands must not execute")
 
@@ -628,6 +654,8 @@ def test_idle_console_show_is_repl_only_expression_shorthand() -> None:
     seen: list[str] = []
 
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, source: str) -> str:
             seen.append(source)
             return "rendered"
@@ -645,6 +673,8 @@ def test_idle_console_show_is_repl_only_expression_shorthand() -> None:
 
 def test_idle_console_show_requires_an_expression() -> None:
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise AssertionError("empty :show must not execute")
 
@@ -660,7 +690,9 @@ def test_idle_console_dump_persists_and_prints_resume_command(tmp_path: Path) ->
     seen: list[Path] = []
 
     class Session:
-        def dump(self, path: str | Path) -> Path:
+        _snapshot_format = "portable"
+
+        def dump(self, path: str | Path, *, format: str = "portable") -> Path:
             resolved = Path(path)
             seen.append(resolved)
             return resolved
@@ -684,7 +716,9 @@ def test_idle_console_dump_persists_and_prints_resume_command(tmp_path: Path) ->
 
 def test_idle_console_dump_reports_failure_and_rejects_arguments(tmp_path: Path) -> None:
     class Session:
-        def dump(self, _path: str | Path) -> Path:
+        _snapshot_format = "portable"
+
+        def dump(self, _path: str | Path, *, format: str = "portable") -> Path:
             raise kedi.SessionDumpError(["unsupported value"])
 
     stderr = StringIO()
@@ -704,6 +738,8 @@ def test_idle_console_dump_reports_failure_and_rejects_arguments(tmp_path: Path)
 
 def test_idle_console_propagates_system_exit_from_kedi_execution() -> None:
     class Session:
+        _snapshot_format = "portable"
+
         def execute(self, _source: str) -> None:
             raise SystemExit(7)
 
@@ -890,6 +926,7 @@ def test_run_idle_owns_session_and_saves_history(monkeypatch: Any) -> None:
             *,
             session_path: object = None,
             highlight: bool = False,
+            snapshot_format: str | None = None,
         ) -> None:
             assert session_path is None
             assert highlight is True
@@ -924,6 +961,7 @@ def test_run_idle_records_before_close_and_preserves_system_exit(monkeypatch: An
             *,
             session_path: object = None,
             highlight: bool = False,
+            snapshot_format: str | None = None,
         ) -> None:
             assert isinstance(session, Session)
             assert session_path is None
@@ -968,6 +1006,7 @@ def test_run_idle_loads_and_continues_recording_same_snapshot(
             *,
             session_path: object = None,
             highlight: bool = False,
+            snapshot_format: str | None = None,
         ) -> None:
             assert isinstance(session, Session)
             assert highlight is True
@@ -982,7 +1021,7 @@ def test_run_idle_loads_and_continues_recording_same_snapshot(
     monkeypatch.setattr(
         kedi.interactive_session,
         "load_session",
-        lambda path: events.append(("load", path)) or Session(),
+        lambda path, *, trusted=False: events.append(("load", path)) or Session(),
     )
     monkeypatch.setattr(idle_module, "IdleConsole", Console)
     monkeypatch.setattr(idle_module, "_configure_readline", lambda: lambda: None)
@@ -1095,6 +1134,8 @@ def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
         record: bool,
         load_path: Path | None,
         highlight: bool,
+        snapshot_format: str | None,
+        trust_snapshot: bool,
     ) -> int:
         received.update(
             adapter=adapter,
