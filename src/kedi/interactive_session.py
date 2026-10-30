@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from ._interactive.state import (
     ExecutedFragment,
@@ -83,6 +83,8 @@ class InteractiveSession:
         self._source_names: set[str] = set()
         self._fragments: list[ExecutedFragment] = []
         self._persistence_blockers: list[str] = []
+        self._snapshot_format: Literal["portable", "python"] = "portable"
+        self._snapshot_cleanups: list[Callable[[], None]] = []
 
     def execute(self, source: str, *, source_name: str | None = None) -> object:
         """Parse and execute one complete fragment exactly once."""
@@ -121,14 +123,20 @@ class InteractiveSession:
         finally:
             self._execute_lock.release()
 
-    def dump(self, path: str | Path) -> Path:
-        """Persist the complete restorable session state or reject without partial output."""
+    def dump(self, path: str | Path, *, format: Literal["portable", "python"] = "portable") -> Path:
+        """Persist session state; Python mode requires trusted executable deserialization."""
+        if format not in ("portable", "python"):
+            raise ValueError("Snapshot format must be 'portable' or 'python'")
         with self._lifecycle_lock:
             if self._closed:
                 raise RuntimeError("InteractiveSession is closed")
             if not self._execute_lock.acquire(blocking=False):
                 raise RuntimeError("Cannot dump InteractiveSession while it is executing")
         try:
+            if format == "python":
+                from ._interactive.python_state import dump_session
+
+                return dump_session(self, path)
             return _dump_session_state(self, path)
         finally:
             self._execute_lock.release()
@@ -157,8 +165,24 @@ class InteractiveSession:
         engine: Any | None = None,
         conversation_state: ConversationState | None = None,
         close_conversation_state: bool | None = None,
+        trusted: bool = False,
     ) -> InteractiveSession:
         """Restore a strict snapshot without replaying executable top-level fragments."""
+        from ._interactive.bundle import is_python_snapshot
+
+        if is_python_snapshot(path):
+            from ._interactive.python_state import load_session
+
+            return load_session(
+                cls,
+                path,
+                adapter=adapter,
+                executor=executor,
+                engine=engine,
+                conversation_state=conversation_state,
+                close_conversation_state=close_conversation_state,
+                trusted=trusted,
+            )
         return _load_session_state(
             cls,
             path,
@@ -183,8 +207,12 @@ class InteractiveSession:
             if self._execute_lock.locked():
                 raise RuntimeError("Cannot close InteractiveSession while it is executing")
             self._closed = True
+        from ._interactive.resources import close_resources
+
+        cleanups, self._snapshot_cleanups = self._snapshot_cleanups, []
         if self._close_conversation_state and self._conversation_state is not None:
-            self._conversation_state.close()
+            cleanups.insert(0, self._conversation_state.close)
+        close_resources(cleanups)
 
     def __enter__(self) -> InteractiveSession:
         with self._lifecycle_lock:
@@ -196,9 +224,14 @@ class InteractiveSession:
         self.close()
 
 
-def dump_session(session: InteractiveSession, path: str | Path) -> Path:
-    """Persist an interactive session through its strict instance API."""
-    return session.dump(path)
+def dump_session(
+    session: InteractiveSession,
+    path: str | Path,
+    *,
+    format: Literal["portable", "python"] = "portable",
+) -> Path:
+    """Persist an interactive session through its instance API."""
+    return session.dump(path, format=format)
 
 
 def load_session(
@@ -210,6 +243,7 @@ def load_session(
     engine: Any | None = None,
     conversation_state: ConversationState | None = None,
     close_conversation_state: bool | None = None,
+    trusted: bool = False,
 ) -> InteractiveSession:
     """Restore a session, optionally using an InteractiveSession subclass factory."""
     return session_type.load(
@@ -219,4 +253,5 @@ def load_session(
         engine=engine,
         conversation_state=conversation_state,
         close_conversation_state=close_conversation_state,
+        trusted=trusted,
     )
