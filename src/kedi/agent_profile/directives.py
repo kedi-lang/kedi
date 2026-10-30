@@ -10,6 +10,7 @@ from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from ..directive_values import parse_field, validate_field
 from ..run_budget import RunBudget
 from .codemode import normalize_codemode_settings
 from .compaction import normalize_compaction_settings
@@ -39,7 +40,6 @@ from .definitions import (
 from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import AgentCommand, AgentProfile
-from .settings import parse_plain_setting_value
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
@@ -448,6 +448,10 @@ def _eval_hooks_settings(
 ) -> AgentProfile:
     settings = HookSettings(enabled=enabled)
     for field in fields:
+        if field.name == "enabled":
+            value = eval_settings_field_value(rt, field, env, scope="hooks")
+            settings = settings.merge(HookSettings(enabled=value))
+            continue
         if field.backtick_code is None:
             raise TypeError(f"Hook event {field.name!r} requires an inline Python value")
         value = rt.executor.evaluate_inline(rt, field.backtick_code, env)
@@ -474,9 +478,11 @@ def eval_system_directive(
 
 def eval_mcp_field_value(rt: KediRuntime, field: McpField, env: dict[str, Any]) -> Any:
     if field.backtick_code is not None:
-        return rt.executor.evaluate_inline(rt, field.backtick_code, env)
+        return validate_field(
+            "mcp", field.name, rt.executor.evaluate_inline(rt, field.backtick_code, env)
+        )
     if field.plain_value is not None:
-        return field.plain_value.strip()
+        return parse_field("mcp", field.name, field.plain_value)
     return None
 
 
@@ -495,28 +501,31 @@ def eval_mcp_directive(
     return AgentProfile(mcp_servers=(eval_mcp_fields(rt, stmt.fields, env),))
 
 
-def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
+def eval_settings_field_value(
+    rt: KediRuntime, field: SettingsField, env: dict[str, Any], *, scope: str = "settings"
+) -> Any:
+    if field.backtick_code is None and field.plain_value is None:
+        return tuple(field.plain_values) if field.plain_values is not None else None
+    # Profiles are reusable patches. Their SDK option domains belong to the
+    # final adapter, which may differ from the caller evaluating this patch.
     if field.backtick_code is not None:
-        return rt.executor.evaluate_inline(rt, field.backtick_code, env)
-    if field.plain_values is not None:
-        return tuple(field.plain_values)
-    if field.plain_value is not None:
-        if field.name == "tool_reason":
-            if field.plain_value not in {"enabled", "disabled"}:
-                raise ValueError(
-                    "tool_reason must be enabled, disabled, or a Python boolean expression"
-                )
-            return field.plain_value == "enabled"
-        return parse_plain_setting_value(field.plain_value)
-    return None
+        return validate_field(
+            scope,
+            field.name,
+            rt.executor.evaluate_inline(rt, field.backtick_code, env),
+        )
+    assert field.plain_value is not None
+    return parse_field(scope, field.name, field.plain_value)
 
 
 def eval_settings_fields(
     rt: KediRuntime,
     fields: list[SettingsField] | tuple[SettingsField, ...],
     env: dict[str, Any],
+    *,
+    scope: str = "settings",
 ) -> dict[str, Any]:
-    return {field.name: eval_settings_field_value(rt, field, env) for field in fields}
+    return {field.name: eval_settings_field_value(rt, field, env, scope=scope) for field in fields}
 
 
 def eval_settings_directive(
@@ -533,10 +542,16 @@ def eval_artifacts_field_value(
     env: dict[str, Any],
 ) -> Any:
     if field.backtick_code is not None:
-        return _evaluate_directive_expression(rt, field.backtick_code, env)
-    if field.plain_value is not None:
-        return parse_plain_setting_value(field.plain_value)
-    return None
+        value = validate_field(
+            "artifacts", field.name, _evaluate_directive_expression(rt, field.backtick_code, env)
+        )
+    elif field.plain_value is not None:
+        value = parse_field("artifacts", field.name, field.plain_value)
+    else:
+        return None
+    if field.name == "query_artifacts":
+        return "enabled" if value else "disabled"
+    return value
 
 
 def eval_artifacts_fields(
@@ -568,7 +583,8 @@ def _eval_history_fields(
 ) -> AgentProfile:
     from .history import HistoryProcessingSettings, bind_history_processor
 
-    values = eval_settings_fields(rt, fields, env)
+    values = eval_settings_fields(rt, fields, env, scope="history")
+    enabled = values.pop("enabled", enabled)
     compaction_values = {
         name.removeprefix("compaction_"): value
         for name, value in values.items()
@@ -620,9 +636,9 @@ def eval_skills_directive(
 ) -> AgentProfile:
     from .skills import normalize_skills_settings
 
-    values = eval_settings_fields(rt, stmt.fields, env)
+    values = eval_settings_fields(rt, stmt.fields, env, scope="skills")
     return AgentProfile(
-        skills=normalize_skills_settings(values, enabled=stmt.enabled),
+        skills=normalize_skills_settings(values, enabled=values.pop("enabled", stmt.enabled)),
     )
 
 
@@ -631,8 +647,8 @@ def eval_codemode_directive(
     stmt: CodeModeDirectiveStmt,
     env: dict[str, Any],
 ) -> AgentProfile:
-    values = eval_settings_fields(rt, stmt.fields, env)
-    values["enabled"] = stmt.enabled
+    values = eval_settings_fields(rt, stmt.fields, env, scope="codemode")
+    values.setdefault("enabled", stmt.enabled)
     return AgentProfile(codemode=normalize_codemode_settings(values))
 
 
@@ -762,13 +778,13 @@ def _member_to_patch(
     if member.kind == "skills":
         from .skills import normalize_skills_settings
 
-        values = eval_settings_fields(rt, member.fields, env)
+        values = eval_settings_fields(rt, member.fields, env, scope="skills")
         return AgentProfile(
-            skills=normalize_skills_settings(values, enabled=member.enabled),
+            skills=normalize_skills_settings(values, enabled=values.pop("enabled", member.enabled)),
         )
     if member.kind == "codemode":
-        values = eval_settings_fields(rt, member.fields, env)
-        values["enabled"] = member.enabled
+        values = eval_settings_fields(rt, member.fields, env, scope="codemode")
+        values.setdefault("enabled", member.enabled)
         return AgentProfile(codemode=normalize_codemode_settings(values))
     if member.kind == "requires":
         requirements = normalize_adapter_requirements(list(member.requirements))

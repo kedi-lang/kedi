@@ -62,6 +62,7 @@ from kedi.lsp.features.capability_state import (
     _with_history_state,
     _with_hooks_state,
     _with_requirements_state,
+    _activation_state,
 )
 from kedi.lsp.features.symbols import (
     _approval_value_span,
@@ -118,7 +119,7 @@ def _profile_capability_diagnostics(
     for member in profile.budget_members:
         diagnostics.extend(_budget_capability_diagnostics(state, member))
     for member in profile.codemode_members:
-        if member.enabled:
+        if _activation_state(member.enabled, member.fields):
             diagnostics.extend(
                 _unsupported_capability_diagnostics(
                     state,
@@ -262,7 +263,7 @@ def _scan_capability_scope(
             diagnostics.extend(_history_prefix_cache_warning(stmt.fields))
             continue
         if isinstance(stmt, SkillsDirectiveStmt):
-            if stmt.enabled:
+            if _activation_state(stmt.enabled, stmt.fields):
                 diagnostics.extend(
                     _unsupported_capability_diagnostics(
                         active,
@@ -276,7 +277,7 @@ def _scan_capability_scope(
             active = replace(
                 active,
                 codemode_loc=stmt.loc,
-                codemode_enabled=stmt.enabled,
+                codemode_enabled=_activation_state(stmt.enabled, stmt.fields),
             )
             diagnostics.extend(_codemode_capability_diagnostics(active))
             continue
@@ -626,7 +627,7 @@ def _hooks_capability_diagnostics(
     *,
     span: Span | None = None,
 ) -> list[lsp.Diagnostic]:
-    if state.hooks_enabled is False or state.hooks_loc is None:
+    if state.hooks_enabled is not True or state.hooks_loc is None:
         return []
     diagnostic_span = span or state.hooks_loc
     generic = _unsupported_capability_diagnostics(
@@ -856,11 +857,11 @@ def _profile_capability_usage(
         capabilities.add("mcp")
     if profile.subagent_members:
         capabilities.add("subagents")
-    if any(member.enabled for member in profile.skills_members):
+    if any(_activation_state(member.enabled, member.fields) for member in profile.skills_members):
         capabilities.add("tool_registration")
-    if any(member.enabled for member in profile.codemode_members):
+    if any(_activation_state(member.enabled, member.fields) for member in profile.codemode_members):
         capabilities.add("codemode")
-    if any(member.enabled is not False for member in profile.hooks_members):
+    if any(_activation_state(member.enabled, member.fields) for member in profile.hooks_members):
         capabilities.add("hooks")
 
     nested_active = active | {profile.name}

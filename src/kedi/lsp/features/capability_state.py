@@ -101,7 +101,7 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         state = replace(
             state,
             codemode_loc=latest.loc,
-            codemode_enabled=latest.enabled,
+            codemode_enabled=_activation_state(latest.enabled, latest.fields),
         )
     for member in profile.requires_members:
         state = _with_requirements_state(state, member)
@@ -129,16 +129,20 @@ def _merge_adapter_state(
 ) -> _AdapterDiagnosticState:
     selected = inner if inner.shortname is not None else outer
     approval_owner = inner if inner.approval_loc is not None else outer
-    hooks_owner = inner if inner.hooks_enabled is not None else outer
+    hooks_owner = inner if inner.hooks_loc is not None or inner.hooks_enabled is not None else outer
     hook_events = outer.hook_events
     cleared_hook_events = outer.cleared_hook_events
-    if inner.hooks_enabled is not None:
+    if inner.hooks_loc is not None or inner.hooks_enabled is not None:
         hook_events = (hook_events - inner.cleared_hook_events) | inner.hook_events
         cleared_hook_events = (cleared_hook_events | inner.cleared_hook_events) - inner.hook_events
-    history_owner = inner if inner.history_enabled is not None else outer
+    history_owner = (
+        inner if inner.history_loc is not None or inner.history_enabled is not None else outer
+    )
     processor_owner = inner if inner.history_processor_enabled is not None else outer
     condition_owner = inner if inner.history_condition_enabled is not None else outer
-    codemode_owner = inner if inner.codemode_enabled is not None else outer
+    codemode_owner = (
+        inner if inner.codemode_loc is not None or inner.codemode_enabled is not None else outer
+    )
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
         kind=selected.kind,
@@ -164,7 +168,11 @@ def _with_history_state(
     state: _AdapterDiagnosticState,
     directive: HistoryDirectiveStmt | ProfileHistoryEntry,
 ) -> _AdapterDiagnosticState:
-    state = replace(state, history_loc=directive.loc, history_enabled=directive.enabled)
+    state = replace(
+        state,
+        history_loc=directive.loc,
+        history_enabled=_activation_state(directive.enabled, directive.fields),
+    )
     processor = next((field for field in directive.fields if field.name == "processor"), None)
     if processor is not None:
         state = replace(
@@ -272,7 +280,15 @@ def _with_hooks_state(
     return replace(
         state,
         hooks_loc=directive.loc,
-        hooks_enabled=directive.enabled,
+        hooks_enabled=_activation_state(directive.enabled, directive.fields),
         hook_events=(state.hook_events - cleared) | enabled,
         cleared_hook_events=(state.cleared_hook_events | cleared) - enabled,
+    )
+
+
+def _activation_state(enabled: bool | None, fields: Sequence[SettingsField]) -> bool | None:
+    return (
+        None
+        if any(field.name == "enabled" and field.backtick_code is not None for field in fields)
+        else enabled
     )

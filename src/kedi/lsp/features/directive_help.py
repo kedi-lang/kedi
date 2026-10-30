@@ -172,6 +172,16 @@ def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
     )
 
 
+def _activation_header(name: str, enabled: bool | None, fields: list[SettingsField]) -> str:
+    computed = next(
+        (field for field in fields if field.name == "enabled" and field.backtick_code is not None),
+        None,
+    )
+    if computed is not None:
+        return f"``> {name}: `{computed.backtick_code}` ``"
+    return f"`> {name}: {'enabled' if enabled else 'disabled'}`"
+
+
 def _hooks_directive_markdown(stmt: HooksDirectiveStmt) -> str:
     if stmt.enabled is False:
         value = "disabled"
@@ -179,8 +189,13 @@ def _hooks_directive_markdown(stmt: HooksDirectiveStmt) -> str:
         value = ", ".join(f"`{field.name}`" for field in stmt.fields)
     else:
         value = "enabled"
+    header = (
+        _activation_header("hooks", stmt.enabled, stmt.fields)
+        if any(field.name == "enabled" for field in stmt.fields)
+        else f"`> hooks:` {value}"
+    )
     return (
-        f"`> hooks:` {value}\n\n"
+        f"{header}\n\n"
         "Registers ordered agent lifecycle handlers in the current scope. "
         "Handlers may inspect prompt submission and tool execution, edit prompts or tool "
         "arguments before transport, deny requests, and observe tool success or failure."
@@ -188,7 +203,6 @@ def _hooks_directive_markdown(stmt: HooksDirectiveStmt) -> str:
 
 
 def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
-    value = "enabled" if stmt.enabled else "disabled"
     compaction = next(
         (field for field in stmt.fields if field.name.startswith("compaction_")),
         None,
@@ -201,7 +215,7 @@ def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
     if any(field.name == "processor" for field in stmt.fields):
         configured += " A scoped native history processor runs before each model request."
     return (
-        f"`> history: {value}`\n\n"
+        f"{_activation_header('history', stmt.enabled, stmt.fields)}\n\n"
         "Controls conversation continuity through stateful history for subsequent model calls "
         "in this lexical scope. "
         "`enabled` reuses adapter-scoped model history and provider cache identity; `disabled` "
@@ -211,9 +225,8 @@ def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
 
 
 def _skills_directive_markdown(stmt: SkillsDirectiveStmt) -> str:
-    value = "enabled" if stmt.enabled else "disabled"
     return (
-        f"`> skills: {value}`\n\n"
+        f"{_activation_header('skills', stmt.enabled, stmt.fields)}\n\n"
         "Controls on-demand skill discovery for subsequent agent calls in this lexical scope. "
         "Enabled scopes expose `list_skills` and `read_skill`. Sources are checked in order: "
         "the Kedi registry, project `.agents/skills`, then user `.agents/skills`. The expanded "
@@ -222,9 +235,8 @@ def _skills_directive_markdown(stmt: SkillsDirectiveStmt) -> str:
 
 
 def _codemode_directive_markdown(stmt: CodeModeDirectiveStmt) -> str:
-    value = "enabled" if stmt.enabled else "disabled"
     return (
-        f"`> codemode: {value}`\n\n"
+        f"{_activation_header('codemode', stmt.enabled, stmt.fields)}\n\n"
         "Controls progressive tool discovery and bounded Monty execution for subsequent agent "
         "calls in this lexical scope. Enabled scopes expose `search_tools`, `get_tool_schema`, "
         "and `execute_code`; the expanded form configures discovery, hydration, execution, "
@@ -325,15 +337,15 @@ def _settings_field_markdown(field: SettingsField) -> str:
         )
     if field.name == "processor":
         return (
-            f"`processor: Callable[[HistoryProcessorContext], Sequence[native message]] | None` = {value}\n\n"
+            f"`processor: Callable[[HistoryProcessorContext], Sequence[native message]]` = {value}\n\n"
             "Process detached native history before each model request. Sync and async callbacks "
             "are supported by Pydantic and LangChain. Use `ctx.keep_recent_groups(n)` for "
-            "lifecycle-safe retention and `group.origins` for known lineage. `None` clears an "
-            "inherited callback. Rewriting earlier history may reduce prefix-cache reuse."
+            "lifecycle-safe retention and `group.origins` for known lineage. Omission inherits "
+            "the existing callback. Rewriting earlier history may reduce prefix-cache reuse."
         )
     if field.name == "processor_condition":
         return (
-            f"`processor_condition: Callable[[HistoryProcessorState], bool] | None` = {value}\n\n"
+            f"`processor_condition: Callable[[HistoryProcessorState], bool]` = {value}\n\n"
             "Evaluate before each logical model request. Exact `True` runs the history "
             "processor; `False` skips its detached snapshot and rewrite validation. "
             "The state provides an estimated history token count, request index, cache epoch, "
@@ -477,37 +489,39 @@ def _profile_hooks_entry_markdown(entry: ProfileHooksEntry) -> str:
         value = ", ".join(f"`{field.name}`" for field in entry.fields)
     else:
         value = "enabled"
+    header = (
+        _activation_header("hooks", entry.enabled, entry.fields)
+        if any(field.name == "enabled" for field in entry.fields)
+        else f"`> hooks:` {value}"
+    )
     return (
-        f"`> hooks:` {value}\n\n"
+        f"{header}\n\n"
         "Ordered agent lifecycle handlers stored in this profile. Applied when the profile is used."
     )
 
 
 def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
-    value = "enabled" if entry.enabled else "disabled"
     configured = (
         " Includes native history processing or compaction settings." if entry.fields else ""
     )
     return (
-        f"`> history: {value}`\n\n"
+        f"{_activation_header('history', entry.enabled, entry.fields)}\n\n"
         "Conversation continuity policy stored in this profile. Applied when the profile is used."
         f"{configured}"
     )
 
 
 def _profile_skills_entry_markdown(entry: ProfileSkillsEntry) -> str:
-    value = "enabled" if entry.enabled else "disabled"
     return (
-        f"`> skills: {value}`\n\n"
+        f"{_activation_header('skills', entry.enabled, entry.fields)}\n\n"
         "Skill discovery policy stored in this profile. Applied when the profile is used."
     )
 
 
 def _profile_codemode_entry_markdown(entry: ProfileCodeModeEntry) -> str:
-    value = "enabled" if entry.enabled else "disabled"
     configured = " Includes bounded execution settings." if entry.fields else ""
     return (
-        f"`> codemode: {value}`\n\n"
+        f"{_activation_header('codemode', entry.enabled, entry.fields)}\n\n"
         "CodeMode tool-discovery and execution policy stored in this profile. "
         f"Applied when the profile is used.{configured}"
     )

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import ast
 from collections.abc import Mapping
 from typing import Any, Final
+
+from kedi.directive_values import ADAPTER_RULES, parse_scalar, validate_field
 
 SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
@@ -154,47 +155,45 @@ def tool_reason_enabled(settings: SettingsMap, *, default: bool = False) -> bool
 
 
 def parse_plain_setting_value(raw: str) -> SettingValue:
-    value = raw.strip()
-    lowered = value.lower()
-    if lowered == "true":
-        return True
-    if lowered == "false":
-        return False
-    if lowered in {"none", "null"}:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        pass
-    try:
-        return ast.literal_eval(value)
-    except (SyntaxError, ValueError):
-        return value
+    return parse_scalar(raw)
 
 
 def pydantic_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return {key: value for key, value in settings.items() if key in PYDANTIC_MODEL_SETTING_KEYS}
+    return _model_settings(settings, PYDANTIC_MODEL_SETTING_KEYS, "pydantic")
 
 
 def dspy_lm_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return {key: value for key, value in settings.items() if key in DSPY_LM_SETTING_KEYS}
+    return _model_settings(settings, DSPY_LM_SETTING_KEYS, "dspy")
 
 
 def langchain_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return {key: value for key, value in settings.items() if key in LANGCHAIN_MODEL_SETTING_KEYS}
+    return _model_settings(settings, LANGCHAIN_MODEL_SETTING_KEYS, "langchain")
 
 
 def claude_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return {key: value for key, value in settings.items() if key in CLAUDE_AGENT_SETTING_KEYS}
+    return _model_settings(settings, CLAUDE_AGENT_SETTING_KEYS, "claude")
 
 
 def codex_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return {key: value for key, value in settings.items() if key in CODEX_AGENT_SETTING_KEYS}
+    return _model_settings(settings, CODEX_AGENT_SETTING_KEYS, "codex")
 
 
 def acp_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return {key: value for key, value in settings.items() if key in ACP_AGENT_SETTING_KEYS}
+    return _model_settings(settings, ACP_AGENT_SETTING_KEYS, "acp")
+
+
+def _model_settings(
+    settings: SettingsMap, keys: frozenset[str], adapter: str
+) -> dict[str, SettingValue]:
+    # DSL-owned types are checked during evaluation, not imposed on native SDK
+    # objects. Resolve SDK option domains here against the final active adapter.
+    rules = ADAPTER_RULES.get(adapter, {})
+    return {
+        key: (
+            validate_field("settings", key, value, adapter=adapter)
+            if key in rules and value is not None
+            else value
+        )
+        for key, value in settings.items()
+        if key in keys
+    }

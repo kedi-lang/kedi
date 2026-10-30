@@ -94,7 +94,7 @@ def test_query_directive_parser_and_lsp_reject_invalid_literals(literal):
     assert diagnostics[0].range.start.character == len("  query_artifacts: ")
 
 
-@pytest.mark.parametrize("value", ["enabled", "disabled", '`"enabled"`'])
+@pytest.mark.parametrize("value", ["enabled", "disabled", "`True`", "`False`"])
 def test_query_directive_accepts_literal_and_native_value(value):
     source = f"> artifacts:\n  query_artifacts: {value}\n"
     assert lsp_diagnostics_module.compute_diagnostics(source, "query-policy.kedi") == []
@@ -122,7 +122,7 @@ def test_real_program_query_policy_profile_and_procedure_scoping():
 
 @native() -> str:
   > artifacts:
-    query_artifacts: `"disabled"`
+    query_artifacts: `False`
   [answer] << Inspect native policy.
   = <answer>
 
@@ -141,9 +141,9 @@ def test_real_program_query_policy_profile_and_procedure_scoping():
 
 
 def test_native_query_directive_validates_runtime_value():
-    runtime = compile_program(parse_program("> artifacts:\n  query_artifacts: `True`\n"))
+    runtime = compile_program(parse_program('> artifacts:\n  query_artifacts: `"enabled"`\n'))
     try:
-        with pytest.raises(Exception, match="query_artifacts must be"):
+        with pytest.raises(Exception, match="query_artifacts.*boolean"):
             runtime.run_main()
     finally:
         runtime.artifacts.close()

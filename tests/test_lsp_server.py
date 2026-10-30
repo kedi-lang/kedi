@@ -365,7 +365,7 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
         == "definition"
     )
     assert handlers[lsp.TEXT_DOCUMENT_COMPLETION](
-        SimpleNamespace(text_document=text_document, position=position)
+        SimpleNamespace(text_document=text_document, position=position, context=None)
     ) == ["completion"]
     assert handlers[lsp.TEXT_DOCUMENT_REFERENCES](
         SimpleNamespace(

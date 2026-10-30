@@ -170,7 +170,7 @@ def test_dsl_processor_conflicts_with_constructor_native_history_capability():
         adapter.run_sync("task")
 
 
-def test_explicit_none_dsl_disables_and_does_not_inherit():
+def test_explicit_none_dsl_rejects_callback_reset():
     seen = []
     adapter = _adapter("pydantic", lambda ctx: seen.append(ctx) or ctx.messages)
     runtime = compile_program(
@@ -183,7 +183,8 @@ def test_explicit_none_dsl_disables_and_does_not_inherit():
 """),
         adapter=adapter,
     )
-    assert runtime.run_main() == "done"
+    with pytest.raises(Exception, match="expected a callable"):
+        runtime.run_main()
     assert not seen
 
 
@@ -232,7 +233,7 @@ def test_native_procedure_captures_processor_and_restores_caller(kind):
     = <reply>
 > history:
     enabled: true
-    processor: `None`
+    processor: `lambda ctx: ctx.messages`
 > show: <worker()>
 [reply] << Complete the outer task.
 = <reply>
@@ -248,7 +249,8 @@ def test_native_procedure_captures_processor_and_restores_caller(kind):
     runner.process = observe
     assert runtime.run_main() == "done"
     assert callable(seen[0])
-    assert seen[1] is None
+    assert callable(seen[1])
+    assert seen[0] is not seen[1]
     assert adapter.active_history_processor is None
 
 

@@ -740,7 +740,6 @@ def test_skills_settings_rejects_invalid_field_types(
         ("include_all: maybe", "must be 'true' or 'false'"),
         ("unknown: true", "skills setting must be one of"),
         ("max_skills: 1\n    max_skills: 2", "Duplicate skills setting"),
-        ("enabled: `True`", "must be the literal"),
         ("max_skills: 1", "requires an 'enabled"),
     ],
 )

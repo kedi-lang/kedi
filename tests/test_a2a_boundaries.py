@@ -336,7 +336,7 @@ def test_structured_result_skips_unrelated_artifacts_and_text_parts():
         ("task_timeout: invalid", "positive number"),
         ("auth:\n        unknown: value", "unsupported field"),
         ("auth:\n        scheme: `42`", "string 'scheme'"),
-        ("auth:\n        scheme: invalid", "must be basic"),
+        ('auth:\n        scheme: `"invalid"`', "must be basic"),
         ("auth:\n        scheme: bearer\n        token_env: `42`", "must be a string"),
         (
             "auth:\n        scheme: basic\n        password_env: KEY\n        username: `42`",

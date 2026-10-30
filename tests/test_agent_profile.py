@@ -390,7 +390,6 @@ def test_codemode_preload_tools_parse_single_and_block_forms() -> None:
     [
         ("> codemode:\n    # comment\n    unknown: 1\n", "codemode setting must be one of"),
         ("> codemode:\n    max_nested_calls: 2\n    max_nested_calls: 3\n", "Duplicate"),
-        ("> codemode:\n    enabled: `True`\n", "literal 'true' or 'false'"),
         ("> codemode:\n    enabled: maybe\n", "must be 'true' or 'false'"),
     ],
 )
@@ -927,8 +926,10 @@ def test_settings_field_value_and_plain_scalar_parsing() -> None:
     rt = KediRuntime()
 
     assert parse_plain_setting_value("true") is True
-    assert parse_plain_setting_value("null") is None
-    assert parse_plain_setting_value("'literal'") == "literal"
+    assert parse_plain_setting_value("null") == "null"
+    assert parse_plain_setting_value("none") == "none"
+    with pytest.raises(ValueError, match="inline Python"):
+        parse_plain_setting_value("'literal'")
     assert parse_plain_setting_value("plain-value") == "plain-value"
     assert (
         eval_settings_field_value(

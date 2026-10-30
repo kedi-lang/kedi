@@ -197,7 +197,7 @@ def test_history_directive_parses_at_top_level_procedure_and_profile() -> None:
     assert profile.history_members[0].enabled is False
 
 
-@pytest.mark.parametrize("value", ["true", "on", "yes", "automatic", "`enabled`"])
+@pytest.mark.parametrize("value", ["true", "on", "yes", "automatic"])
 def test_history_directive_rejects_noncanonical_values(value: str) -> None:
     with pytest.raises(KediParseError, match="history directive|unexpected source"):
         parse_program(f"> history: {value}\n")

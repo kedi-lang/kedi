@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Final, Literal, cast
 
+from .directive_values import DIRECTIVE_RULES
+
 EffortValue = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
 PydanticEffortValue = Literal["minimal", "low", "medium", "high", "xhigh"]
 
-EFFORT_VALUES: Final[frozenset[str]] = frozenset(
-    {"minimal", "low", "medium", "high", "xhigh", "max"}
-)
+EFFORT_VALUES: Final[frozenset[str]] = frozenset(DIRECTIVE_RULES["effort"].options)
 
 
 def is_valid_effort(value: str) -> bool:

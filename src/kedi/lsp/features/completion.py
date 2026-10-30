@@ -27,6 +27,7 @@ from kedi.lsp.completion_source import parse_completion_source
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import utf16_length, utf16_to_index, with_source_coordinates
 from kedi.lsp.features.python_regions import compute_python_ranges
+from kedi.lsp.features.directive_options import option_completions
 from kedi.lsp.features.scope import (
     _all_procedures,
     _direct_type_defs,
@@ -110,6 +111,8 @@ def compute_completion(
     source: str,
     source_path: Optional[str],
     pos: lsp.Position,
+    *,
+    explicit: bool = False,
 ) -> List[lsp.CompletionItem]:
     """Return syntax and in-scope symbol completions for Kedi source."""
     for region in compute_python_ranges(source):
@@ -127,6 +130,9 @@ def compute_completion(
     # directive value must not reopen the menu and consume the next Enter.
     if before_cursor.rstrip().endswith("`") or before_cursor.lstrip().startswith("#"):
         return []
+    options = option_completions(source, pos, explicit=explicit)
+    if options is not None:
+        return options
     if before_cursor.rstrip().endswith(":") and not re.search(r"\[[^\]]*$", before_cursor):
         return []
     field_prefix = re.fullmatch(r"\s*[A-Za-z_]*", before_cursor) is not None

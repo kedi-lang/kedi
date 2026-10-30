@@ -27,6 +27,12 @@ def _ensure_src_on_path() -> None:
 _ensure_src_on_path()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_idle_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI tests from loading or rewriting the user's readline history."""
+    monkeypatch.setenv("KEDI_HISTORY", str(tmp_path / "idle-history"))
+
+
 @pytest.fixture(scope="module")
 def vcr_config() -> CassetteConfig:
     """Record missing cassettes; replay when present. CI passes ``--record-mode=none`` via Makefile."""

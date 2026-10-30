@@ -11,10 +11,9 @@ from kedi.agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from kedi.agent_profile.settings import (
     MODEL_SETTING_KEYS,
     is_valid_model_setting_key,
-    parse_plain_setting_value,
 )
 from kedi.artifacts import ARTIFACT_POLICY_INPUT_FIELDS, ArtifactPolicy, ArtifactPolicyError
-from kedi.effort import EFFORT_VALUES, is_valid_effort
+from kedi.directive_values import DIRECTIVE_RULES, FIELD_RULES, parse_field
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
     AgentConnectionField,
@@ -43,17 +42,17 @@ from kedi.lang.ast import (
     UseDirectiveStmt,
 )
 from kedi.lang.parser.cst_helpers import _field, _identifier_name, _named_children, _src_text
+from kedi.lang.parser.directive_context import selected_adapter
 from kedi.lang.parser.escapes import dedent_block
-from kedi.mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
 
 if TYPE_CHECKING:
     from kedi.lang.parser.cst_to_ast import _Walker
 
 
 def _validate_effort_plain_value(self: _Walker, node: Node, value: str) -> None:
-    if is_valid_effort(value):
+    if value in DIRECTIVE_RULES["effort"].options:
         return
-    expected = ", ".join(sorted(EFFORT_VALUES))
+    expected = ", ".join(DIRECTIVE_RULES["effort"].options)
     self._error(
         node,
         f"effort directive must be one of: {expected}",
@@ -62,7 +61,7 @@ def _validate_effort_plain_value(self: _Walker, node: Node, value: str) -> None:
 
 
 def _validate_approval_plain_value(self: _Walker, node: Node, value: str) -> None:
-    if value in {"allow", "deny"}:
+    if value in DIRECTIVE_RULES["approval"].options:
         return
     self._error(
         node,
@@ -73,9 +72,9 @@ def _validate_approval_plain_value(self: _Walker, node: Node, value: str) -> Non
 
 
 def _validate_mcp_transport_plain_value(self: _Walker, node: Node, value: str) -> None:
-    if is_valid_mcp_transport(value):
+    if value in FIELD_RULES["mcp"]["transport"].options:
         return
-    expected = ", ".join(sorted(MCP_TRANSPORT_VALUES))
+    expected = ", ".join(FIELD_RULES["mcp"]["transport"].options)
     self._error(
         node,
         f"MCP transport must be one of: {expected}",
@@ -258,7 +257,7 @@ def _walk_tool_directive(self: _Walker, node: Node) -> ToolDeclaration:
     exposed_name = values.get("name")
 
     risk_value = values.get("risk", "mutating")
-    if risk_value not in {"read_only", "mutating", "sensitive"}:
+    if risk_value not in FIELD_RULES["tool"]["risk"].options:
         self._error(
             body_node,
             "tool risk must be 'read_only', 'mutating', or 'sensitive'",
@@ -437,9 +436,12 @@ def _walk_agent_connection_field(self: _Walker, node: Node) -> AgentConnectionFi
             backtick_code=_src_text(self.source, code_node),
             loc=self._span(node),
         )
+    plain = _src_text(self.source, value_node).strip()
+    if name == "scheme":
+        _check_plain_field(self, value_node, "auth", name, plain)
     return AgentConnectionField(
         name=name,
-        plain_value=_src_text(self.source, value_node).strip(),
+        plain_value=plain,
         loc=self._span(node),
     )
 
@@ -486,8 +488,12 @@ def _walk_approval_directive(self: _Walker, node: Node) -> ApprovalDirectiveStmt
 def _walk_hooks_directive(self: _Walker, node: Node) -> HooksDirectiveStmt:
     value_node = _field(node, "value")
     if value_node is not None:
+        if value_node.type == "inline_python_expr":
+            return HooksDirectiveStmt(
+                enabled=True, fields=[_activation_field(self, value_node)], loc=self._span(node)
+            )
         value = _src_text(self.source, value_node).strip()
-        if value not in {"enabled", "disabled"}:
+        if value not in DIRECTIVE_RULES["hooks"].options:
             self._error(
                 value_node,
                 "hooks directive must be 'enabled' or 'disabled'",
@@ -517,8 +523,12 @@ def _walk_hooks_directive(self: _Walker, node: Node) -> HooksDirectiveStmt:
 def _walk_history_directive(self: _Walker, node: Node) -> HistoryDirectiveStmt:
     value_node = _field(node, "value")
     if value_node is not None:
+        if value_node.type == "inline_python_expr":
+            return HistoryDirectiveStmt(
+                enabled=True, fields=[_activation_field(self, value_node)], loc=self._span(node)
+            )
         value = _src_text(self.source, value_node).strip()
-        if value not in {"enabled", "disabled"}:
+        if value not in DIRECTIVE_RULES["history"].options:
             self._error(
                 value_node,
                 "history directive must be 'enabled' or 'disabled'",
@@ -559,38 +569,12 @@ def _walk_history_directive(self: _Walker, node: Node) -> HistoryDirectiveStmt:
         seen.add(name)
         if name == "enabled":
             if field.backtick_code is not None:
-                self._error(
-                    child,
-                    "history enabled setting must be the literal 'true' or 'false'",
-                    code="K-HISTORY-ENABLED",
-                )
-                enabled = False
+                fields.append(field)
+                enabled = True
                 continue
             value = (field.plain_value or "").strip()
-            if value not in {"true", "false"}:
-                self._error(
-                    child,
-                    "history enabled setting must be 'true' or 'false'",
-                    code="K-HISTORY-ENABLED",
-                )
             enabled = value == "true"
             continue
-        if (
-            name == "compaction_mode"
-            and field.plain_value is not None
-            and field.plain_value not in {"native", "disabled"}
-        ):
-            self._error(
-                child,
-                "history compaction_mode must be 'native' or 'disabled'",
-                code="K-COMPACTION-MODE",
-            )
-        if name == "processor_condition" and field.backtick_code is None:
-            self._error(
-                child,
-                "history processor_condition must be an inline Python callable reference",
-                code="K-HISTORY-CONDITION",
-            )
         fields.append(field)
     if enabled is None:
         self._error(
@@ -608,8 +592,12 @@ def _walk_history_directive(self: _Walker, node: Node) -> HistoryDirectiveStmt:
 def _walk_skills_directive(self: _Walker, node: Node) -> SkillsDirectiveStmt:
     value_node = _field(node, "value")
     if value_node is not None:
+        if value_node.type == "inline_python_expr":
+            return SkillsDirectiveStmt(
+                enabled=True, fields=[_activation_field(self, value_node)], loc=self._span(node)
+            )
         value = _src_text(self.source, value_node).strip()
-        if value not in {"enabled", "disabled"}:
+        if value not in DIRECTIVE_RULES["skills"].options:
             self._error(
                 value_node,
                 "skills directive must be 'enabled' or 'disabled'",
@@ -630,7 +618,6 @@ def _walk_skills_directive(self: _Walker, node: Node) -> SkillsDirectiveStmt:
         "include_all",
         "exclude_paths",
     }
-    boolean_fields = {"enabled", "include_registry", "include_all"}
     for child in _named_children(body_node):
         if child.type in ("line_comment", "block_comment"):
             continue
@@ -651,22 +638,10 @@ def _walk_skills_directive(self: _Walker, node: Node) -> SkillsDirectiveStmt:
             )
             continue
         seen.add(name)
-        if name in boolean_fields and field.backtick_code is None:
-            value = (field.plain_value or "").strip()
-            if value not in {"true", "false"}:
-                self._error(
-                    child,
-                    f"skills {name} setting must be 'true' or 'false'",
-                    code="K-SKILLS-BOOL",
-                )
         if name == "enabled":
             if field.backtick_code is not None:
-                self._error(
-                    child,
-                    "skills enabled setting must be the literal 'true' or 'false'",
-                    code="K-SKILLS-ENABLED",
-                )
-                enabled = False
+                fields.append(field)
+                enabled = True
             else:
                 enabled = (field.plain_value or "").strip() == "true"
             continue
@@ -687,8 +662,12 @@ def _walk_skills_directive(self: _Walker, node: Node) -> SkillsDirectiveStmt:
 def _walk_codemode_directive(self: _Walker, node: Node) -> CodeModeDirectiveStmt:
     value_node = _field(node, "value")
     if value_node is not None:
+        if value_node.type == "inline_python_expr":
+            return CodeModeDirectiveStmt(
+                enabled=True, fields=[_activation_field(self, value_node)], loc=self._span(node)
+            )
         value = _src_text(self.source, value_node).strip()
-        if value not in {"enabled", "disabled"}:
+        if value not in DIRECTIVE_RULES["codemode"].options:
             self._error(
                 value_node,
                 "codemode directive must be 'enabled' or 'disabled'",
@@ -740,20 +719,10 @@ def _walk_codemode_directive(self: _Walker, node: Node) -> CodeModeDirectiveStmt
         seen.add(name)
         if name == "enabled":
             if field.backtick_code is not None:
-                self._error(
-                    child,
-                    "codemode enabled setting must be the literal 'true' or 'false'",
-                    code="K-CODEMODE-ENABLED",
-                )
-                enabled = False
+                fields.append(field)
+                enabled = True
             else:
                 value = (field.plain_value or "").strip()
-                if value not in {"true", "false"}:
-                    self._error(
-                        child,
-                        "codemode enabled setting must be 'true' or 'false'",
-                        code="K-CODEMODE-ENABLED",
-                    )
                 enabled = value == "true"
             continue
         fields.append(field)
@@ -826,6 +795,8 @@ def _walk_mcp_field(self: _Walker, node: Node) -> McpField:
     plain = _src_text(self.source, value_node).strip()
     if name == "transport":
         self._validate_mcp_transport_plain_value(value_node, plain)
+    else:
+        _check_plain_field(self, value_node, "mcp", name, plain)
     return McpField(
         name=name,
         plain_value=plain,
@@ -858,16 +829,6 @@ def _walk_settings_field(self: _Walker, node: Node) -> SettingsField:
     name_node = _field(node, "name")
     assert name_node is not None
     self._validate_setting_key(name_node, field.name)
-    if (
-        field.name == "tool_reason"
-        and field.plain_value is not None
-        and field.plain_value not in {"enabled", "disabled"}
-    ):
-        self._error(
-            node,
-            "tool_reason must be enabled, disabled, or a Python boolean expression",
-            code="K-SETTING-VALUE",
-        )
     return field
 
 
@@ -885,9 +846,13 @@ def _walk_settings_value_field(self: _Walker, node: Node) -> SettingsField:
             backtick_code=_src_text(self.source, code_node),
             loc=self._span(node),
         )
+    plain = _src_text(self.source, value_node).strip()
+    assert node.parent is not None
+    scope = node.parent.type.removesuffix("_body")
+    _check_plain_field(self, value_node, scope, name, plain)
     return SettingsField(
         name=name,
-        plain_value=_src_text(self.source, value_node).strip(),
+        plain_value=plain,
         loc=self._span(node),
     )
 
@@ -936,8 +901,11 @@ def _walk_artifacts_field(self: _Walker, node: Node) -> ArtifactsField:
     plain_value = _src_text(self.source, value_node).strip()
     if name in ARTIFACT_POLICY_INPUT_FIELDS:
         try:
-            ArtifactPolicy.patch({name: parse_plain_setting_value(plain_value)})
-        except ArtifactPolicyError as exc:
+            value = parse_field("artifacts", name, plain_value)
+            if name == "query_artifacts":
+                value = "enabled" if value else "disabled"
+            ArtifactPolicy.patch({name: value})
+        except (ArtifactPolicyError, ValueError) as exc:
             self._error(
                 value_node,
                 str(exc),
@@ -948,6 +916,22 @@ def _walk_artifacts_field(self: _Walker, node: Node) -> ArtifactsField:
         plain_value=plain_value,
         loc=self._span(node),
     )
+
+
+def _activation_field(self: _Walker, node: Node) -> SettingsField:
+    code_node = _field(node, "code")
+    assert code_node is not None
+    return SettingsField(
+        name="enabled", backtick_code=_src_text(self.source, code_node), loc=self._span(node)
+    )
+
+
+def _check_plain_field(self: _Walker, node: Node, scope: str, name: str, plain: str) -> None:
+    adapter = selected_adapter(self.source, node)
+    try:
+        parse_field(scope, name, plain, adapter=adapter)
+    except ValueError as exc:
+        self._error(node, str(exc), code="K-DIRECTIVE-VALUE")
 
 
 def _walk_use_directive(self: _Walker, node: Node) -> UseDirectiveStmt:

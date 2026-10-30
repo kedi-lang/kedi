@@ -40,7 +40,7 @@ def test_profile_requires_real_boolean(value):
 
 @pytest.mark.parametrize("literal", ["`1`", "`None`", '`"enabled"`', '`"true"`'])
 def test_dsl_rejects_non_boolean_values(literal):
-    with pytest.raises(Exception, match="tool_reason must be a boolean"):
+    with pytest.raises(Exception, match="settings.tool_reason: expected a boolean"):
         runtime = compile_program(
             parse_program(f"> settings:\n    tool_reason: {literal}\n= done\n")
         )
@@ -51,7 +51,7 @@ def test_dsl_rejects_non_boolean_values(literal):
 def test_dsl_rejects_invalid_plain_values_at_parse_time(literal):
     from kedi.lang.parser.diagnostics import KediParseError
 
-    with pytest.raises(KediParseError, match="tool_reason must be enabled, disabled"):
+    with pytest.raises(KediParseError, match="settings.tool_reason: expected enabled or disabled"):
         parse_program(f"> settings:\n    tool_reason: {literal}\n")
 
 
@@ -60,7 +60,7 @@ def test_direct_ast_setting_cannot_bypass_plain_value_validation():
     from kedi.core import KediRuntime
     from kedi.lang.ast import SettingsField
 
-    with pytest.raises(ValueError, match="tool_reason must be enabled, disabled"):
+    with pytest.raises(ValueError, match="settings.tool_reason: expected enabled or disabled"):
         eval_settings_field_value(
             KediRuntime(), SettingsField(name="tool_reason", plain_value="true"), {}
         )

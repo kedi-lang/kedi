@@ -128,15 +128,11 @@ def test_flat_compaction_settings_parse_and_evaluate_in_all_profile_scopes() -> 
         ),
         (
             "> history:\n    enabled: true\n    compaction_mode: automatic\n",
-            "history compaction_mode must be",
+            "history.compaction_mode: expected one of",
         ),
         (
             "> history:\n    enabled: true\n    compaction_mode: native\n    compaction_mode: disabled\n",
             "Duplicate history setting",
-        ),
-        (
-            "> history:\n    enabled: `flag`\n",
-            "history enabled setting must be the literal",
         ),
     ],
 )
@@ -204,7 +200,7 @@ def test_expanded_history_requires_enabled_and_rejects_native_when_disabled() ->
         ),
         (
             "> history:\n    enabled: yes\n",
-            "history enabled setting must be 'true' or 'false'",
+            "must be 'true' or 'false'",
         ),
         (
             "> settings:\n    temperature: 0.2\n    temperature: 0.3\n",

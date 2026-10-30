@@ -131,6 +131,10 @@ def make_server() -> LanguageServer:
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
             pos=params.position,
+            explicit=(
+                params.context is None
+                or params.context.trigger_kind == lsp.CompletionTriggerKind.Invoked
+            ),
         )
 
     # ----- Definition -----
