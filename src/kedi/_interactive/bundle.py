@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 import hashlib
-from importlib import metadata as package_metadata
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
@@ -18,10 +14,15 @@ import struct
 import sys
 import tempfile
 import zipfile
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from importlib import metadata as package_metadata
+from pathlib import Path, PurePosixPath
 
 from packaging.requirements import Requirement
 
 from kedi._version import __version__
+
 from .persistence import (
     MAX_SNAPSHOT_BYTES,
     SessionDumpError,

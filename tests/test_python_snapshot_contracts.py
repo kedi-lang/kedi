@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future
 import io
 import json
-from pathlib import Path
 import pickle
 import struct
 import sys
-from typing import Any, cast
 import zipfile
+from concurrent.futures import Future
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 

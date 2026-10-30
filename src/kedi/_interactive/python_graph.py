@@ -21,7 +21,8 @@ import subprocess
 import sys
 import threading
 import types
-from concurrent.futures import Executor as ConcurrentExecutor, Future
+from concurrent.futures import Executor as ConcurrentExecutor
+from concurrent.futures import Future
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, create_model

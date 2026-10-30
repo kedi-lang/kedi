@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -251,6 +251,7 @@ def test_expired_artifacts_are_not_renewed_on_restore(tmp_path: Path) -> None:
 def test_completed_pydantic_conversation_continues_after_restore(tmp_path: Path) -> None:
     from pydantic_ai.messages import ModelResponse, TextPart, UserPromptPart
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.agent_adapter import PydanticAdapter
 
     prompts = []
@@ -451,6 +452,7 @@ def test_nested_generated_models_keep_their_validation_schema(tmp_path: Path) ->
 def test_completed_langchain_conversation_restores_to_a_fresh_adapter(tmp_path: Path) -> None:
     pytest.importorskip("langchain_core")
     from langchain_core.messages import AIMessage, HumanMessage
+
     from kedi.agent_adapter import LangChainAdapter
     from tests.test_langchain_user_history_processor import HistoryScriptedModel
 

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import weakref
 from dataclasses import asdict
 from pathlib import Path
-import shutil
 from typing import Any
-import weakref
 
 from .bundle import read_python_bundle, write_python_bundle
 from .persistence import SessionDumpError, SessionLoadError

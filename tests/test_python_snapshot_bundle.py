@@ -6,12 +6,12 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import pickle
 import stat
 import struct
 import warnings
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -66,9 +66,9 @@ def executable_snapshot(tmp_path: Path) -> tuple[Path, Path]:
     with kedi.InteractiveSession() as session:
         session.execute("[value: int] = `7`")
         session.dump(path, format="python")
-    from kedi._interactive.python_graph import _MAGIC
-
     import struct
+
+    from kedi._interactive.python_graph import _MAGIC
 
     _, original_members = _read_archive(path)
     graph = original_members["graph.pkl"]
