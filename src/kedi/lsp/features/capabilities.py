@@ -54,6 +54,7 @@ from kedi.lang.ast import (
 from kedi.lang.compiler.environment import KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.features.capability_state import (
+    _activation_state,
     _adapter_capability_status,
     _adapter_state_from_plain_value,
     _adapter_supports,
@@ -62,7 +63,6 @@ from kedi.lsp.features.capability_state import (
     _with_history_state,
     _with_hooks_state,
     _with_requirements_state,
-    _activation_state,
 )
 from kedi.lsp.features.symbols import (
     _approval_value_span,

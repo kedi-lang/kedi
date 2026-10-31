@@ -26,8 +26,8 @@ from kedi.lang.parser import KediParseError, parse_program
 from kedi.lsp.completion_source import parse_completion_source
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import utf16_length, utf16_to_index, with_source_coordinates
-from kedi.lsp.features.python_regions import compute_python_ranges
 from kedi.lsp.features.directive_options import option_completions
+from kedi.lsp.features.python_regions import compute_python_ranges
 from kedi.lsp.features.scope import (
     _all_procedures,
     _direct_type_defs,
