@@ -203,6 +203,9 @@ def compute_completion(
         return _native_task_completions(source, source_path, pos, child=False)
     directive_prefix = re.fullmatch(r"\s*(>\s*)[A-Za-z_]*", before_cursor)
     header = _enclosing_header(source, pos)
+    if directive_prefix and header is not None and re.fullmatch(r">\s*tools\s*:", header):
+        # A `> tools:` body lists tool names, never directives.
+        return []
     if directive_prefix and header is not None and re.fullmatch(r">\s*workflow\s*:", header):
         return [
             lsp.CompletionItem(

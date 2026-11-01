@@ -107,6 +107,7 @@ def test_the_editor_reports_the_same_error_on_the_tools_line():
         ("> tools: wait", "unknown subagent control tool 'wait'"),
         ("> tools:\n    wait_subagent\n    wait_subagent", "more than once"),
         ("> tools: cancel_subagent", "only apply to background runs"),
+        ("> tools:\n    all\n    wait_subagent", "use `all` alone or list the tools"),
         ("> tools:\n    subagent_status\n    continue_subagent", "add `wait_subagent`"),
     ],
 )
@@ -167,6 +168,7 @@ def _complete(block: str, *, explicit: bool = False) -> set[str]:
 
 def test_the_editor_completes_workflow_sub_directives_and_their_values():
     assert _complete("  > workflow:\n    > ") == {"mode", "tools"}
+    assert _complete("  > workflow:\n    > tools:\n      > ") == set()
     assert _complete("  > workflow:\n    > mode: ", explicit=True) == {
         "delegate",
         "dynamic",

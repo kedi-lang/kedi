@@ -121,6 +121,8 @@ def _workflow_tool_names(self: _Walker, node: Node) -> list[str]:
 def _workflow_tools_problem(names: list[str]) -> str | None:
     if names == ["all"]:
         return None
+    if "all" in names:
+        return "`all` already selects every control tool; use `all` alone or list the tools"
     unknown = [name for name in names if name not in WORKFLOW_CONTROL_TOOLS]
     if unknown:
         return (
