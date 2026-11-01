@@ -612,6 +612,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
         workspace: WorkspaceBackend | WorkspaceRef | Literal["new"] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
+        **native_options: Any,
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, OutputDataT]]: ...
 
     @overload
@@ -639,6 +640,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
         workspace: WorkspaceBackend | WorkspaceRef | Literal["new"] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
+        **native_options: Any,
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, RunOutputDataT]]: ...
 
     def iter(
@@ -665,6 +667,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
         workspace: WorkspaceBackend | WorkspaceRef | Literal["new"] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
+        **native_options: Any,
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, Any]]:
         """Apply active Kedi state to every native Pydantic AI run surface."""
 
@@ -693,6 +696,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 "capabilities": capabilities,
                 "workspace": workspace,
                 "spec": spec,
+                # Newer Pydantic AI releases add run options (for example ``timeout``). They are
+                # forwarded untouched, so an upstream addition cannot break this override.
+                **native_options,
             },
         )
 

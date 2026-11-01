@@ -27,6 +27,7 @@ from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.activation import capability_activation_scope, require_subagent_activation
 from kedi.lang import compile_program, parse_program
+from tests.instruction_context import effective_instructions
 
 
 def native_id(instructions: str, name: str) -> str:
@@ -47,12 +48,14 @@ def test_nested_deferred_catalog_and_execution_follow_parent_activation(codemode
         requests.append(info)
         names = {tool.name for tool in info.function_tools}
         if len(requests) == 1:
-            assert "kedi_images_" not in info.instructions
+            assert "kedi_images_" not in effective_instructions(info, messages)
             assert "generate_image" not in names
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "social")}, "social"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "social")},
+                        "social",
                     )
                 ]
             )
@@ -61,7 +64,9 @@ def test_nested_deferred_catalog_and_execution_follow_parent_activation(codemode
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "images")}, "images"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "images")},
+                        "images",
                     )
                 ]
             )
@@ -108,7 +113,7 @@ def test_deferred_subagent_is_hidden_and_gated_until_loading(guess_first, nested
     children = []
 
     def respond(messages, info):
-        if "Research the product." in (info.instructions or ""):
+        if "Research the product." in effective_instructions(info, messages):
             children.append(messages)
             return ModelResponse([TextPart("Product evidence verified.")])
         requests.append(info)
@@ -132,7 +137,12 @@ def test_deferred_subagent_is_hidden_and_gated_until_loading(guess_first, nested
                 [
                     ToolCallPart(
                         "load_capability",
-                        {"id": native_id(info.instructions, "social" if nested else "research")},
+                        {
+                            "id": native_id(
+                                effective_instructions(info, messages),
+                                "social" if nested else "research",
+                            )
+                        },
                         "load",
                     )
                 ]
@@ -143,7 +153,7 @@ def test_deferred_subagent_is_hidden_and_gated_until_loading(guess_first, nested
                 [
                     ToolCallPart(
                         "load_capability",
-                        {"id": native_id(info.instructions, "research")},
+                        {"id": native_id(effective_instructions(info, messages), "research")},
                         "research",
                     )
                 ]
@@ -200,8 +210,8 @@ def test_guessed_nested_load_cannot_skip_parent_confirmation(same_response):
     def respond(messages, info):
         steps.append(info)
         if len(steps) == 1:
-            assert "kedi_images_" not in info.instructions
-        parent = native_id(info.instructions, "social")
+            assert "kedi_images_" not in effective_instructions(info, messages)
+        parent = native_id(effective_instructions(info, messages), "social")
         if len(steps) == 1:
             calls = [ToolCallPart("load_capability", {"id": hidden}, "guess")]
             if same_response:
@@ -209,7 +219,7 @@ def test_guessed_nested_load_cannot_skip_parent_confirmation(same_response):
             return ModelResponse(calls)
         if not same_response and len(steps) == 2:
             return ModelResponse([ToolCallPart("load_capability", {"id": parent}, "parent")])
-        assert native_id(info.instructions, "images") == hidden
+        assert native_id(effective_instructions(info, messages), "images") == hidden
         assert "Hidden image guidance." not in str(messages)
         return ModelResponse([TextPart("done")])
 
@@ -244,10 +254,10 @@ def test_mixed_deferred_subagents_keep_target_policies_and_hooks(workflow, codem
         events.append(("post", event.arguments.get("subagent", event.tool_name)))
 
     def respond(messages, info):
-        if "Research the product." in (info.instructions or ""):
+        if "Research the product." in effective_instructions(info, messages):
             children.append("researcher")
             return ModelResponse([TextPart("Verified evidence.")])
-        if "Write the copy." in (info.instructions or ""):
+        if "Write the copy." in effective_instructions(info, messages):
             children.append("writer")
             return ModelResponse([TextPart("Copy drafted.")])
         steps.append(info)
@@ -274,7 +284,9 @@ def test_mixed_deferred_subagents_keep_target_policies_and_hooks(workflow, codem
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "research")}, "load"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "research")},
+                        "load",
                     )
                 ]
             )
@@ -360,12 +372,14 @@ def test_parallel_nested_runs_on_shared_adapter_start_with_independent_activatio
         loaded = loaded_ids(messages)
         if not loaded:
             with lock:
-                starts.append(info.instructions)
-            assert "kedi_images_" not in info.instructions
+                starts.append(effective_instructions(info, messages))
+            assert "kedi_images_" not in effective_instructions(info, messages)
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "social")}, "parent"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "social")},
+                        "parent",
                     )
                 ]
             )
@@ -374,7 +388,9 @@ def test_parallel_nested_runs_on_shared_adapter_start_with_independent_activatio
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "images")}, "child"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "images")},
+                        "child",
                     )
                 ]
             )
@@ -402,16 +418,18 @@ def test_nested_resume_reset_and_reuse_preserve_native_activation_and_guidance(c
 
     def respond(messages, info):
         loaded = loaded_ids(messages)
-        requests.append((phase, loaded, info.instructions))
+        requests.append((phase, loaded, effective_instructions(info, messages)))
         if phase == "reset":
-            assert "Image guidance." not in info.instructions
-            assert "Social guidance." not in info.instructions
+            assert "Image guidance." not in effective_instructions(info, messages)
+            assert "Social guidance." not in effective_instructions(info, messages)
         if not loaded:
-            assert "kedi_images_" not in info.instructions
+            assert "kedi_images_" not in effective_instructions(info, messages)
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "social")}, "parent"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "social")},
+                        "parent",
                     )
                 ]
             )
@@ -419,13 +437,15 @@ def test_nested_resume_reset_and_reuse_preserve_native_activation_and_guidance(c
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "images")}, "child"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "images")},
+                        "child",
                     )
                 ]
             )
         if phase == "reuse":
-            assert info.instructions.count("Image guidance.") == 1
-            assert info.instructions.count("Social guidance.") == 1
+            assert effective_instructions(info, messages).count("Image guidance.") == 1
+            assert effective_instructions(info, messages).count("Social guidance.") == 1
         return ModelResponse([TextPart("done")])
 
     adapter = PydanticAdapter(FunctionModel(respond))
@@ -461,21 +481,25 @@ def test_shared_nested_child_is_reachable_through_any_loaded_parent_or_direct_us
     def respond(messages, info):
         loaded = loaded_ids(messages)
         if not loaded:
-            assert ("kedi_images_" in info.instructions) is direct_use
+            assert ("kedi_images_" in effective_instructions(info, messages)) is direct_use
             name = "images" if direct_use else "right"
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, name)}, "first"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), name)},
+                        "first",
                     )
                 ]
             )
-        assert info.instructions.count("- kedi_images_") == 1
+        assert effective_instructions(info, messages).count("- kedi_images_") == 1
         if not direct_use and len(loaded) == 1:
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "images")}, "child"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "images")},
+                        "child",
                     )
                 ]
             )
@@ -504,13 +528,19 @@ def test_shared_child_guidance_is_restored_only_through_an_active_restored_paren
         step = len(steps)
         steps.append(info)
         if step < len(loads):
-            assert "Preserve product details." not in info.instructions
+            assert "Preserve product details." not in effective_instructions(info, messages)
             assert "Preserve product details." not in str(messages)
             name = loads[step]
             return ModelResponse(
-                [ToolCallPart("load_capability", {"id": native_id(info.instructions, name)}, name)]
+                [
+                    ToolCallPart(
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), name)},
+                        name,
+                    )
+                ]
             )
-        assert info.instructions.count("Preserve product details.") == 1
+        assert effective_instructions(info, messages).count("Preserve product details.") == 1
         return ModelResponse([TextPart("done")])
 
     adapter = PydanticAdapter(FunctionModel(respond))
@@ -527,7 +557,7 @@ def test_deferred_subagent_background_wait_and_continuation_keep_owned_binding(b
 
     def respond(messages, info):
         nonlocal original_run
-        if "Research the product." in (info.instructions or ""):
+        if "Research the product." in effective_instructions(info, messages):
             children.append(messages)
             return ModelResponse([TextPart("Evidence checked.")])
         steps.append(info)
@@ -541,7 +571,9 @@ def test_deferred_subagent_background_wait_and_continuation_keep_owned_binding(b
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "research")}, "load"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "research")},
+                        "load",
                     )
                 ]
             )
@@ -606,10 +638,10 @@ def test_guessed_inactive_target_cannot_use_an_eager_siblings_shared_control(wor
         return PreToolUseDecision.continue_()
 
     def respond(messages, info):
-        if "Research the product." in (info.instructions or ""):
+        if "Research the product." in effective_instructions(info, messages):
             children.append("researcher")
             return ModelResponse([TextPart("Checked.")])
-        if "Write the copy." in (info.instructions or ""):
+        if "Write the copy." in effective_instructions(info, messages):
             children.append("writer")
             return ModelResponse([TextPart("Drafted.")])
         steps.append(info)
@@ -711,7 +743,13 @@ async def test_cancelling_native_nested_tool_execution_cleans_activation_for_the
         if len(loaded) < 2:
             name = "social" if not loaded else "images"
             return ModelResponse(
-                [ToolCallPart("load_capability", {"id": native_id(info.instructions, name)}, name)]
+                [
+                    ToolCallPart(
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), name)},
+                        name,
+                    )
+                ]
             )
         return ModelResponse([ToolCallPart("retrieve", {}, "retrieve")])
 
@@ -753,14 +791,16 @@ def test_three_deferred_levels_reveal_only_the_next_reachable_catalog_entry():
     def respond(messages, info):
         completed = len(loaded_ids(messages))
         for index, name in enumerate(names):
-            assert (f"kedi_{name}_" in info.instructions) is (index <= completed)
+            assert (f"kedi_{name}_" in effective_instructions(info, messages)) is (
+                index <= completed
+            )
         if completed == len(names):
             return ModelResponse([TextPart("done")])
         return ModelResponse(
             [
                 ToolCallPart(
                     "load_capability",
-                    {"id": native_id(info.instructions, names[completed])},
+                    {"id": native_id(effective_instructions(info, messages), names[completed])},
                     f"load-{completed}",
                 )
             ]
@@ -783,15 +823,17 @@ def test_deferred_parent_activates_its_eager_child_tools_and_guidance_together()
         calls.append(info)
         if len(calls) == 1:
             assert "generate_image" not in {tool.name for tool in info.function_tools}
-            assert "Preserve product details." not in info.instructions
+            assert "Preserve product details." not in effective_instructions(info, messages)
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "social")}, "load"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "social")},
+                        "load",
                     )
                 ]
             )
-        assert "kedi_images_" not in info.instructions
+        assert "kedi_images_" not in effective_instructions(info, messages)
         assert "Preserve product details." in str(messages)
         if len(calls) == 2:
             return ModelResponse([ToolCallPart("generate_image", {}, "image")])
@@ -820,7 +862,7 @@ def test_dynamic_workflow_accepts_subagents_contributed_only_by_a_capability(def
     children = []
 
     def respond(messages, info):
-        if "Research the product." in (info.instructions or ""):
+        if "Research the product." in effective_instructions(info, messages):
             children.append("researcher")
             return ModelResponse([TextPart("Verified.")])
         steps.append(info)
@@ -830,7 +872,9 @@ def test_dynamic_workflow_accepts_subagents_contributed_only_by_a_capability(def
             return ModelResponse(
                 [
                     ToolCallPart(
-                        "load_capability", {"id": native_id(info.instructions, "research")}, "load"
+                        "load_capability",
+                        {"id": native_id(effective_instructions(info, messages), "research")},
+                        "load",
                     )
                 ]
             )

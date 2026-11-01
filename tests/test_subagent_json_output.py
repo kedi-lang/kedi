@@ -10,7 +10,7 @@ from uuid import UUID
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError, model_validator
-from pydantic_ai.messages import ModelMessage, ModelResponse, RetryPromptPart, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from kedi.agent_adapter import PydanticAdapter
@@ -18,6 +18,7 @@ from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.agent_adapter.subagents import SubagentOutputState
 from kedi.agent_adapter.subagents.runs import SubagentCompleted, SubagentFailed
 from kedi.lang import compile_program, parse_program
+from tests.retry_feedback import retry_feedback
 from tests.test_subagents import RecordingPydanticAdapter
 
 
@@ -57,9 +58,9 @@ def task_source(capture: bool) -> str:
 
 def child_adapter(
     candidates: list[dict[str, Any]], *, native: bool
-) -> tuple[PydanticAdapter[Any, Any], list[dict[str, Any]], list[RetryPromptPart]]:
+) -> tuple[PydanticAdapter[Any, Any], list[dict[str, Any]], list[Any]]:
     requests: list[dict[str, Any]] = []
-    feedback: list[RetryPromptPart] = []
+    feedback: list[Any] = []
 
     def candidate() -> dict[str, Any]:
         value = candidates[min(len(requests), len(candidates) - 1)]
@@ -67,12 +68,7 @@ def child_adapter(
         return value
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        feedback.extend(
-            part
-            for message in messages
-            for part in message.parts
-            if isinstance(part, RetryPromptPart)
-        )
+        feedback.extend(retry_feedback(messages))
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, candidate())])
 
     class FallbackAdapter(RecordingPydanticAdapter):

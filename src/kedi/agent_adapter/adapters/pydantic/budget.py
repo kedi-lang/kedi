@@ -121,6 +121,14 @@ class BudgetedModel(WrapperModel):
             yield response
 
 
+async def _fallback_judgment(model: FallbackModel, value: Exception | ModelResponse) -> bool:
+    """Ask the wrapped model's own fallback_on policy; Pydantic AI moved it between releases."""
+    predicates = getattr(model, "_predicates", None)
+    if predicates is not None:
+        return await predicates.should_fallback(value)
+    return await model._should_fallback(value)  # pyright: ignore[reportPrivateUsage]
+
+
 def budget_model(model: Model) -> Model:
     if current_run_budget() is None or isinstance(model, BudgetedModel):
         return model
@@ -129,10 +137,10 @@ def budget_model(model: Model) -> Model:
         async def on_exception(value: Exception) -> bool:
             if isinstance(value, RunBudgetExceeded):
                 raise value
-            return await model._should_fallback(value)  # pyright: ignore[reportPrivateUsage]
+            return await _fallback_judgment(model, value)
 
         async def on_response(value: ModelResponse) -> bool:
-            return await model._should_fallback(value)  # pyright: ignore[reportPrivateUsage]
+            return await _fallback_judgment(model, value)
 
         return FallbackModel(
             *(budget_model(child) for child in model.models),

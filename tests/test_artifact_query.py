@@ -21,6 +21,7 @@ from kedi.artifacts import (
     artifact_tool_specs,
 )
 from kedi.lang import compile_program, parse_program
+from tests.retry_feedback import retry_feedback
 
 
 def test_clip_without_highlights_uses_identifier_components_or_stable_fallback():
@@ -373,8 +374,6 @@ def test_query_signature_errors_are_model_correctable(stored, adapter, arguments
 
 
 def test_pydantic_model_can_repair_missing_query_arguments():
-    from pydantic_ai.messages import RetryPromptPart
-
     turns = []
 
     def respond(messages, info):
@@ -382,12 +381,7 @@ def test_pydantic_model_can_repair_missing_query_arguments():
         if len(turns) == 1:
             return ModelResponse(parts=[ToolCallPart("query_artifact", {}, tool_call_id="bad")])
         if len(turns) == 2:
-            assert any(
-                isinstance(p, RetryPromptPart)
-                for m in messages
-                if isinstance(m, ModelRequest)
-                for p in m.parts
-            )
+            assert retry_feedback(m for m in messages if isinstance(m, ModelRequest))
             return ModelResponse(
                 parts=[
                     ToolCallPart(
