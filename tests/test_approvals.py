@@ -1183,3 +1183,20 @@ def test_profile_approval_is_applied_when_profile_is_used() -> None:
     runtime = compile_program(parse_program(source), adapter=_ToolCallingAdapter())
 
     assert runtime.run_main() == "safe.txt"
+
+
+def test_default_deny_tells_the_caller_how_the_tool_is_classified():
+    request = ApprovalRequest.create(
+        tool_name="read_text_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname=None,
+        description=None,
+        metadata=None,
+    )
+    decision = resolve_tool_approval(None, request)
+    assert decision.decision == "deny"
+    reason = decision.reason or ""
+    assert "no approval policy configured" in reason
+    assert "'read_text_file' is classified 'mutating'" in reason
+    assert "__kedi_tool_risk__" in reason and "> approval:" in reason

@@ -50,10 +50,15 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
 
         if isinstance(original, WorkflowError):
             return str(original)
-    if kind == "subagent" and isinstance(exc, KediExecutionError):
+    if kind in {"subagent", "subagent_lifecycle"}:
+        # Whatever went wrong with a delegation, the calling model sees it and decides what to
+        # do next. Run budgets (above) and cancellation (a BaseException) still end the run.
         from ..subagents.runs import safe_subagent_error_message
 
-        return safe_subagent_error_message(exc) or "Subagent failed"
+        message = safe_subagent_error_message(exc)
+        if isinstance(exc, KediExecutionError):
+            return message or "Subagent failed"
+        return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
     if kind == "artifact_management":
         from kedi.artifacts.errors import artifact_tool_error_message
 
