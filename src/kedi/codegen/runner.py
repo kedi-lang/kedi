@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from ..agent_adapter.execution import run_in_worker, run_sync
 from ..lang import parse_program
 from ..lang.ast import ProcedureDef
 from ..reporter import CliReporter, Reporter
@@ -43,6 +44,31 @@ def run_codegen(
     use_cache: bool = True,
     quiet: bool = False,
     reporter: Reporter | None = None,
+) -> bool:
+    # Test and implementation generation reuse one adapter and its async clients.
+    return run_sync(
+        run_in_worker(
+            _run_codegen,
+            source_path,
+            agent_kind=agent_kind,
+            model=model,
+            max_retries=max_retries,
+            use_cache=use_cache,
+            quiet=quiet,
+            reporter=reporter,
+        )
+    )
+
+
+def _run_codegen(
+    source_path: Path,
+    *,
+    agent_kind: str,
+    model: str | None,
+    max_retries: int,
+    use_cache: bool,
+    quiet: bool,
+    reporter: Reporter | None,
 ) -> bool:
     text = Path(source_path).read_text(encoding="utf-8")
     prog = parse_program(

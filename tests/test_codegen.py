@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from io import StringIO
@@ -623,6 +624,56 @@ def test_pydantic_ai_agent_uses_configured_adapter(
     explicit = agent_module.PydanticAIAgent(model="explicit/model")
     assert explicit.model == "explicit/model"
     assert FakeAdapter.instances[-1].model == "explicit/model"
+
+
+@pytest.mark.parametrize("async_host", [False, True])
+@pytest.mark.parametrize("fail_implementation", [False, True])
+def test_codegen_keeps_one_loop_for_tests_and_implementation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    async_host: bool,
+    fail_implementation: bool,
+) -> None:
+    from kedi.agent_adapter.execution import run_sync
+    from kedi.codegen import runner as runner_module
+
+    loops: list[asyncio.AbstractEventLoop] = []
+
+    async def check_loop() -> None:
+        loop = asyncio.get_running_loop()
+        if loops:
+            assert loop is loops[0], "codegen reused its adapter on another loop"
+        loops.append(loop)
+
+    class LoopBoundAgent(MockPassingAgent):
+        def generate_tests(self, *args: Any, **kwargs: Any) -> str:
+            run_sync(check_loop())
+            return super().generate_tests(*args, **kwargs)
+
+        def generate_impl(self, *args: Any, **kwargs: Any) -> str:
+            run_sync(check_loop())
+            if fail_implementation:
+                raise RuntimeError("implementation request failed")
+            return super().generate_impl(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "_select_agent", lambda kind, model: LoopBoundAgent())
+    source = tmp_path / "loop.kedi"
+    source.write_text("@f() -> str:\n  > auto:\n    Return ok.\n", encoding="utf-8")
+
+    def generate() -> bool:
+        return runner_module.run_codegen(source, quiet=True, use_cache=False)
+
+    async def async_generate() -> bool:
+        return generate()
+
+    if fail_implementation:
+        with pytest.raises(RuntimeError, match="implementation request failed"):
+            asyncio.run(async_generate()) if async_host else generate()
+    else:
+        assert asyncio.run(async_generate()) if async_host else generate()
+    assert len(loops) == 2
+    assert loops[0].is_closed()
+    assert not source.with_suffix(".cache.kedi").exists()
 
 
 def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(
