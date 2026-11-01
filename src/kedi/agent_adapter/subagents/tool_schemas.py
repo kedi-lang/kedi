@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any
+
+from jsonschema import Draft202012Validator
 
 from kedi.agent_adapter.tools.specs import ToolSpec
 
@@ -146,7 +149,7 @@ def build_subagent_tool_specs(
         ),
     ]
     if not supports_background:
-        return tuple(tools)
+        return schema_validated(tools)
 
     tools.extend(
         (
@@ -215,7 +218,7 @@ def build_subagent_tool_specs(
             ),
         )
     )
-    return tuple(tools)
+    return schema_validated(tools)
 
 
 def _delegation_result_schema() -> dict[str, Any]:
@@ -253,3 +256,30 @@ def _run_id_schema() -> dict[str, Any]:
         "required": ["run_id"],
         "additionalProperties": False,
     }
+
+
+def schema_validated(specs: list[ToolSpec] | tuple[ToolSpec, ...]) -> tuple[ToolSpec, ...]:
+    """Enforce each tool's advertised JSON Schema so a malformed call is reported, not raised."""
+    return tuple(
+        replace(spec, argument_validator=_schema_argument_validator(spec)) for spec in specs
+    )
+
+
+def _schema_argument_validator(spec: ToolSpec) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    schema = spec.json_schema or {"type": "object"}
+    validator = Draft202012Validator(schema)
+    allowed = ", ".join(sorted(schema.get("properties", {}))) or "none"
+
+    def validate(arguments: Mapping[str, Any]) -> dict[str, Any]:
+        values = dict(arguments)
+        problems = [
+            f"{'.'.join(str(part) for part in error.absolute_path) or 'arguments'}: {error.message}"
+            for error in sorted(validator.iter_errors(values), key=lambda error: error.path)
+        ]
+        if problems:
+            raise ValueError(
+                f"Invalid arguments for {spec.name}: {'; '.join(problems)}. Allowed arguments: {allowed}."
+            )
+        return values
+
+    return validate

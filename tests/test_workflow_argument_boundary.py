@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from pydantic_ai import Agent, ModelRetry
-from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
@@ -14,6 +14,7 @@ from kedi.agent_adapter.adapters.pydantic.tools import pydantic_tool_from_spec
 from kedi.agent_profile.compile import build_capture_env
 from kedi.agent_profile.evaluation import eval_profile_definition
 from kedi.lang import compile_program, parse_program
+from tests.retry_feedback import retry_feedback
 
 
 @pytest.fixture
@@ -90,7 +91,7 @@ def test_native_pydantic_model_can_repair_outer_workflow_arguments(workflow_tool
                 parts=[ToolCallPart("run_workflow", {"code": "40 + 2", "final_schema": {}})]
             )
         if calls == 2:
-            assert any(isinstance(p, RetryPromptPart) for m in messages for p in m.parts)
+            assert retry_feedback(messages)
             return ModelResponse(parts=[ToolCallPart("run_workflow", {"code": "40 + 2"})])
         return ModelResponse(parts=[TextPart("42")])
 

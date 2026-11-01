@@ -12,7 +12,7 @@ from pydantic import BaseModel, TypeAdapter, model_validator
 from pydantic_ai import UsageLimits
 from pydantic_ai.capabilities import AbstractCapability, OutputContext
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelMessage, ModelResponse, RetryPromptPart, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -25,6 +25,7 @@ from kedi.agent_adapter.subagents import DelegationResult, SubagentOutputState, 
 from kedi.agent_adapter.subagents.native import SubagentTask
 from kedi.agent_adapter.subagents.runs import SubagentCompleted, SubagentFailed
 from kedi.lang import compile_program, parse_program
+from tests.retry_feedback import retry_feedback
 
 FINAL_SCHEMA = {
     "type": "object",
@@ -131,17 +132,12 @@ async def test_native_task_repairs_pydantic_business_validator_before_completion
             return self
 
     calls = 0
-    feedback: list[RetryPromptPart] = []
+    feedback: list[Any] = []
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         nonlocal calls
         calls += 1
-        feedback.extend(
-            part
-            for message in messages
-            for part in message.parts
-            if isinstance(part, RetryPromptPart)
-        )
+        feedback.extend(retry_feedback(messages))
         return ModelResponse(
             parts=[
                 ToolCallPart(
@@ -331,18 +327,13 @@ async def test_repair_feedback_bounds_many_schema_errors() -> None:
             "additionalProperties": False,
         }
     )
-    feedback: list[RetryPromptPart] = []
+    feedback: list[Any] = []
     requests = 0
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         nonlocal requests
         requests += 1
-        feedback.extend(
-            part
-            for message in messages
-            for part in message.parts
-            if isinstance(part, RetryPromptPart)
-        )
+        feedback.extend(retry_feedback(messages))
         value = {} if requests == 1 else {name: 1 for name in required}
         return ModelResponse(
             parts=[
@@ -376,17 +367,12 @@ async def test_validator_normalization_cannot_commit_schema_invalid_value() -> N
             return self
 
     attempts = 0
-    feedback: list[RetryPromptPart] = []
+    feedback: list[Any] = []
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         nonlocal attempts
         attempts += 1
-        feedback.extend(
-            part
-            for message in messages
-            for part in message.parts
-            if isinstance(part, RetryPromptPart)
-        )
+        feedback.extend(retry_feedback(messages))
         return ModelResponse(
             parts=[
                 ToolCallPart(
@@ -464,7 +450,7 @@ async def test_subagent_repairs_full_schema_and_preserves_capabilities(
 ) -> None:
     attempts = 0
     observed: list[Any] = []
-    feedback: list[RetryPromptPart] = []
+    feedback: list[Any] = []
 
     class Observer(AbstractCapability[Any]):
         async def after_output_process(
@@ -476,12 +462,7 @@ async def test_subagent_repairs_full_schema_and_preserves_capabilities(
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         nonlocal attempts
         attempts += 1
-        feedback.extend(
-            part
-            for message in messages
-            for part in message.parts
-            if isinstance(part, RetryPromptPart)
-        )
+        feedback.extend(retry_feedback(messages))
         return ModelResponse(
             parts=[ToolCallPart(info.output_tools[0].name, invalid if attempts == 1 else GOOD)]
         )

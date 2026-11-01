@@ -153,6 +153,15 @@ class ApprovalPolicy:
         return cls(handler=handler)
 
 
+def _default_deny_reason(request: ApprovalRequest) -> str:
+    # The caller, human or model, must be able to tell a classification problem from a refusal.
+    return (
+        f"no approval policy configured; tool {request.tool_name!r} is classified "
+        f"{request.risk!r}. A tool that only reads can declare "
+        '`__kedi_tool_risk__ = "read_only"`; otherwise configure approval with `> approval:`.'
+    )
+
+
 def resolve_tool_approval(
     policy: ApprovalPolicy | None,
     request: ApprovalRequest,
@@ -173,7 +182,7 @@ def resolve_tool_approval(
         record_immediate_decision(request, decision, mode="automatic_read_only")
         return decision
     if policy is None:
-        decision = ApprovalDecision.deny(reason="no approval policy configured")
+        decision = ApprovalDecision.deny(reason=_default_deny_reason(request))
         record_immediate_decision(request, decision, mode="default_deny")
         return decision
     if policy.mode is not None:
@@ -238,7 +247,7 @@ async def resolve_tool_approval_async(
         record_immediate_decision(request, decision, mode="automatic_read_only")
         return decision
     if policy is None:
-        decision = ApprovalDecision.deny(reason="no approval policy configured")
+        decision = ApprovalDecision.deny(reason=_default_deny_reason(request))
         record_immediate_decision(request, decision, mode="default_deny")
         return decision
     if policy.mode is not None:

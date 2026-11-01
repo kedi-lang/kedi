@@ -27,6 +27,25 @@ def _ensure_src_on_path() -> None:
 _ensure_src_on_path()
 
 
+# A git hook exports these for the outer repository. Test repositories created below it
+# would otherwise inherit them and rewrite the outer index.
+_OUTER_GIT_ENVIRONMENT = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_WORK_TREE",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_outer_git_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _OUTER_GIT_ENVIRONMENT:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_idle_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep CLI tests from loading or rewriting the user's readline history."""

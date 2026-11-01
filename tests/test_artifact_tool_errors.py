@@ -12,7 +12,6 @@ import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
-    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -34,6 +33,7 @@ from kedi.artifacts import (
     artifact_tool_specs,
 )
 from kedi.artifacts.errors import artifact_tool_error_message
+from tests.retry_feedback import retry_feedback
 
 
 @pytest.fixture(params=["memory", "file"])
@@ -126,9 +126,7 @@ def test_pydantic_model_corrects_artifact_call_without_experiment_capability(
                 parts=[ToolCallPart("read_artifact", arguments, tool_call_id="bad")]
             )
         if calls == 2:
-            retries = [
-                part for msg in messages for part in msg.parts if isinstance(part, RetryPromptPart)
-            ]
+            retries = retry_feedback(messages)
             assert len(retries) == 1
             assert retries[0].tool_call_id == "bad"
             assert "Artifact" in str(retries[0].content)
@@ -221,9 +219,7 @@ def test_pydantic_compute_error_guides_one_successful_correction(
         if calls == 1:
             code = "sum_values([1, 2])"
         elif calls == 2:
-            retries = [
-                part for msg in messages for part in msg.parts if isinstance(part, RetryPromptPart)
-            ]
+            retries = retry_feedback(messages)
             assert len(retries) == 1
             assert "direct expressions, loops, or comprehensions" in str(retries[0].content)
             code = f"sum(get_artifact({ref_id!r})['items'])"

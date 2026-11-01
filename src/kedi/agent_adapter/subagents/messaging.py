@@ -15,6 +15,7 @@ from kedi.agent_adapter.subagents.control import (
     sender_is_current,
 )
 from kedi.agent_adapter.subagents.runs import SubagentRunStatus
+from kedi.agent_adapter.subagents.tool_schemas import schema_validated
 from kedi.agent_adapter.tools.specs import ToolSpec
 
 if TYPE_CHECKING:
@@ -115,7 +116,7 @@ def input_tool_specs(rt: KediRuntime, *, children: bool, parent: bool) -> tuple[
                 risk="read_only",
             )
         )
-    return tuple(tools)
+    return schema_validated(tools)
 
 
 async def wait_for_child(

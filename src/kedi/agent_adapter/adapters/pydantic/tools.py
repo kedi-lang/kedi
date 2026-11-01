@@ -92,9 +92,8 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
         async def validated_async_tool(*args: Any, **kwargs: Any) -> Any:
             if args:
                 raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
-            arguments = _validated_tool_arguments(tool, kwargs)
             try:
-                result = tool.fn(**arguments)
+                result = tool.fn(**_validated_tool_arguments(tool, kwargs))
                 if inspect.isawaitable(result):
                     result = await result
                 return result

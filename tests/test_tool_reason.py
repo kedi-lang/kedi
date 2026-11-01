@@ -28,6 +28,7 @@ from kedi.agent_adapter.tools.execution import resolve_tool_arguments_async
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
+from tests.retry_feedback import retry_feedback
 
 
 def _spec(calls, *, risk="mutating", resolver=None):
@@ -80,8 +81,6 @@ def test_codemode_control_tools_do_not_request_action_reasons(metadata):
 
 @pytest.mark.parametrize("bad_args", ["[]", "{", {"value": "hello", "reason": 3}])
 def test_pydantic_retries_invalid_arguments_before_approval_or_execution(bad_args):
-    from pydantic_ai.messages import RetryPromptPart
-
     calls, approvals = [], []
     step = 0
 
@@ -96,7 +95,7 @@ def test_pydantic_retries_invalid_arguments_before_approval_or_execution(bad_arg
             return ModelResponse(parts=[ToolCallPart("write", bad_args, tool_call_id="invalid")])
         if step == 2:
             assert not calls and not approvals
-            assert any(isinstance(part, RetryPromptPart) for m in messages for part in m.parts)
+            assert retry_feedback(messages)
             return ModelResponse(
                 parts=[
                     ToolCallPart(
