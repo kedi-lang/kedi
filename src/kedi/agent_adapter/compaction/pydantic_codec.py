@@ -227,10 +227,10 @@ def _pydantic_entry_kind(
         ModelRequest,
         RetryFeedbackPart,
         SystemPromptPart,
-        ToolReturnPart,
         TextPart,
         ThinkingPart,
         ToolAvailabilityDeltaPart,
+        ToolReturnPart,
         UserPromptPart,
     )
 
