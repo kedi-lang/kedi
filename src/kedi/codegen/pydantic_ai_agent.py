@@ -38,7 +38,7 @@ class PydanticAIAgent(CodegenAgent):
     def __init__(self, model: str | None = None) -> None:
         self.model = model or os.environ.get("MODEL_NAME") or "openai/gpt-6-luna"
 
-        self.adapter = PydanticAdapter[None, Any](model=self.model)
+        self.adapter = PydanticAdapter[None, Any](model=self.model, defer_model_check=True)
 
     def generate_tests(
         self,

@@ -6,6 +6,7 @@ from uuid import uuid4
 from ..errors import KediValueExecutionError
 from ..lang.ast import Program
 from ..lang.parser import parse_program
+from ..lang.parser.diagnostics import KediParseError
 from ..reporter import CliReporter, Reporter
 from ..source_loading import merge_source_documents
 from ..tests_runner import run_tests
@@ -42,17 +43,39 @@ class CodegenManager:
         if not cache.exists():
             return False
         text = cache.read_text(encoding="utf-8")
-        # Match the proc's own cache block (comment-marker delimited), not a bare `@name(` substring
-        # — generated bodies routinely *call* other procedures, so a substring scan reports a
-        # never-generated procedure as cached. Reuse the same block matcher write/replace/remove use.
-        return self._split_block(text, proc_name) is not None
+        split = self._split_block(text, proc_name)
+        if split is None:
+            return False
+        _, body, _ = split
+        if self._validated_marker(proc_name) not in body.splitlines():
+            return False
+        try:
+            program = parse_program(body)
+        except KediParseError:
+            return False
+        return any(
+            proc.name == proc_name and not proc.auto_spec and not proc.ai_prompt
+            for proc in program.procedures
+        )
 
     @staticmethod
     def _block_markers(proc_name: str) -> tuple[str, str]:
         # `#` is a Kedi comment, so markers don't affect parsing.
         return (f"# >>> kedi-codegen: {proc_name}", f"# <<< kedi-codegen: {proc_name}")
 
-    def write_cache(self, source_path: Path, proc_name: str, tests: str, impl: str) -> None:
+    @staticmethod
+    def _validated_marker(proc_name: str) -> str:
+        return f"# kedi-codegen-validated: {proc_name}"
+
+    def write_cache(
+        self,
+        source_path: Path,
+        proc_name: str,
+        tests: str,
+        impl: str,
+        *,
+        validated: bool = False,
+    ) -> None:
         # Always write cache for execution (needed for tests and program run).
         # The caller will clean it up if use_cache=False.
         # Merge by procedure identity so unrelated generated procedures survive:
@@ -62,14 +85,17 @@ class CodegenManager:
         body = tests.strip() + "\n\n" + impl.strip()
         # A generated marker line would corrupt the per-procedure split; fail loud.
         if any(
-            line.strip().startswith(("# >>> kedi-codegen:", "# <<< kedi-codegen:"))
+            line.strip().startswith(
+                ("# >>> kedi-codegen:", "# <<< kedi-codegen:", "# kedi-codegen-validated:")
+            )
             for line in body.splitlines()
         ):
             raise KediValueExecutionError(
                 f"Generated code for {proc_name!r} contains a reserved kedi-codegen "
                 "cache marker line; refusing to write a corruptible cache."
             )
-        block = f"{start}\n{body.strip()}\n{end}\n"
+        completion = f"{self._validated_marker(proc_name)}\n" if validated else ""
+        block = f"{start}\n{completion}{body.strip()}\n{end}\n"
 
         existing = cache.read_text(encoding="utf-8") if cache.exists() else ""
         content = self._replace_block(existing, proc_name, block)
@@ -84,25 +110,25 @@ class CodegenManager:
         finally:
             tmp.unlink(missing_ok=True)
 
-    def _split_block(self, existing: str, proc_name: str) -> tuple[str, str] | None:
-        """Return (before, after) around ``proc_name``'s block, or None if absent.
+    def _split_block(self, existing: str, proc_name: str) -> tuple[str, str, str] | None:
+        """Return (before, body, after) for ``proc_name``'s block, or None if absent.
 
         Markers are matched as whole lines (``start``/``end`` plus newline) so a
         procedure name that prefixes another does not match the wrong block.
         """
         start, end = self._block_markers(proc_name)
         start_token, end_token = start + "\n", end + "\n"
-        if start_token in existing and end_token in existing:
-            before, rest = existing.split(start_token, 1)
-            _, after = rest.split(end_token, 1)
-            return before, after
+        before, found_start, rest = existing.partition(start_token)
+        body, found_end, after = rest.partition(end_token)
+        if found_start and found_end:
+            return before, body, after
         return None
 
     def _replace_block(self, existing: str, proc_name: str, block: str) -> str:
         """Replace the marked block for ``proc_name`` (or append if absent)."""
         split = self._split_block(existing, proc_name)
         if split is not None:
-            before, after = split
+            before, _, after = split
             return before.rstrip() + ("\n\n" if before.strip() else "") + block + after.lstrip()
         prefix = existing.rstrip()
         return (prefix + "\n\n" if prefix else "") + block
@@ -111,7 +137,7 @@ class CodegenManager:
         """Remove the marked block for ``proc_name``, preserving other blocks."""
         split = self._split_block(existing, proc_name)
         if split is not None:
-            before, after = split
+            before, _, after = split
             return (before.rstrip() + "\n\n" + after.lstrip()).strip()
         return existing
 
@@ -209,10 +235,12 @@ class CodegenManager:
         """
         name = proc_header.split("(")[0].strip().lstrip("@")
 
+        success = False
         try:
-            return self._orchestrate_generation(source_path, proc_header, prompt, spec, name)
+            success = self._orchestrate_generation(source_path, proc_header, prompt, spec, name)
+            return success
         finally:
-            if not self.use_cache:
+            if not success or not self.use_cache:
                 self.cleanup_failed_cache(source_path, name)
 
     def _orchestrate_generation(
@@ -251,7 +279,14 @@ class CodegenManager:
                 )
 
                 # Translate tests to Kedi
-                kedi_tests = python_tests_to_kedi_tests(python_tests, name)
+                try:
+                    kedi_tests = python_tests_to_kedi_tests(python_tests, name)
+                except ValueError as translate_error:
+                    test_error_feedback = (
+                        f"Previous Python tests:\n{python_tests}\n\n"
+                        f"Translation error: {translate_error}"
+                    )
+                    continue
 
                 # Verify tests compile
                 self.write_cache(source_path, name, kedi_tests, "")
@@ -297,6 +332,7 @@ class CodegenManager:
                 # Implementation compiled, run tests
                 test_run_error = self.run_tests_and_get_errors(source_path)
                 if not test_run_error:
+                    self.write_cache(source_path, name, kedi_tests, kedi_impl, validated=True)
                     self._reporter.emit(" ✓", flush=True)
                     impl_success = True
                     break
@@ -310,6 +346,4 @@ class CodegenManager:
             test_error_feedback = f"Previous tests may have been too strict or incorrect.\nLast implementation error: {impl_error_feedback}"
 
         self._reporter.emit(" ✗", flush=True)
-        # Clean up failed cache - don't persist code that doesn't pass tests
-        self.cleanup_failed_cache(source_path, name)
         return False

@@ -17,8 +17,8 @@ def test_write_cache_merges_multiple_procedures(tmp_path: Path) -> None:
     src.write_text("= ok\n", encoding="utf-8")
     mgr = CodegenManager(MockPassingAgent())
 
-    mgr.write_cache(src, "a", "", "@a():\n  = a-result\n")
-    mgr.write_cache(src, "b", "", "@b():\n  = b-result\n")
+    mgr.write_cache(src, "a", "", "@a():\n  = a-result\n", validated=True)
+    mgr.write_cache(src, "b", "", "@b():\n  = b-result\n", validated=True)
 
     cache_text = mgr.cache_path_for(src).read_text(encoding="utf-8")
 
@@ -61,8 +61,8 @@ def test_write_cache_handles_prefix_named_procedures(tmp_path: Path) -> None:
 
     # `a` is a prefix of `ab`: marker matching must not confuse the two blocks.
     mgr.write_cache(src, "a", "", "@a():\n  = a-result\n")
-    mgr.write_cache(src, "ab", "", "@ab():\n  = ab-result\n")
-    mgr.write_cache(src, "a", "", "@a():\n  = a-updated\n")
+    mgr.write_cache(src, "ab", "", "@ab():\n  = ab-result\n", validated=True)
+    mgr.write_cache(src, "a", "", "@a():\n  = a-updated\n", validated=True)
 
     cache_text = mgr.cache_path_for(src).read_text(encoding="utf-8")
     assert "a-updated" in cache_text
@@ -79,7 +79,7 @@ def test_is_cached_ignores_calls_to_other_procedures(tmp_path: Path) -> None:
     src.write_text("= ok\n", encoding="utf-8")
     mgr = CodegenManager(MockPassingAgent())
 
-    mgr.write_cache(src, "bar", "@test: bar\n  = ok\n", "@bar():\n  = @foo(1)\n")
+    mgr.write_cache(src, "bar", "", "@bar():\n  = <foo(`1`)>\n", validated=True)
 
     assert mgr.is_cached(src, "bar") is True  # bar has its own block
     assert mgr.is_cached(src, "foo") is False  # foo only appears as a call inside bar's body

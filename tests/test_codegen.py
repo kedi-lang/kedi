@@ -39,7 +39,7 @@ def test_codegen_cache_paths(tmp_path: Path) -> None:
     cache = mgr.cache_path_for(src)
     assert cache.name.endswith(".cache.kedi")
     assert not mgr.is_cached(src, "foo")
-    mgr.write_cache(src, "foo", "", "@foo():\n  = ok\n")
+    mgr.write_cache(src, "foo", "", "@foo():\n  = ok\n", validated=True)
     assert mgr.is_cached(src, "foo")
     assert not CodegenManager(MockPassingAgent(), use_cache=False).is_cached(src, "foo")
 
@@ -135,9 +135,8 @@ def test_codegen_translator_covers_signature_type_test_and_impl_shapes() -> None
     assert "        assert build()" in structured_tests
     assert "> case: second:" in structured_tests
     assert "'''ignored too'''" not in structured_tests
-    assert python_tests_to_kedi_tests("def test_blank():\n", "blank") == (
-        "@test: blank:\n  > case: blank:\n    ```\n    ```"
-    )
+    with pytest.raises(ValueError, match="Invalid generated Python tests"):
+        python_tests_to_kedi_tests("def test_blank():\n", "blank")
 
     assert python_impl_to_kedi_impl("", "@f():") == "@f():\n  = ```\n  pass\n  ```"
     assert python_impl_to_kedi_impl("    x = 1\n    return x\n", "@f() -> int:") == (
@@ -333,7 +332,7 @@ def test_codegen_orchestrator_cached_and_failure_paths(
     src = tmp_path / "orchestrate.kedi"
     src.write_text("@", encoding="utf-8")
     cached = CodegenManager(MockPassingAgent())
-    cached.write_cache(src, "f", "", "@f():\n  = ok\n")
+    cached.write_cache(src, "f", "", "@f():\n  = ok\n", validated=True)
     assert cached.orchestrate_generation(src, "@f():", "prompt", "spec")
     cached.cache_path_for(src).unlink()
 
@@ -592,7 +591,8 @@ def test_pydantic_ai_agent_uses_configured_adapter(
         def __class_getitem__(cls, item: object) -> type["FakeAdapter"]:
             return cls
 
-        def __init__(self, *, model: str) -> None:
+        def __init__(self, *, model: str, defer_model_check: bool) -> None:
+            assert defer_model_check is True
             self.model = model
             self.templates: list[str] = []
             FakeAdapter.instances.append(self)

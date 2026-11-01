@@ -73,6 +73,11 @@ Generated tests are provisional acceptance criteria, not a replacement for
 handwritten regression tests. Review important contracts and add explicit
 `@test:` cases to the source.
 
+Module-level helpers and setup are preserved inside each generated test case.
+Tests must be synchronous, undecorated, zero-argument functions; pytest fixtures
+and parametrization are not supported. Invalid Python or unsupported test shapes
+are reported back to the generator for another attempt.
+
 ## Generate an Implementation
 
 After tests compile, the agent emits a Python function **body**, not a `def`
@@ -110,6 +115,17 @@ command fails.
 For `program.kedi`, generated code is stored in `program.cache.kedi`. Each
 procedure has comment-delimited markers, so regenerating one procedure does not
 replace unrelated generated procedures.
+
+Tests and candidate implementations are written provisionally. A block becomes
+reusable only after validation succeeds and Kedi writes its completion marker.
+Tests-only, invalid, and older unmarked cache blocks are regenerated rather than
+treated as finished implementations. This means existing unmarked caches need
+one successful regeneration after upgrading.
+
+Exceptions and cancellation remove the current procedure's incomplete block,
+without removing other procedures. If the process is terminated before cleanup
+can run, the provisional block may remain, but it is not reused as a completed
+cache entry.
 
 The cache is reused by procedure name:
 

@@ -160,10 +160,16 @@ def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
     """
     lines = [f"@test: {procedure_name}:"]
 
-    # Extract test functions
-    test_functions = re.findall(
-        r"def (test_\w+)\(\):(.+?)(?=def test_|\Z)", python_tests, re.DOTALL
-    )
+    try:
+        module = ast.parse(python_tests)
+    except SyntaxError as exc:
+        raise ValueError(f"Invalid generated Python tests: {exc.msg}") from exc
+    test_functions = [
+        node
+        for node in module.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+    ]
 
     if not test_functions:
         # No structured test functions, treat entire code as one test
@@ -175,32 +181,27 @@ def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
                 lines.append(f"    {line}")
             lines.append("    ```")
     else:
-        # Convert each test function to a test case
-        for test_name, test_body in test_functions:
-            case_name = test_name.replace("test_", "")
-            lines.append(f"  > case: {case_name}:")
+        # Keep module-level helpers and setup in each independently executed case.
+        setup = [node for node in module.body if node not in test_functions]
+        for test in test_functions:
+            if (
+                isinstance(test, ast.AsyncFunctionDef)
+                or test.decorator_list
+                or test.args.posonlyargs
+                or test.args.args
+                or test.args.kwonlyargs
+                or test.args.vararg
+                or test.args.kwarg
+            ):
+                raise ValueError(
+                    f"Generated test {test.name!r} must be synchronous, undecorated, "
+                    "and take no parameters; fixtures and parametrization are unsupported"
+                )
+            lines.append(f"  > case: {test.name.removeprefix('test_')}:")
             lines.append("    ```")
-
-            # Preserve relative indentation (important for with/if/for blocks)
-            # Don't strip - we need to preserve relative indentation
-            body_lines = test_body.split("\n")
-
-            # Find minimum indentation from non-empty lines
-            non_empty_lines = [line for line in body_lines if line.strip()]
-            if non_empty_lines:
-                min_indent = min(len(line) - len(line.lstrip()) for line in non_empty_lines)
-
-                for line in body_lines:
-                    stripped = line.strip()
-                    if (
-                        stripped
-                        and not stripped.startswith('"""')
-                        and not stripped.startswith("'''")
-                    ):
-                        # Remove common leading indent, add Kedi indent (4 spaces)
-                        dedented = line[min_indent:] if len(line) > min_indent else line.lstrip()
-                        lines.append(f"    {dedented}")
-
+            body = test.body[1:] if ast.get_docstring(test) is not None else test.body
+            code = "\n".join(ast.unparse(node) for node in [*setup, *body])
+            lines.extend(f"    {line}" for line in code.splitlines())
             lines.append("    ```")
 
     return "\n".join(lines)
