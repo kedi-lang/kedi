@@ -328,7 +328,7 @@ class SubagentCoordinator:
                 self,
                 run_id,
                 capabilities,
-                report_to_parent=getattr(parent_profile, "workflow_mode", None) != "blocking",
+                report_to_parent=parent_profile.offers_control_tool("send_subagent_input"),
             )
             with self._task_lock:
                 self._controls[run_id] = control

@@ -710,10 +710,10 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         summary.append(f"Loading: {loading}")
         summary.append("Guidance is additive; approval and hooks affect owned tools only.")
     else:
-        workflow_mode = (
-            profile.workflow_members[-1].mode if profile.workflow_members else "delegate"
-        )
-        summary.append(f"Subagent workflow: `{workflow_mode}`")
+        workflow = profile.workflow_members[-1] if profile.workflow_members else None
+        summary.append(f"Subagent workflow: `{workflow.mode if workflow else 'delegate'}`")
+        if workflow is not None and workflow.tools is not None:
+            summary.append("Control tools: " + ", ".join(f"`{name}`" for name in workflow.tools))
 
     text = f"**Agent {profile.kind}** `> {profile.kind}: {profile.name}:`"
     if profile.docstring:

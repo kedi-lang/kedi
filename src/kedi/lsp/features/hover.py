@@ -837,10 +837,17 @@ def _describe_ast_node(node) -> Optional[str]:
                 "continuation, wait, cancel, status or live-input tools, and children get "
                 "no channel back to this profile."
             )
+        selection = (
+            ""
+            if node.tools is None
+            else "\n\nControl tools offered besides `delegate_task`: "
+            + ", ".join(f"`{name}`" for name in node.tools)
+            + "."
+        )
         return (
             "**Delegated subagent workflow** `> workflow: delegate`\n\n"
             "Exposes the standard delegation and subagent lifecycle tools. This is the "
-            "default when `> workflow:` is omitted."
+            "default when `> workflow:` is omitted." + selection
         )
     if isinstance(node, UseDirectiveStmt):
         return _use_directive_markdown(node)

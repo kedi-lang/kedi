@@ -106,6 +106,12 @@ _BUILTIN_TYPE_COMPLETIONS = (
 )
 
 
+_WORKFLOW_COMPLETIONS = {
+    "mode": "Select direct delegation, blocking delegation or code-based orchestration",
+    "tools": "Choose which subagent control tools the model sees (delegate mode)",
+}
+
+
 @with_source_coordinates(1)
 def compute_completion(
     source: str,
@@ -196,6 +202,18 @@ def compute_completion(
     if re.fullmatch(r"\s*>\s*(?:await(?:\s+\[\w+\])?|send|interrupt)\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=False)
     directive_prefix = re.fullmatch(r"\s*(>\s*)[A-Za-z_]*", before_cursor)
+    header = _enclosing_header(source, pos)
+    if directive_prefix and header is not None and re.fullmatch(r">\s*workflow\s*:", header):
+        return [
+            lsp.CompletionItem(
+                label=name,
+                kind=lsp.CompletionItemKind.Keyword,
+                insert_text=f"{name}: ",
+                detail=description,
+                sort_text=f"0-{name}",
+            )
+            for name, description in _WORKFLOW_COMPLETIONS.items()
+        ]
     owner = _enclosing_configuration(source, pos)
     in_capability = owner == "capability"
     if directive_prefix:

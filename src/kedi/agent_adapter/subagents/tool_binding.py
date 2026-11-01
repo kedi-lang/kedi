@@ -32,7 +32,7 @@ def bind_subagent_tools(
     concurrency: DelegationConcurrency,
     catalog: Mapping[str, str | None],
     supports_background: bool,
-    blocking: bool = False,
+    control_tools: tuple[str, ...] | None = None,
 ) -> tuple[ToolSpec, ...]:
     allowed = tuple(profile.subagents)
     subagent_definitions = dict(profile.subagent_bindings)
@@ -180,7 +180,7 @@ def bind_subagent_tools(
         allowed=allowed,
         catalog=catalog,
         supports_background=supports_background,
-        blocking=blocking,
+        control_tools=control_tools,
         delegate_task=delegate_task,
         continue_subagent=continue_subagent,
         wait_subagent=wait_subagent,

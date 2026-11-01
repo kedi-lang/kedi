@@ -175,6 +175,7 @@ class ProfileMaxAgentsMember(ProfileMember):
 class ProfileWorkflowMember(ProfileMember):
     kind: Literal["workflow"] = "workflow"
     mode: WorkflowMode
+    tools: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

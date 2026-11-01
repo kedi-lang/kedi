@@ -148,7 +148,7 @@ def subagent_tool_specs(
     *,
     supports_background: bool,
     activation_profile: AgentProfile | None = None,
-    blocking: bool = False,
+    control_tools: tuple[str, ...] | None = None,
 ) -> tuple[ToolSpec, ...]:
     """Resolve runtime-owned dependencies before binding the model-facing tools."""
     from .tool_binding import bind_subagent_tools
@@ -177,7 +177,7 @@ def subagent_tool_specs(
         else rt._new_subagent_concurrency(),
         catalog=catalog,
         supports_background=supports_background,
-        blocking=blocking,
+        control_tools=control_tools,
     )
 
 

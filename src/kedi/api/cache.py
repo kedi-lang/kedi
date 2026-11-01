@@ -181,6 +181,7 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         ),
         profile.max_agents,
         profile.workflow_mode,
+        profile.workflow_tools,
         profile.history,
         (
             _object_identity(profile.history_processing.processor),
