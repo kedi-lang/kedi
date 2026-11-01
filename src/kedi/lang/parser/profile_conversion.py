@@ -5,6 +5,11 @@ from typing import TYPE_CHECKING, cast
 from tree_sitter import Node
 
 from kedi.agent_profile.capabilities import CAPABILITY_DIRECTIVES
+from kedi.directive_values import (
+    WORKFLOW_BACKGROUND_TOOLS,
+    WORKFLOW_CONTROL_TOOLS,
+    WORKFLOW_MODES,
+)
 from kedi.lang.ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
@@ -31,11 +36,6 @@ from kedi.lang.ast import (
     Span,
     UseDirectiveStmt,
     WorkflowMode,
-)
-from kedi.directive_values import (
-    WORKFLOW_BACKGROUND_TOOLS,
-    WORKFLOW_CONTROL_TOOLS,
-    WORKFLOW_MODES,
 )
 from kedi.lang.parser.cst_helpers import (
     _decode_block_comment_body,
