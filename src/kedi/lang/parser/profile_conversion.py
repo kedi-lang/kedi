@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from tree_sitter import Node
 
@@ -32,6 +32,11 @@ from kedi.lang.ast import (
     UseDirectiveStmt,
     WorkflowMode,
 )
+from kedi.directive_values import (
+    WORKFLOW_BACKGROUND_TOOLS,
+    WORKFLOW_CONTROL_TOOLS,
+    WORKFLOW_MODES,
+)
 from kedi.lang.parser.cst_helpers import (
     _decode_block_comment_body,
     _field,
@@ -51,6 +56,87 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     name = _identifier_name(self.source, name_node)
     is_capability = node.type == "capability_directive"
     return _walk_profile_body(self, node, _field(node, "body"), name, is_capability)
+
+
+WORKFLOW_TOOLS_MODE_ERROR = (
+    "`tools` can only be used with `mode: delegate`. `mode: blocking` exposes only a "
+    "synchronous `delegate_task` and `mode: dynamic` exposes only `run_workflow`, so there "
+    "are no control tools to select. Remove `tools`, or use `mode: delegate` to choose "
+    "which control tools the model sees."
+)
+
+
+def _walk_workflow_directive(self: _Walker, node: Node) -> ProfileWorkflowEntry | None:
+    """``> workflow: <mode>`` or a block of ``> mode:`` and ``> tools:`` sub-directives."""
+    mode_node = _field(node, "value")
+    tools_node: Node | None = None
+    body = _field(node, "body")
+    if body is not None:
+        for child in _named_children(body):
+            if child.type == "workflow_mode_directive":
+                if mode_node is not None:
+                    self._error(child, "workflow defines `mode` twice", code="K-WORKFLOW-DUP")
+                    continue
+                mode_node = _field(child, "value")
+            else:
+                if tools_node is not None:
+                    self._error(child, "workflow defines `tools` twice", code="K-WORKFLOW-DUP")
+                    continue
+                tools_node = child
+    mode = "delegate" if mode_node is None else _identifier_name(self.source, mode_node)
+    if mode not in WORKFLOW_MODES:
+        assert mode_node is not None
+        self._error(
+            mode_node,
+            "workflow mode must be 'delegate', 'dynamic' or 'blocking'",
+            code="K-WORKFLOW-MODE",
+        )
+        return None
+    tools = None
+    if tools_node is not None:
+        names = _workflow_tool_names(self, tools_node)
+        problem = (
+            WORKFLOW_TOOLS_MODE_ERROR if mode != "delegate" else _workflow_tools_problem(names)
+        )
+        if problem is not None:
+            self._error(tools_node, problem, code="K-WORKFLOW-TOOLS")
+            return None
+        tools = None if names == ["all"] else tuple(names)
+    return ProfileWorkflowEntry(mode=cast(WorkflowMode, mode), tools=tools, loc=self._span(node))
+
+
+def _workflow_tool_names(self: _Walker, node: Node) -> list[str]:
+    name_node = _field(node, "name")
+    if name_node is not None:
+        return [_identifier_name(self.source, name_node)]
+    body = _field(node, "body")
+    assert body is not None
+    return [
+        _identifier_name(self.source, identifier)
+        for child in _named_children(body)
+        if child.type == "workflow_tool_name" and (identifier := _field(child, "name"))
+    ]
+
+
+def _workflow_tools_problem(names: list[str]) -> str | None:
+    if names == ["all"]:
+        return None
+    if "all" in names:
+        return "`all` already selects every control tool; use `all` alone or list the tools"
+    unknown = [name for name in names if name not in WORKFLOW_CONTROL_TOOLS]
+    if unknown:
+        return (
+            f"unknown subagent control tool {', '.join(repr(name) for name in unknown)}; "
+            f"choose from {', '.join(WORKFLOW_CONTROL_TOOLS)}, or use `all`"
+        )
+    if len(set(names)) != len(names):
+        return "`> tools:` lists a control tool more than once"
+    if "wait_subagent" not in names and set(names) & set(WORKFLOW_BACKGROUND_TOOLS):
+        return (
+            "`cancel_subagent` and `subagent_status` only apply to background runs, which "
+            "are offered only when `wait_subagent` is listed; add `wait_subagent` or remove them"
+        )
+    return None
 
 
 def _walk_profile_body(
@@ -372,27 +458,9 @@ def _walk_profile_body(
                     )
                 )
             elif child.type == "workflow_directive":
-                value_node = _field(child, "value")
-                assert value_node is not None
-                mode = _identifier_name(self.source, value_node)
-                workflow_mode: WorkflowMode
-                if mode == "delegate":
-                    workflow_mode = "delegate"
-                elif mode == "dynamic":
-                    workflow_mode = "dynamic"
-                else:
-                    self._error(
-                        value_node,
-                        "workflow mode must be 'delegate' or 'dynamic'",
-                        code="K-WORKFLOW-MODE",
-                    )
-                    continue
-                workflow_members.append(
-                    ProfileWorkflowEntry(
-                        mode=workflow_mode,
-                        loc=self._span(child),
-                    )
-                )
+                entry = _walk_workflow_directive(self, child)
+                if entry is not None:
+                    workflow_members.append(entry)
     if len(workflow_members) > 1:
         for entry in workflow_members[1:]:
             assert entry.loc is not None

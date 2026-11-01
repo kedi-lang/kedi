@@ -21,7 +21,14 @@ def build_subagent_tool_specs(
     wait_subagent: Callable[..., Any],
     cancel_subagent: Callable[..., Any],
     subagent_status: Callable[..., Any],
+    control_tools: tuple[str, ...] | None = None,
 ) -> tuple[ToolSpec, ...]:
+    """``control_tools`` names the tools offered besides ``delegate_task`` (``None``: all).
+
+    Background delegation is offered only with ``wait_subagent``, so its result can be awaited.
+    """
+    offered = (lambda name: True) if control_tools is None else (lambda name: name in control_tools)
+    supports_background = supports_background and offered("wait_subagent")
     entries = [
         f"- {name}: {description}" if description else f"- {name}"
         for name, description in catalog.items()
@@ -149,7 +156,7 @@ def build_subagent_tool_specs(
         ),
     ]
     if not supports_background:
-        return schema_validated(tools)
+        return schema_validated(_offered(tools, offered))
 
     tools.extend(
         (
@@ -218,7 +225,11 @@ def build_subagent_tool_specs(
             ),
         )
     )
-    return schema_validated(tools)
+    return schema_validated(_offered(tools, offered))
+
+
+def _offered(tools: list[ToolSpec], offered: Callable[[str], bool]) -> list[ToolSpec]:
+    return [tool for tool in tools if tool.name == "delegate_task" or offered(tool.name)]
 
 
 def _delegation_result_schema() -> dict[str, Any]:

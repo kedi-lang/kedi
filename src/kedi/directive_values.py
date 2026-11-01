@@ -104,6 +104,16 @@ def parse_scalar(raw: str) -> Any:
     return value
 
 
+WORKFLOW_MODES = ("delegate", "dynamic", "blocking")
+WORKFLOW_CONTROL_TOOLS = (
+    "continue_subagent",
+    "wait_subagent",
+    "cancel_subagent",
+    "subagent_status",
+    "send_subagent_input",
+)
+WORKFLOW_BACKGROUND_TOOLS = ("cancel_subagent", "subagent_status")
+
 BOOLEAN = ValueRule("Boolean switch", ("true", "false"), "bool")
 ACTIVATION = ValueRule("Enable or disable this feature", ("enabled", "disabled"), "activation")
 CALLABLE = ValueRule("Application callback", kind="callable")
@@ -123,7 +133,12 @@ DIRECTIVE_RULES = {
         "Model reasoning effort", ("minimal", "low", "medium", "high", "xhigh", "max")
     ),
     "approval": ValueRule("Built-in tool approval policy", ("allow", "deny")),
-    "workflow": ValueRule("Subagent orchestration mode", ("delegate", "dynamic")),
+    "workflow": ValueRule("Subagent orchestration mode", WORKFLOW_MODES),
+    # Sub-directives of a `> workflow:` block.
+    "mode": ValueRule("Subagent orchestration mode", WORKFLOW_MODES),
+    "tools": ValueRule(
+        "Subagent control tool, or `all` for every one", (*WORKFLOW_CONTROL_TOOLS, "all")
+    ),
 }
 
 FIELD_RULES: dict[str, dict[str, ValueRule]] = {

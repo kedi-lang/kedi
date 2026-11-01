@@ -833,5 +833,5 @@ def _member_to_patch(
     if member.kind == "max_agents":
         return AgentProfile(max_agents=member.value)
     if member.kind == "workflow":
-        return AgentProfile(workflow_mode=member.mode)
+        return AgentProfile(workflow_mode=member.mode, workflow_tools=member.tools)
     raise KediExecutionError(f"Unknown profile member kind: {member.kind!r}")

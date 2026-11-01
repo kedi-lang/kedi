@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from .definitions import ProfileDefinition
 
 AgentCommand = str | tuple[str, ...]
-WorkflowMode = Literal["delegate", "dynamic"]
+WorkflowMode = Literal["delegate", "dynamic", "blocking"]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -57,6 +57,7 @@ class AgentProfile:
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
     workflow_mode: WorkflowMode | None = None
+    workflow_tools: tuple[str, ...] | None = None
     history: bool | None = None
     history_processing: HistoryProcessingSettings | None = None
     compaction: CompactionSettings | None = None
@@ -183,7 +184,9 @@ class AgentProfile:
         if other.max_agents is not None:
             updates["max_agents"] = other.max_agents
         if other.workflow_mode is not None:
+            # Mode and its control-tool selection are one setting: replace together.
             updates["workflow_mode"] = other.workflow_mode
+            updates["workflow_tools"] = other.workflow_tools
         if other.history is not None:
             updates["history"] = other.history
         if other.history_processing is not None:
@@ -251,6 +254,19 @@ class AgentProfile:
                 name: tuple(origins) for name, origins in self.requirement_origins.items()
             },
         )
+
+    @property
+    def subagent_control_tools(self) -> tuple[str, ...] | None:
+        """Control tools offered besides ``delegate_task``; ``None`` offers every one.
+
+        Blocking and dynamic workflows offer none: their delegations are synchronous,
+        so there is no run to continue, wait for, cancel or message.
+        """
+        return () if self.workflow_mode in ("dynamic", "blocking") else self.workflow_tools
+
+    def offers_control_tool(self, name: str) -> bool:
+        tools = self.subagent_control_tools
+        return tools is None or name in tools
 
     def needs_adapter_selection(self, adapter_shortname: str | None) -> bool:
         if self.adapter_shortname is None:

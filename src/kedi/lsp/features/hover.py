@@ -830,10 +830,24 @@ def _describe_ast_node(node) -> Optional[str]:
                 "Exposes one `run_workflow(code: str)` tool. Workflow code may call the "
                 "profile's direct subagents concurrently and returns its final expression."
             )
+        if node.mode == "blocking":
+            return (
+                "**Blocking subagent workflow** `> workflow: blocking`\n\n"
+                "Exposes only a synchronous `delegate_task`: no `background` argument, "
+                "continuation, wait, cancel, status or live-input tools, and children get "
+                "no channel back to this profile."
+            )
+        selection = (
+            ""
+            if node.tools is None
+            else "\n\nControl tools offered besides `delegate_task`: "
+            + ", ".join(f"`{name}`" for name in node.tools)
+            + "."
+        )
         return (
             "**Delegated subagent workflow** `> workflow: delegate`\n\n"
             "Exposes the standard delegation and subagent lifecycle tools. This is the "
-            "default when `> workflow:` is omitted."
+            "default when `> workflow:` is omitted." + selection
         )
     if isinstance(node, UseDirectiveStmt):
         return _use_directive_markdown(node)

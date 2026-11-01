@@ -24,10 +24,12 @@ def control_for_run(
     coordinator: SubagentCoordinator,
     run_id: str,
     capabilities: AdapterCapabilities | None,
+    *,
+    report_to_parent: bool = True,
 ) -> LiveInput:
     control = LiveInput(
         run_id,
-        parent=current_live_input(),
+        parent=current_live_input() if report_to_parent else None,
         observe=lambda item, phase: coordinator.events.append(
             SubagentInputEvent(
                 coordinator.runs.get(run_id),

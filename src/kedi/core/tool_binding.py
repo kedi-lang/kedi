@@ -141,6 +141,7 @@ def _resolve_agent_tool_specs(
                     catalog_profile,
                     supports_background=capabilities.supports("background_subagents"),
                     activation_profile=profile,
+                    control_tools=profile.subagent_control_tools,
                 )
             )
     from kedi.agent_adapter.subagents.control import current_live_input
@@ -152,7 +153,8 @@ def _resolve_agent_tool_specs(
         specs.extend(
             input_tool_specs(
                 self,
-                children=bool(catalog_profile.subagents),
+                children=bool(catalog_profile.subagents)
+                and profile.offers_control_tool("send_subagent_input"),
                 parent=live_control is not None and live_control.parent is not None,
             )
         )

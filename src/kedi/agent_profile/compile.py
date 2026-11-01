@@ -157,7 +157,9 @@ def _compile_profile_members(
             and not stmt.use_targets
         ):
             raise KediExecutionError("dynamic workflow requires at least one direct subagent")
-        members.append(ProfileWorkflowMember(mode=workflow.mode, loc=workflow.loc))
+        members.append(
+            ProfileWorkflowMember(mode=workflow.mode, tools=workflow.tools, loc=workflow.loc)
+        )
     # Member lists remain grouped in the AST for editor consumers; evaluation
     # must follow source order, including nested profile applications.
     members.sort(key=lambda member: member.loc.start_byte if member.loc is not None else -1)

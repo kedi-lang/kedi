@@ -392,6 +392,7 @@ def encode_profile(
         "subagents": list(profile.subagents),
         "max_agents": profile.max_agents,
         "workflow_mode": profile.workflow_mode,
+        "workflow_tools": None if profile.workflow_tools is None else list(profile.workflow_tools),
         "history": profile.history,
         "compaction": _dataclass_values(profile.compaction),
         "codemode": _dataclass_values(profile.codemode),
@@ -461,6 +462,9 @@ def decode_profile(
         subagents=tuple(encoded.get("subagents", ())),
         max_agents=encoded.get("max_agents"),
         workflow_mode=encoded.get("workflow_mode"),
+        workflow_tools=(
+            None if encoded.get("workflow_tools") is None else tuple(encoded["workflow_tools"])
+        ),
         history=encoded.get("history"),
         compaction=_decode_dataclass(CompactionSettings, encoded.get("compaction")),
         codemode=_decode_dataclass(CodeModeSettings, encoded.get("codemode")),

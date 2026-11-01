@@ -683,7 +683,7 @@ def test_explicit_delegate_workflow_preserves_default_tool_surface() -> None:
     [
         (
             "> profile: manager:\n    > workflow: automatic\n",
-            "workflow mode must be 'delegate' or 'dynamic'",
+            "workflow mode must be 'delegate', 'dynamic' or 'blocking'",
         ),
         (
             "> profile: manager:\n    > workflow: delegate\n    > workflow: dynamic\n",
@@ -2974,8 +2974,11 @@ def test_parallel_subagent_results_keep_profile_tools_schema_and_run_identity_is
                 profile.name,
                 tuple(tool.name for tool in self.scoped_tool_specs),
             )
-            delays = {"slow-int": 0.04, "fast-text": 0.005, "beta-object": 0.02}
-            await asyncio.sleep(delays.get(template, 0.01))
+            # Children run concurrently; each waits for its predecessor so the completion
+            # order is fixed instead of depending on sleep timings under load.
+            previous = {"beta-object": "fast-text", "slow-int": "beta-object"}.get(template)
+            while previous is not None and previous not in completed:
+                await asyncio.sleep(0.001)
             if template == "beta-failure":
                 raise RuntimeError("isolated beta failure")
             completed.append(template)

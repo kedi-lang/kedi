@@ -20,7 +20,7 @@ field and the ``type_expr`` field for every annotation it observes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Iterator, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterator, List, Literal, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from .parser.diagnostics import KediDiagnostic
@@ -662,12 +662,13 @@ class ProfileMaxAgentsEntry:
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
-WorkflowMode = Literal["delegate", "dynamic"]
+WorkflowMode = Literal["delegate", "dynamic", "blocking"]
 
 
 @dataclass
 class ProfileWorkflowEntry:
     mode: WorkflowMode
+    tools: Optional[Tuple[str, ...]] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

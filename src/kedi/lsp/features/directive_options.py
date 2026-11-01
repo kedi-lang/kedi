@@ -30,7 +30,7 @@ def value_context(source: str, pos: lsp.Position) -> ValueContext | None:
     directive = re.fullmatch(r"\s*>\s*(\w+):[ \t]*(.*)", before)
     setting = re.fullmatch(r"\s*(\w+):[ \t]*(.*)", before)
     match = directive or setting
-    requirement = False
+    body_owner: str | None = None
     if match is None:
         if re.fullmatch(r"\s*[A-Za-z_]*", before):
             depth = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip())
@@ -39,12 +39,14 @@ def value_context(source: str, pos: lsp.Position) -> ValueContext | None:
                     continue
                 expanded = previous.expandtabs(4)
                 if len(expanded) - len(expanded.lstrip()) < depth:
-                    if re.fullmatch(r"\s*>\s*requires:\s*", previous):
-                        requirement = True
+                    owner = re.fullmatch(r"\s*>\s*(requires|tools):\s*", previous)
+                    body_owner = owner[1] if owner else None
                     break
-        if not requirement:
+        if body_owner is None:
             return None
-    name = "requires" if match is None else match[1]
+        name = body_owner
+    else:
+        name = match[1]
     start = len(before) - len(before.lstrip()) if match is None else match.start(2)
     encoded = (source + "\n").encode("utf-8")
     offset = len(
@@ -71,7 +73,7 @@ def value_context(source: str, pos: lsp.Position) -> ValueContext | None:
                 scope = "auth"
                 break
         ancestor = ancestor.parent
-    if directive is not None or requirement:
+    if directive is not None or body_owner is not None:
         if name not in DIRECTIVE_RULES and name not in {"adapter", "agent", "requires"}:
             return None
         return ValueContext("directive", name, start, adapter)

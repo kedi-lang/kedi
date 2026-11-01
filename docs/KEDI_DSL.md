@@ -2388,10 +2388,39 @@ or duplicate process clause is not.
 
 #### Dynamic Workflows
 
-Subagent orchestration has two profile-level modes. Omitting `> workflow:` is
+Subagent orchestration has three profile-level modes. Omitting `> workflow:` is
 equivalent to `> workflow: delegate` and preserves the delegation and lifecycle
-tools described below. `> workflow: dynamic` instead exposes one sequential
-`run_workflow(code: str)` tool:
+tools described below. `> workflow: blocking` keeps only a synchronous
+`delegate_task`: it has no `background` argument and no continuation, wait,
+cancel, status or live-input tools, and its children get no channel back to it.
+It suits fan-out work that needs none of those controls and leaves their schemas
+out of every request. `> workflow: dynamic` instead exposes one sequential
+`run_workflow(code: str)` tool, and likewise no live-input tools.
+
+`> workflow:` also takes a block of two sub-directives. `> mode:` holds the mode
+above, and `> tools:` chooses which control tools a delegate-mode model sees besides
+`delegate_task`, which is always offered:
+
+```kedi
+> profile: coordinator:
+    > adapter: pydantic
+    > subagent: researcher
+    > workflow:
+        > mode: delegate
+        > tools:
+            wait_subagent
+            cancel_subagent
+```
+
+`tools` lists any of `continue_subagent`, `wait_subagent`, `cancel_subagent`,
+`subagent_status` and `send_subagent_input`, one per line or a single name on the
+`> tools:` line; `tools: all` is the default. Omitting `> mode:` means `delegate`.
+`delegate_task` offers `background` only when `wait_subagent` is listed, so the
+result can be awaited, and `cancel_subagent` and `subagent_status` require
+`wait_subagent`. Children can message the parent only when `send_subagent_input`
+is offered. `mode` and `tools` are one setting: a later `> workflow:` replaces both.
+`tools` is an error with `mode: blocking` or `mode: dynamic`, which offer no
+control tools to choose from; remove `tools` or use `mode: delegate`.
 
 Direct children can be declared with `> subagent:` or contributed through a
 capability used by the profile. A deferred capability's children stay unavailable
@@ -2698,7 +2727,16 @@ commit. Installation never writes into the current project.
 
 Artifacts keep large generated fields and tool results out of model prompts
 without changing their native Kedi or Python value. They are enabled by
-default and can be configured at top level, inside a procedure, or in a profile:
+default and can be configured at top level, inside a procedure, or in a profile.
+
+The artifact contract is attached statically: when the adapter supports it, every
+model request of an enabled profile carries the artifact tools and their
+instructions, whether or not any value is ever large, so the prompt prefix stays
+stable for caching. That costs on the order of a thousand input tokens per
+request. A profile that never produces large values, for example a short-lived
+subagent that reads small files, can drop it with `> artifacts: enabled: false`.
+Keep it enabled wherever a tool may return a large result, because a disabled
+profile sends that result to the model in full.
 
 ```kedi
 > artifacts:
