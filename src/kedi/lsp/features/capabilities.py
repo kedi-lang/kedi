@@ -60,6 +60,7 @@ from kedi.lsp.features.capability_state import (
     _adapter_supports,
     _AdapterDiagnosticState,
     _merge_adapter_state,
+    _profile_adapter_state,
     _with_history_state,
     _with_hooks_state,
     _with_requirements_state,
@@ -153,6 +154,18 @@ def _profile_capability_diagnostics(
             warned_approval_spans,
         )
     )
+    for conditional in profile.conditional_members:
+        for branch in (conditional.consequence, conditional.alternative):
+            if branch is not None:
+                branch_state = _merge_adapter_state(state, _profile_adapter_state(branch))
+                diagnostics.extend(
+                    _profile_capability_diagnostics(
+                        prog,
+                        branch,
+                        branch_state,
+                        warned_approval_spans,
+                    )
+                )
     return diagnostics
 
 

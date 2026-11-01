@@ -197,6 +197,21 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
 
 def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
     children: list[lsp.DocumentSymbol] = []
+    for conditional in profile.conditional_members:
+        branch = _profile_def_symbol(conditional.consequence)
+        branch.name = f"> if: `{conditional.backtick_code}`"
+        branch.detail = "conditional configuration"
+        branch.kind = lsp.SymbolKind.Boolean
+        if conditional.loc is not None:
+            branch.range = _span_to_range(conditional.loc)
+        if conditional.condition_loc is not None:
+            branch.selection_range = _span_to_range(conditional.condition_loc)
+        if conditional.alternative is not None:
+            alternative = _profile_def_symbol(conditional.alternative)
+            alternative.name = "> else:"
+            alternative.detail = "alternative configuration"
+            branch.children = [*(branch.children or []), alternative]
+        children.append(branch)
     for member in profile.defer_members:
         if member.loc is not None:
             value = (

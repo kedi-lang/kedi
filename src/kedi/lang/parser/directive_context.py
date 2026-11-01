@@ -37,7 +37,12 @@ def selected_adapter(source: bytes, node: Node) -> str | None:
             # A profile is an independent patch, not a lexical snapshot of the
             # backend outside its definition. Its final selection owns options.
             return _selection(
-                source, reversed(body.named_children), definitions, frozenset(), python_names
+                source,
+                reversed(body.named_children),
+                definitions,
+                frozenset(),
+                python_names,
+                focus=node,
             )[1]
         owner = owner.parent
     cursor: Node | None = node
@@ -60,9 +65,40 @@ def _selection(
     definitions: dict[str, Node],
     active: frozenset[str],
     python_names: frozenset[str] | None,
+    *,
+    focus: Node | None = None,
 ) -> tuple[bool, str | None]:
     """Resolve newest-first contributions; unknown imports stay unknown."""
     for node in nodes:
+        if node.type in {"profile_if_stmt", "capability_if_stmt"}:
+            branches = [node.child_by_field_name(name) for name in ("consequence", "alternative")]
+            if focus is not None:
+                branches = [
+                    branch
+                    for branch in branches
+                    if branch is not None
+                    and branch.start_byte <= focus.start_byte < branch.end_byte
+                ] or branches
+            selections = [
+                _selection(
+                    source,
+                    reversed(branch.named_children),
+                    definitions,
+                    active,
+                    python_names,
+                    focus=focus,
+                )
+                if branch is not None
+                else (False, None)
+                for branch in branches
+            ]
+            if any(found for found, _ in selections):
+                return (
+                    selections[0]
+                    if all(item == selections[0] for item in selections)
+                    else (True, None)
+                )
+            continue
         if node.type in {"adapter_directive", "agent_directive"}:
             value = node.child_by_field_name("value")
             if value is not None and value.type != "inline_python_expr":

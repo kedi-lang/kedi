@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterator, Literal, Mapping, Sequence, TypeAlias
 
 from .profile import WorkflowMode
 
@@ -178,6 +178,51 @@ class ProfileWorkflowMember(ProfileMember):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileConditionalMember(ProfileMember):
+    kind: Literal["conditional"] = "conditional"
+    backtick_code: str
+    consequence: tuple[ProfileMemberValue, ...]
+    alternative: tuple[ProfileMemberValue, ...] = ()
+    condition_loc: Span | None = field(default=None, repr=False, compare=False)
+
+
+ProfileMemberValue: TypeAlias = (
+    ProfileAgentMember
+    | ProfileAdapterMember
+    | ProfileModelMember
+    | ProfileEffortMember
+    | ProfileApprovalMember
+    | ProfileHooksMember
+    | ProfileHistoryMember
+    | ProfileSkillsMember
+    | ProfileCodeModeMember
+    | ProfileRequiresMember
+    | ProfileBudgetMember
+    | ProfileSystemMember
+    | ProfileToolMember
+    | ProfileUseMember
+    | ProfileMcpMember
+    | ProfileSettingsMember
+    | ProfileArtifactsMember
+    | ProfileOutputMember
+    | ProfileSubagentMember
+    | ProfileMaxAgentsMember
+    | ProfileWorkflowMember
+    | ProfileDeferMember
+    | ProfileConditionalMember
+)
+
+
+def iter_profile_members(members: Sequence[ProfileMemberValue]) -> Iterator[ProfileMemberValue]:
+    """Traverse potential members for dependency discovery, never run guards."""
+    for member in members:
+        yield member
+        if member.kind == "conditional":
+            yield from iter_profile_members(member.consequence)
+            yield from iter_profile_members(member.alternative)
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileDefinition:
     name: str
     loc: Span | None = field(default=None, repr=False, compare=False)
@@ -190,30 +235,7 @@ class ProfileDefinition:
     profile_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     capability_bindings: Mapping[str, Capability] = field(default_factory=dict)
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
-    members: Sequence[
-        ProfileAgentMember
-        | ProfileAdapterMember
-        | ProfileModelMember
-        | ProfileEffortMember
-        | ProfileApprovalMember
-        | ProfileHooksMember
-        | ProfileHistoryMember
-        | ProfileSkillsMember
-        | ProfileCodeModeMember
-        | ProfileRequiresMember
-        | ProfileBudgetMember
-        | ProfileSystemMember
-        | ProfileToolMember
-        | ProfileUseMember
-        | ProfileMcpMember
-        | ProfileSettingsMember
-        | ProfileArtifactsMember
-        | ProfileOutputMember
-        | ProfileSubagentMember
-        | ProfileMaxAgentsMember
-        | ProfileWorkflowMember
-        | ProfileDeferMember
-    ] = field(default_factory=tuple)
+    members: Sequence[ProfileMemberValue] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "members", tuple(deepcopy(self.members)))

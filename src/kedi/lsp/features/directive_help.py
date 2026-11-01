@@ -673,6 +673,8 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
     for member in profile.effort_members:
         effort_parts.append(_effort_value_preview(member))
     summary: list[str] = []
+    if profile.conditional_members:
+        summary.append("Conditional members are selected when this bundle is used.")
     if model_parts:
         summary.append(f"Model: {', '.join(model_parts)}")
     if effort_parts:

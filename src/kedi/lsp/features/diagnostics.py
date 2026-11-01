@@ -21,6 +21,7 @@ from kedi.lang.ast import (
     TypeUnion,
     VariableInitBlockStmt,
     VariableInitStmt,
+    iter_profile_bodies,
 )
 from kedi.lang.compiler.environment import CLI_ARGS_IDENTIFIER
 from kedi.lang.compiler.type_system import UNSUPPORTED_KEDI_TYPE_NAMES
@@ -113,7 +114,10 @@ def _codemode_preload_diagnostics(
             if isinstance(statement, CodeModeDirectiveStmt)
         )
     directives.extend(
-        member for profile in prog.profile_defs.values() for member in profile.codemode_members
+        member
+        for profile in prog.profile_defs.values()
+        for body in iter_profile_bodies(profile)
+        for member in body.codemode_members
     )
 
     diagnostics: list[lsp.Diagnostic] = []
@@ -222,7 +226,9 @@ def _iter_type_exprs(prog: Union[Program, ProgramWithValidation]):
         for field in typedef.fields:
             yield field.type_expr
     for profile in prog.profile_defs.values():
-        for member in profile.output_members:
+        for member in (
+            entry for body in iter_profile_bodies(profile) for entry in body.output_members
+        ):
             yield member.type_expr
     for proc in _all_procedures(prog):
         yield proc.return_type_expr
@@ -387,12 +393,16 @@ def _subagent_profile_diagnostics(
     profile_defs = _merged_profile_defs(prog, imported_surface_for_program(prog))
     diagnostics: list[lsp.Diagnostic] = []
     graph = {
-        name: tuple(entry.name for entry in profile.subagent_members)
+        name: tuple(
+            entry.name for body in iter_profile_bodies(profile) for entry in body.subagent_members
+        )
         for name, profile in prog.profile_defs.items()
     }
 
     for profile in prog.profile_defs.values():
-        for entry in profile.subagent_members:
+        for entry in (
+            entry for body in iter_profile_bodies(profile) for entry in body.subagent_members
+        ):
             if entry.name in profile_defs or entry.loc is None:
                 continue
             diagnostics.append(
@@ -419,7 +429,12 @@ def _subagent_profile_diagnostics(
             cycle_start = active.index(profile_name)
             cycle = (*active[cycle_start:], profile_name)
             parent = prog.profile_defs[cycle[0]]
-            entry = next(item for item in parent.subagent_members if item.name == cycle[1])
+            entry = next(
+                item
+                for body in iter_profile_bodies(parent)
+                for item in body.subagent_members
+                if item.name == cycle[1]
+            )
             assert entry.loc is not None
             diagnostics.append(
                 lsp.Diagnostic(

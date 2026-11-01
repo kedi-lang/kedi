@@ -28,6 +28,7 @@ from kedi.lang.ast import (
     UseDirectiveStmt,
     VariableInitBlockStmt,
     VariableInitStmt,
+    iter_profile_bodies,
 )
 from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lsp.ast_helpers import binding_name_span
@@ -146,7 +147,9 @@ def _resolve_symbol_at(
             )
 
     for profile in prog.profile_defs.values():
-        for entry in profile.output_members:
+        for entry in (
+            entry for body in iter_profile_bodies(profile) for entry in body.output_members
+        ):
             resolved = _resolve_in_type_expr(
                 entry.type_expr,
                 pos,
@@ -155,7 +158,9 @@ def _resolve_symbol_at(
             )
             if resolved is not None:
                 return resolved
-        for entry in profile.subagent_members:
+        for entry in (
+            entry for body in iter_profile_bodies(profile) for entry in body.subagent_members
+        ):
             assert entry.loc is not None
             if not _position_inside(pos, entry.loc):
                 continue

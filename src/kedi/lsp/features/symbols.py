@@ -13,6 +13,7 @@ from kedi.lang.ast import (
     OutputSegment,
     ProcedureDef,
     ProfileDefStmt,
+    iter_profile_bodies,
     Program,
     ProgramWithValidation,
     Span,
@@ -179,7 +180,11 @@ def _profile_use_entry_spans(
     only from directive lines and their indented entries so profile prose
     cannot become a false reference.
     """
-    target_names = (*profile.use_targets, *profile.tool_names)
+    target_names = tuple(
+        name
+        for body in iter_profile_bodies(profile)
+        for name in (*body.use_targets, *body.tool_names)
+    )
     if profile.loc is None or not target_names:
         return []
 

@@ -196,7 +196,8 @@ def compute_completion(
     if re.fullmatch(r"\s*>\s*(?:await(?:\s+\[\w+\])?|send|interrupt)\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=False)
     directive_prefix = re.fullmatch(r"\s*(>\s*)[A-Za-z_]*", before_cursor)
-    in_capability = bool(re.match(r">\s*capability\s*:", _enclosing_header(source, pos) or ""))
+    owner = _enclosing_configuration(source, pos)
+    in_capability = owner == "capability"
     if directive_prefix:
         in_procedure_header = _inside_direct_procedure_body(source, pos)
         start = len(before_cursor) - len(before_cursor.lstrip())
@@ -223,7 +224,8 @@ def compute_completion(
             )
             for name, description in _DIRECTIVE_COMPLETIONS.items()
             if (name != "tool" or in_procedure_header)
-            and (not in_capability or name in CAPABILITY_DIRECTIVES)
+            and (not in_capability or name in CAPABILITY_DIRECTIVES or name in {"if", "else"})
+            and (owner is None or name in _PROFILE_DIRECTIVES)
             and (name != "defer" or in_capability)
         ]
     use_target = re.fullmatch(r"\s*>\s*use\s*:\s*([A-Za-z_]\w*)", before_cursor)
@@ -428,6 +430,53 @@ def _inside_direct_procedure_body(source: str, pos: lsp.Position) -> bool:
     """Return whether the cursor is at the direct body indent of a procedure."""
     header = _enclosing_header(source, pos)
     return header is not None and header.startswith("@") and header.endswith(":")
+
+
+_PROFILE_DIRECTIVES = {
+    "agent",
+    "adapter",
+    "model",
+    "effort",
+    "approval",
+    "hooks",
+    "history",
+    "skills",
+    "codemode",
+    "requires",
+    "budget",
+    "instructions",
+    "mcp",
+    "settings",
+    "artifacts",
+    "output",
+    "subagent",
+    "max_agents",
+    "workflow",
+    "use",
+    "defer",
+    "if",
+    "else",
+}
+
+
+def _enclosing_configuration(source: str, pos: lsp.Position) -> str | None:
+    lines = source.splitlines()
+    if pos.line >= len(lines):
+        return None
+    indent = len(lines[pos.line]) - len(lines[pos.line].lstrip())
+    for line in reversed(lines[: pos.line]):
+        if not line.strip():
+            continue
+        previous_indent = len(line) - len(line.lstrip())
+        if previous_indent >= indent:
+            continue
+        match = re.match(r"\s*>\s*(profile|capability)\s*:", line)
+        if match:
+            return match[1]
+        if not re.match(r"\s*>\s*(if|else)\s*:", line):
+            return None
+        indent = previous_indent
+    return None
 
 
 def _enclosing_header(source: str, pos: lsp.Position) -> str | None:

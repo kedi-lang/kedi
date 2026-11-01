@@ -32,6 +32,7 @@ from kedi.lang.ast import (
     UseDirectiveStmt,
     VariableInitBlockStmt,
     VariableInitStmt,
+    iter_profile_bodies,
 )
 from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lang.parser import KediParseError, parse_program
@@ -139,7 +140,9 @@ def _find_all_references(
         for td in _all_type_defs(prog):
             _collect_type_refs_in_type_def(td, sym.name, type_candidates)
         for profile in prog.profile_defs.values():
-            for member in profile.output_members:
+            for member in (
+                entry for body in iter_profile_bodies(profile) for entry in body.output_members
+            ):
                 _collect_type_refs_in_expr(member.type_expr, sym.name, type_candidates)
         for stmt in prog.toplevel_body:
             _collect_type_refs_in_stmt(stmt, sym.name, type_candidates)
@@ -161,7 +164,9 @@ def _find_all_references(
             for target_name, target_span in _profile_use_entry_spans(prog, profile):
                 if target_name == sym.name:
                     out.append(target_span)
-            for member in profile.subagent_members:
+            for member in (
+                entry for body in iter_profile_bodies(profile) for entry in body.subagent_members
+            ):
                 if member.name == sym.name and member.loc is not None:
                     out.append(member.loc)
         for stmt in prog.ordered_toplevel:

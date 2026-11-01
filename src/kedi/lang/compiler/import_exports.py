@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from kedi.agent_profile import AgentProfile
-from kedi.agent_profile.definitions import ProfileDefinition
+from kedi.agent_profile.definitions import ProfileDefinition, iter_profile_members
 from kedi.core import KediRuntime
 from kedi.lang.ast import (
     ModuleImport,
@@ -327,7 +327,7 @@ def _profile_tool_names(
     if isinstance(profile, AgentProfile):
         return profile.tools
     names: list[str] = []
-    for member in profile.members:
+    for member in iter_profile_members(profile.members):
         if member.kind == "tools":
             names.extend(member.tool_names)
         elif member.kind == "use":
@@ -338,7 +338,7 @@ def _profile_tool_names(
 def _profile_use_names(self: ProgramCompiler, profile: ProfileDefinition) -> tuple[str, ...]:
     return tuple(
         name
-        for member in profile.members
+        for member in iter_profile_members(profile.members)
         for name in (
             (member.name,)
             if member.kind == "use"
@@ -355,7 +355,11 @@ def _profile_subagent_names(
 ) -> tuple[str, ...]:
     if isinstance(profile, AgentProfile):
         return profile.subagents
-    return tuple(member.name for member in profile.members if member.kind == "subagents")
+    return tuple(
+        member.name
+        for member in iter_profile_members(profile.members)
+        if member.kind == "subagents"
+    )
 
 
 def _export_names(self: ProgramCompiler, prog: Program, imported_rt: KediRuntime) -> list[str]:

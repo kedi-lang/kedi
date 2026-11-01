@@ -11,12 +11,14 @@ from .definitions import (
     ProfileArtifactsMember,
     ProfileBudgetMember,
     ProfileCodeModeMember,
+    ProfileConditionalMember,
     ProfileDeferMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
     ProfileHooksMember,
     ProfileMaxAgentsMember,
+    ProfileMemberValue,
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
@@ -28,6 +30,7 @@ from .definitions import (
     ProfileToolMember,
     ProfileUseMember,
     ProfileWorkflowMember,
+    iter_profile_members,
 )
 
 if TYPE_CHECKING:
@@ -57,31 +60,36 @@ if TYPE_CHECKING:
 
 
 def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
-    members: list[
-        ProfileAgentMember
-        | ProfileAdapterMember
-        | ProfileModelMember
-        | ProfileEffortMember
-        | ProfileApprovalMember
-        | ProfileHooksMember
-        | ProfileHistoryMember
-        | ProfileSkillsMember
-        | ProfileCodeModeMember
-        | ProfileRequiresMember
-        | ProfileBudgetMember
-        | ProfileSystemMember
-        | ProfileToolMember
-        | ProfileUseMember
-        | ProfileMcpMember
-        | ProfileSettingsMember
-        | ProfileArtifactsMember
-        | ProfileOutputMember
-        | ProfileSubagentMember
-        | ProfileMaxAgentsMember
-        | ProfileWorkflowMember
-        | ProfileDeferMember
-    ] = []
+    source = stmt.loc.source_path if stmt.loc is not None else None
+    return ProfileDefinition(
+        name=stmt.name,
+        loc=stmt.loc,
+        kind=stmt.kind,
+        identity=f"{source or '<program>'}::{stmt.name}",
+        description=stmt.docstring,
+        members=_compile_profile_members(stmt),
+    )
+
+
+def _compile_profile_members(
+    stmt: ProfileDefStmt, *, branch: bool = False
+) -> tuple[ProfileMemberValue, ...]:
+    members: list[ProfileMemberValue] = []
     _assert_profile_adapter_selection_is_not_mixed(stmt)
+    for entry in stmt.conditional_members:
+        members.append(
+            ProfileConditionalMember(
+                backtick_code=entry.backtick_code,
+                consequence=_compile_profile_members(entry.consequence, branch=True),
+                alternative=(
+                    _compile_profile_members(entry.alternative, branch=True)
+                    if entry.alternative is not None
+                    else ()
+                ),
+                loc=entry.loc,
+                condition_loc=entry.condition_loc,
+            )
+        )
     for entry in stmt.defer_members:
         members.append(
             ProfileDeferMember(
@@ -141,21 +149,19 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         raise KediExecutionError("profile can define only one workflow mode")
     if stmt.workflow_members:
         workflow = stmt.workflow_members[0]
-        if workflow.mode == "dynamic" and not stmt.subagent_members and not stmt.use_targets:
+        if (
+            not branch
+            and not stmt.conditional_members
+            and workflow.mode == "dynamic"
+            and not stmt.subagent_members
+            and not stmt.use_targets
+        ):
             raise KediExecutionError("dynamic workflow requires at least one direct subagent")
         members.append(ProfileWorkflowMember(mode=workflow.mode, loc=workflow.loc))
     # Member lists remain grouped in the AST for editor consumers; evaluation
     # must follow source order, including nested profile applications.
     members.sort(key=lambda member: member.loc.start_byte if member.loc is not None else -1)
-    source = stmt.loc.source_path if stmt.loc is not None else None
-    return ProfileDefinition(
-        name=stmt.name,
-        loc=stmt.loc,
-        kind=stmt.kind,
-        identity=f"{source or '<program>'}::{stmt.name}",
-        description=stmt.docstring,
-        members=members,
-    )
+    return tuple(members)
 
 
 def _agent_entry_to_member(entry: ProfileAgentEntry) -> ProfileAgentMember:
@@ -301,7 +307,7 @@ def validate_subagent_graph(registry: dict[str, ProfileDefinition]) -> None:
             raise KediExecutionError(f"Cyclic subagent profile reference: {' -> '.join(cycle)}")
         active.append(definition)
         active_ids.add(identity)
-        for member in definition.members:
+        for member in iter_profile_members(definition.members):
             if member.kind == "subagents":
                 visit(child_definition(definition, member.name))
         active.pop()
@@ -381,7 +387,7 @@ def capture_procedure_profiles(
         eval_system_directive,
     )
     from .profile import AgentProfile
-    from .use_resolution import eval_use_directive, use_contains_capability
+    from .use_resolution import eval_use_directive, use_needs_lazy_capture
 
     last_procedure = max(
         (
@@ -441,7 +447,7 @@ def capture_procedure_profiles(
 
         pending = isinstance(active, CapturedAgentProfile)
         if isinstance(item, UseDirectiveStmt):
-            pending = pending or use_contains_capability(
+            pending = pending or use_needs_lazy_capture(
                 rt, item, registry, env, available_procedures=defined_procedures
             )
             evaluate = partial(

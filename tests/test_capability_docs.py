@@ -19,8 +19,18 @@ def examples():
     if not path.is_file():
         pytest.skip("documentation submodule is not checked out")
     blocks = re.findall(r"^(`{3,})kedi\n(.*?)^\1$", path.read_text(), re.M | re.S)
-    assert len(blocks) == 6
+    assert len(blocks) == 7
     return [body for _, body in blocks]
+
+
+def test_documented_conditional_contribution_runs_unchanged(examples):
+    from tests.test_capabilities_language import instruction_calls
+
+    calls = instruction_calls(
+        examples[6] + "\n>> The conclusion is [conclusion].\n= <conclusion>\n"
+    )
+    assert "Support factual conclusions with supplied sources." in calls[0]
+    assert "Clearly distinguish suggestions" not in calls[0]
 
 
 @pytest.mark.parametrize("reset", [False, True])

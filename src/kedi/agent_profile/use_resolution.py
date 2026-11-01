@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .definitions import iter_profile_members
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -66,7 +68,7 @@ def eval_use_directive(
     raise KediExecutionError(f"Unknown use target: {name!r}")
 
 
-def use_contains_capability(
+def use_needs_lazy_capture(
     rt: KediRuntime,
     stmt: UseDirectiveStmt,
     registry: dict[str, ProfileDefinition],
@@ -74,7 +76,7 @@ def use_contains_capability(
     *,
     available_procedures: set[str],
 ) -> bool:
-    """Inspect a use graph without evaluating its Python configuration values."""
+    """Keep capability and conditional selection out of procedure preparation."""
     visited: set[int] = set()
 
     def visit(name: str, owner: ProfileDefinition | None = None) -> bool:
@@ -100,7 +102,9 @@ def use_contains_capability(
         visited.add(id(definition))
         if definition.kind == "capability":
             return True
-        for member in definition.members:
+        for member in iter_profile_members(definition.members):
+            if member.kind == "conditional":
+                return True
             if member.kind == "use" and visit(member.name, definition):
                 return True
             if member.kind == "tools" and any(

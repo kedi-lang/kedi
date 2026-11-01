@@ -413,6 +413,9 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(span)
             return
         if isinstance(node, ProfileDefStmt):
+            for conditional in node.conditional_members:
+                visit(conditional.consequence)
+                visit(conditional.alternative)
             for member in node.defer_members:
                 visit(member)
             for member in node.agent_members:

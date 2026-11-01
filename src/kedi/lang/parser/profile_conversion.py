@@ -12,6 +12,7 @@ from kedi.lang.ast import (
     ProfileArtifactsEntry,
     ProfileBudgetEntry,
     ProfileCodeModeEntry,
+    ProfileConditionalEntry,
     ProfileDeferEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
@@ -49,6 +50,19 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     assert name_node is not None
     name = _identifier_name(self.source, name_node)
     is_capability = node.type == "capability_directive"
+    return _walk_profile_body(self, node, _field(node, "body"), name, is_capability)
+
+
+def _walk_profile_body(
+    self: _Walker,
+    node: Node,
+    body_node: Node | None,
+    name: str,
+    is_capability: bool,
+    *,
+    branch: bool = False,
+) -> ProfileDefStmt:
+    conditional_members: list[ProfileConditionalEntry] = []
     defer_members: list[ProfileDeferEntry] = []
     members: list[ProfileModelEntry] = []
     agent_members: list[ProfileAgentEntry] = []
@@ -74,14 +88,39 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     use_members: list[UseDirectiveStmt] = []
     docstring: str | None = None
     docstring_loc: Span | None = None
-    body_node = _field(node, "body")
     if body_node is not None:
         body_children = _named_children(body_node)
-        if body_children and body_children[0].type == "block_comment":
+        if not branch and body_children and body_children[0].type == "block_comment":
             comment = body_children[0]
             docstring = _decode_block_comment_body(_src_text(self.source, comment))
             docstring_loc = self._span(comment)
         for child in body_children:
+            if child.type in {"profile_if_stmt", "capability_if_stmt"}:
+                condition = _field(child, "condition")
+                assert condition is not None
+                code = _field(condition, "code")
+                assert code is not None
+                consequence = _field(child, "consequence")
+                alternative = _field(child, "alternative")
+                assert consequence is not None
+                conditional_members.append(
+                    ProfileConditionalEntry(
+                        backtick_code=_src_text(self.source, code),
+                        consequence=_walk_profile_body(
+                            self, consequence, consequence, name, is_capability, branch=True
+                        ),
+                        alternative=(
+                            _walk_profile_body(
+                                self, alternative, alternative, name, is_capability, branch=True
+                            )
+                            if alternative is not None
+                            else None
+                        ),
+                        loc=self._span(child),
+                        condition_loc=self._span(condition),
+                    )
+                )
+                continue
             member_name = child.type.removesuffix("_directive")
             if member_name == "system":
                 member_name = "instructions"
@@ -378,6 +417,8 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
             )
     if (
         workflow_members
+        and not branch
+        and not conditional_members
         and workflow_members[-1].mode == "dynamic"
         and not subagent_members
         and not use_targets
@@ -394,6 +435,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
         )
     if (
         not members
+        and not conditional_members
         and not defer_members
         and not agent_members
         and not adapter_members
@@ -424,6 +466,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     return ProfileDefStmt(
         name=name,
         kind="capability" if is_capability else "profile",
+        conditional_members=conditional_members,
         defer_members=defer_members,
         agent_members=agent_members,
         adapter_members=adapter_members,

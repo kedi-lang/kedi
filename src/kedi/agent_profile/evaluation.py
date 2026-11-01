@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from ..errors import KediExecutionError, KediTraceFrame
-from .definitions import ProfileDefinition, ProfileUseMember
+from .definitions import (
+    ProfileDefinition,
+    ProfileMemberValue,
+    ProfileUseMember,
+    iter_profile_members,
+)
 from .directives import _member_to_patch
 from .profile import AgentProfile
 
@@ -16,14 +23,14 @@ _State = TypeVar("_State")
 
 
 def apply_profile_members(
-    definition: ProfileDefinition,
+    members: Sequence[ProfileMemberValue],
     initial: _State,
     apply_member: Callable[[_State, Any], _State],
     apply_use: Callable[[_State, ProfileUseMember], _State],
 ) -> _State:
     """Shared profile precedence for runtime evaluation and symbolic inspection."""
     state = initial
-    for member in definition.members:
+    for member in members:
         state = apply_use(state, member) if member.kind == "use" else apply_member(state, member)
     return state
 
@@ -45,7 +52,7 @@ def eval_profile_definition(
     defer_values = {} if _defer_values is None else _defer_values
     defer_keys = {
         id(member): (definition.identity or identity, index)
-        for index, member in enumerate(definition.members)
+        for index, member in enumerate(iter_profile_members(definition.members))
         if member.kind == "defer"
     }
     effective_registry = (
@@ -59,9 +66,36 @@ def eval_profile_definition(
         available_procedures if available_procedures is not None else set(rt._procedures)
     )
     deferred = False
+    selected_kinds: set[str] = set()
 
     def apply_member(current: AgentProfile, member: Any) -> AgentProfile:
         nonlocal deferred
+        if member.kind == "conditional":
+            with rt.trace_frame(
+                KediTraceFrame(
+                    kind="profile_condition",
+                    label=f"condition in {definition.name}",
+                    span=member.condition_loc,
+                )
+            ):
+                value = rt.executor.evaluate_inline(rt, member.backtick_code, env)
+                if type(value) is not bool:
+                    raise TypeError("profile condition must evaluate to a bool")
+            branch = member.consequence if value else member.alternative
+            return apply_profile_members(branch, current, apply_member, apply_use)
+        if member.kind in {"output", "workflow"} and member.kind in selected_kinds:
+            label = "output type" if member.kind == "output" else "workflow mode"
+            raise KediExecutionError(f"profile can define only one {label} on the selected path")
+        if (
+            member.kind == "agent"
+            and "adapter" in selected_kinds
+            or member.kind == "adapter"
+            and "agent" in selected_kinds
+        ):
+            raise KediExecutionError(
+                f"Profile {definition.name!r} cannot contain both '> agent:' and '> adapter:' members"
+            )
+        selected_kinds.add(member.kind)
         if member.kind == "defer":
             if definition.kind != "capability":
                 raise KediExecutionError("defer is only valid inside a capability")
@@ -126,11 +160,8 @@ def eval_profile_definition(
                 raise KediExecutionError("capabilities may only add owned tool hooks")
         return current.merge(patch)
 
-    profile = apply_profile_members(
-        definition,
-        AgentProfile.empty(),
-        apply_member,
-        lambda current, member: current.merge(
+    def apply_use(current: AgentProfile, member: ProfileUseMember) -> AgentProfile:
+        return current.merge(
             _eval_profile_use_member(
                 rt,
                 definition,
@@ -141,7 +172,10 @@ def eval_profile_definition(
                 active_definitions=active_definitions,
                 defer_values=defer_values,
             )
-        ),
+        )
+
+    profile = apply_profile_members(
+        definition.members, AgentProfile.empty(), apply_member, apply_use
     )
     profile = profile.merge(
         AgentProfile(

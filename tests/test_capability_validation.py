@@ -25,7 +25,7 @@ from kedi.agent_profile.definitions import (
 )
 from kedi.agent_profile.evaluation import _bound_capability_tool, eval_profile_definition
 from kedi.agent_profile.hooks import HookSettings
-from kedi.agent_profile.use_resolution import use_contains_capability
+from kedi.agent_profile.use_resolution import use_needs_lazy_capture
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import UseDirectiveStmt
@@ -132,7 +132,7 @@ def test_captured_python_capability_is_discovered_and_evaluated(runtime, member_
     owner = ProfileDefinition(
         name="owner", capability_bindings={"reader": capability}, members=(member,)
     )
-    assert use_contains_capability(
+    assert use_needs_lazy_capture(
         runtime, UseDirectiveStmt(target="owner"), {"owner": owner}, {}, available_procedures=set()
     )
     profile = eval_profile_definition(runtime, owner, {})
@@ -153,7 +153,7 @@ def test_capability_tool_resolves_runtime_callable_and_rejects_missing_binding(r
     owner = ProfileDefinition(
         name="owner", kind="capability", members=(ProfileUseMember(name="read"),)
     )
-    assert not use_contains_capability(
+    assert not use_needs_lazy_capture(
         runtime, UseDirectiveStmt(target="read"), {}, {}, available_procedures=set()
     )
     profile = eval_profile_definition(runtime, owner, {})

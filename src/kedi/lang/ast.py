@@ -20,7 +20,7 @@ field and the ``type_expr`` field for every annotation it observes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterator, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from .parser.diagnostics import KediDiagnostic
@@ -484,6 +484,7 @@ UseProfileStmt = UseDirectiveStmt
 class ProfileDefStmt(Stmt):
     name: str = ""
     kind: Literal["profile", "capability"] = "profile"
+    conditional_members: List["ProfileConditionalEntry"] = field(default_factory=list)
     defer_members: List["ProfileDeferEntry"] = field(default_factory=list)
     agent_members: List["ProfileAgentEntry"] = field(default_factory=list)
     adapter_members: List["ProfileAdapterEntry"] = field(default_factory=list)
@@ -509,6 +510,24 @@ class ProfileDefStmt(Stmt):
     use_members: List[UseDirectiveStmt] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileConditionalEntry:
+    backtick_code: str
+    consequence: ProfileDefStmt
+    alternative: Optional[ProfileDefStmt] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    condition_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+def iter_profile_bodies(profile: ProfileDefStmt) -> Iterator[ProfileDefStmt]:
+    """Visit declarations in both branches without evaluating their conditions."""
+    yield profile
+    for conditional in profile.conditional_members:
+        yield from iter_profile_bodies(conditional.consequence)
+        if conditional.alternative is not None:
+            yield from iter_profile_bodies(conditional.alternative)
 
 
 @dataclass

@@ -82,7 +82,7 @@ def test_capability_hover_navigation_and_symbols():
 def test_capability_body_completion_respects_allowlist():
     source = "> capability: reader:\n    > de\n"
     items = compute_completion(source, None, lsp.Position(line=1, character=8))
-    assert {item.label for item in items} == CAPABILITY_DIRECTIVES
+    assert {item.label for item in items} == CAPABILITY_DIRECTIVES | {"if", "else"}
     defer = next(item for item in items if item.label == "defer")
     assert defer.text_edit.new_text == "> defer: "
     assert "defaults to false" in defer.detail

@@ -21,6 +21,7 @@ from kedi.lang.ast import (
     RequiresDirectiveStmt,
     SettingsField,
     Span,
+    iter_profile_bodies,
 )
 
 
@@ -28,6 +29,7 @@ from kedi.lang.ast import (
 class _AdapterDiagnosticState:
     shortname: str | None = None
     kind: AgentAdapterKind | None = None
+    unknown_selection: bool = False
     approval_loc: Span | None = None
     approval_plain_value: str | None = None
     hooks_loc: Span | None = None
@@ -105,6 +107,34 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         )
     for member in profile.requires_members:
         state = _with_requirements_state(state, member)
+    # Do not execute a Python guard, or choose one of its possible backends,
+    # while diagnosing the caller of a reusable configuration bundle.
+    latest_selection = max(
+        (
+            member.loc.start_byte
+            for member in (*profile.agent_members, *profile.adapter_members)
+            if member.loc is not None
+        ),
+        default=-1,
+    )
+    for conditional in profile.conditional_members:
+        if conditional.loc is not None and conditional.loc.start_byte < latest_selection:
+            continue
+        branches = (conditional.consequence, conditional.alternative)
+        if any(
+            body.agent_members
+            or body.adapter_members
+            or body.use_members
+            or body.approval_members
+            or body.hooks_members
+            or body.history_members
+            or body.codemode_members
+            or body.requires_members
+            for branch in branches
+            if branch is not None
+            for body in iter_profile_bodies(branch)
+        ):
+            return replace(state, shortname=None, kind=None, unknown_selection=True)
     return state
 
 
@@ -127,7 +157,7 @@ def _merge_adapter_state(
     outer: _AdapterDiagnosticState,
     inner: _AdapterDiagnosticState,
 ) -> _AdapterDiagnosticState:
-    selected = inner if inner.shortname is not None else outer
+    selected = inner if inner.shortname is not None or inner.unknown_selection else outer
     approval_owner = inner if inner.approval_loc is not None else outer
     hooks_owner = inner if inner.hooks_loc is not None or inner.hooks_enabled is not None else outer
     hook_events = outer.hook_events
@@ -146,6 +176,7 @@ def _merge_adapter_state(
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
         kind=selected.kind,
+        unknown_selection=selected.unknown_selection,
         approval_loc=approval_owner.approval_loc,
         approval_plain_value=approval_owner.approval_plain_value,
         hooks_loc=hooks_owner.hooks_loc,

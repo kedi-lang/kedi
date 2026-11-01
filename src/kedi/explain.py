@@ -161,7 +161,7 @@ class _Analyzer:
             return self._unknown_profile(state, f"profile {name} is not statically available")
         definition = profile_stmt_to_definition(profile)
         return apply_profile_members(
-            definition,
+            definition.members,
             state,
             lambda current, member: self._directive(member, current, f"profile {name}"),
             lambda current, member: (
@@ -203,6 +203,8 @@ class _Analyzer:
     def _directive(self, item: Any, state: _State, prefix: str = "directive") -> _State:
         origin = _origin(prefix, getattr(item, "loc", None))
         kind = getattr(item, "kind", None)
+        if kind == "conditional":
+            return self._unknown_profile(state, f"{origin}: conditional profile members")
         if isinstance(item, (AgentDirectiveStmt, AdapterDirectiveStmt)) or kind in {
             "agent",
             "adapter",

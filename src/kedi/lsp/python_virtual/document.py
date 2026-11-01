@@ -126,9 +126,6 @@ def compute_python_virtual_document(
             _emit_python_module_stub(builder, stmt.code)
         builder.add("")
 
-    for profile in program.profile_defs.values():
-        _emit_unconsumed_inline_regions(builder, cursor, profile.loc, "")
-
     for typedef in program.type_defs:
         _emit_type_stub(builder, typedef, header_ranges)
     if program.type_defs:
@@ -141,6 +138,9 @@ def compute_python_virtual_document(
         _emit_proc_stub(builder, proc)
     if program.procedures:
         builder.add("")
+
+    for profile in program.profile_defs.values():
+        _emit_unconsumed_inline_regions(builder, cursor, profile.loc, "")
 
     if focused_proc is None and (program.toplevel_body or program.toplevel_return is not None):
         builder.add("def __kedi_toplevel__() -> Any:")
