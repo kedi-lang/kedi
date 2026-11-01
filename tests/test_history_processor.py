@@ -321,15 +321,17 @@ def test_native_history_fixtures_freeze_groups_boundaries_and_open_state(
     transaction = KediCompactionTransaction(codec)
     snapshot = transaction.processor.inspect(state, codec=codec)
 
-    assert [group.entry_start for group in snapshot.groups] == [0, 1, 7, 13]
-    assert [group.entry_end for group in snapshot.groups] == [1, 7, 13, 15]
+    # The unfinished last cycle is its protected prompt plus the still-open tool exchange.
+    assert [group.entry_start for group in snapshot.groups] == [0, 1, 7, 13, 14]
+    assert [group.entry_end for group in snapshot.groups] == [1, 7, 13, 14, 15]
     assert snapshot.groups[0].protected_reasons == ("immutable-prefix",)
     assert snapshot.groups[1].closed is True
     assert snapshot.groups[1].protected_reasons == ("provider-required",)
     assert snapshot.groups[2].closed is True
-    assert snapshot.groups[3].closed is False
-    assert "open-lifecycle" in snapshot.groups[3].protected_reasons
-    assert "call-awaiting-approval" in snapshot.groups[3].lifecycle_ids
+    assert snapshot.groups[3].protected_reasons == ("incomplete-response-cycle",)
+    assert snapshot.groups[4].closed is False
+    assert "open-lifecycle" in snapshot.groups[4].protected_reasons
+    assert "call-awaiting-approval" in snapshot.groups[4].lifecycle_ids
     assert snapshot.entries[2].provider_required is True
     assert "tool_call_result_1" in snapshot.entries[3].searchable_text
 
@@ -338,7 +340,8 @@ def test_native_history_fixtures_freeze_groups_boundaries_and_open_state(
     assert prepared.plan.window.native_range.start == 7
     assert prepared.plan.window.native_range.end == 13
     assert prepared.plan.groups[-1].protected is True
-    assert "latest-cycle" in prepared.plan.groups[-1].protected_reasons
+    # Track A keeps the whole latest cycle, prompt and exchanges alike, out of its windows.
+    assert all("latest-cycle" in group.protected_reasons for group in prepared.plan.groups[3:])
 
 
 @pytest.mark.parametrize(

@@ -75,7 +75,9 @@ def _protect_groups(
         if any("user" in unit_by_id[unit_id].kinds for unit_id in group.unit_ids):
             latest_user_group = index
     if latest_user_group is not None:
-        groups[latest_user_group] = _with_reason(groups[latest_user_group], "latest-cycle")
+        # An unfinished latest cycle is split into its prompt and tool exchanges; protect all.
+        for index in range(latest_user_group, len(groups)):
+            groups[index] = _with_reason(groups[index], "latest-cycle")
 
     retained_tokens = 0
     if policy.preserve_recent_tokens:

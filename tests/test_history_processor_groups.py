@@ -338,3 +338,93 @@ def test_aliased_message_occurrences_do_not_acquire_a_guessed_origin():
     provenance.accept(source, returned, codec.inspect(deepcopy(returned)))
     assert provenance.snapshot.entries[0].origins == ()
     assert provenance.snapshot.entries[1].origins[0].run_id == "2"
+
+
+def _process(messages, processor, codec):
+    contexts = []
+    runner = HistoryProcessorRunner(lambda ctx: contexts.append(ctx) or processor(ctx), codec)
+
+    async def run():
+        with runner.run_scope(None):
+            return await runner.process(messages, model_id=None)
+
+    return asyncio.run(run()), contexts[0]
+
+
+def _pydantic_tool_loop():
+    from pydantic_ai.messages import ToolCallPart, ToolReturnPart
+
+    messages = [ModelRequest(parts=[UserPromptPart("audit the logs")])]
+    for call in ("a", "b", "c"):
+        messages.append(ModelResponse(parts=[ToolCallPart("read_log", {"name": call}, call)]))
+        messages.append(ModelRequest(parts=[ToolReturnPart("read_log", f"log {call}", call)]))
+    return messages
+
+
+def test_a_running_tool_loop_is_its_prompt_plus_one_closed_group_per_exchange():
+    messages = _pydantic_tool_loop()
+    outcome, ctx = _process(
+        messages, lambda ctx: ctx.keep_recent_groups(1), PydanticHistoryMessageCodec()
+    )
+
+    assert [(g.entry_start, g.entry_end, g.closed) for g in ctx.groups] == [
+        (0, 1, False),
+        (1, 3, True),
+        (3, 5, True),
+        (5, 7, True),
+    ]
+    assert ctx.groups[0].protected_reasons == ("incomplete-response-cycle",)
+    assert not any(group.protected for group in ctx.groups[1:])
+    # The prompt stays; the older exchanges go while the loop is still running.
+    assert outcome.messages == [messages[0], *messages[5:]]
+    assert outcome.changed
+
+
+def test_langchain_tool_loops_split_the_same_way():
+    messages = [HumanMessage(content="audit the logs")]
+    for call in ("a", "b"):
+        messages.append(
+            AIMessage(content="", tool_calls=[{"name": "read_log", "args": {}, "id": call}])
+        )
+        messages.append(ToolMessage(content=f"log {call}", tool_call_id=call))
+    outcome, ctx = _process(
+        messages, lambda ctx: ctx.keep_recent_groups(0), LangChainHistoryMessageCodec()
+    )
+
+    assert [(g.entry_start, g.entry_end, g.closed) for g in ctx.groups] == [
+        (0, 1, False),
+        (1, 3, True),
+        (3, 5, True),
+    ]
+    assert outcome.messages == [messages[0], *messages[3:]]
+
+
+def test_exchanges_without_an_answered_call_stay_protected():
+    from pydantic_ai.messages import RetryFeedbackPart, RetryInfo, ToolCallPart, ToolReturnPart
+
+    messages = [
+        ModelRequest(parts=[UserPromptPart("task")]),
+        ModelRequest(parts=[ToolReturnPart("read_log", "late", "elsewhere")]),
+        ModelRequest(parts=[RetryFeedbackPart("try again", retry=RetryInfo(cause="no_output"))]),
+        ModelResponse(parts=[ToolCallPart("read_log", {}, "pending")]),
+    ]
+    snapshot = classify_snapshot(PydanticHistoryMessageCodec().inspect(messages))
+
+    prompt, rest = snapshot.groups
+    assert prompt.protected_reasons == ("incomplete-response-cycle",)
+    # An orphan result opens no exchange, so it stays with what follows, protected.
+    assert (rest.entry_start, rest.entry_end, rest.closed) == (1, 4, False)
+    assert {"open-lifecycle", "orphan-lifecycle-result"} <= set(rest.protected_reasons)
+
+
+def test_an_exchange_that_makes_no_call_is_not_droppable():
+    from pydantic_ai.messages import RetryFeedbackPart, RetryInfo
+
+    messages = [
+        ModelRequest(parts=[UserPromptPart("task")]),
+        ModelRequest(parts=[RetryFeedbackPart("try again", retry=RetryInfo(cause="no_output"))]),
+    ]
+    snapshot = classify_snapshot(PydanticHistoryMessageCodec().inspect(messages))
+
+    assert snapshot.groups[-1].closed is False
+    assert snapshot.groups[-1].protected_reasons == ("incomplete-exchange",)
