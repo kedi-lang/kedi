@@ -117,6 +117,7 @@ def _resolve_agent_tool_specs(
         specs.extend(skill_specs)
 
     catalog_profile = subagent_catalog_profile(profile)
+    blocking = profile.workflow_mode == "blocking"
     if catalog_profile.subagents:
         from kedi.agent_adapter.meta import AdapterCapabilities
         from kedi.agent_adapter.subagents import subagent_tool_specs
@@ -141,6 +142,7 @@ def _resolve_agent_tool_specs(
                     catalog_profile,
                     supports_background=capabilities.supports("background_subagents"),
                     activation_profile=profile,
+                    blocking=blocking,
                 )
             )
     from kedi.agent_adapter.subagents.control import current_live_input
@@ -152,7 +154,7 @@ def _resolve_agent_tool_specs(
         specs.extend(
             input_tool_specs(
                 self,
-                children=bool(catalog_profile.subagents),
+                children=bool(catalog_profile.subagents) and not blocking,
                 parent=live_control is not None and live_control.parent is not None,
             )
         )

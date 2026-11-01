@@ -21,7 +21,10 @@ def build_subagent_tool_specs(
     wait_subagent: Callable[..., Any],
     cancel_subagent: Callable[..., Any],
     subagent_status: Callable[..., Any],
+    blocking: bool = False,
 ) -> tuple[ToolSpec, ...]:
+    """``blocking`` keeps only the synchronous ``delegate_task``: no background, continuation, wait, cancel or status."""
+    supports_background = supports_background and not blocking
     entries = [
         f"- {name}: {description}" if description else f"- {name}"
         for name, description in catalog.items()
@@ -148,6 +151,8 @@ def build_subagent_tool_specs(
             risk="read_only",
         ),
     ]
+    if blocking:
+        return schema_validated(tools[:1])
     if not supports_background:
         return schema_validated(tools)
 

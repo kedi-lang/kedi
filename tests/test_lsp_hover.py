@@ -54,6 +54,12 @@ def test_hover_on_profile_workflow_describes_effective_mode() -> None:
     assert "Delegated subagent workflow" in delegated_body
     assert "default when `> workflow:` is omitted" in delegated_body
 
+    blocking = dynamic.replace("dynamic", "blocking")
+    blocking_body = hover_text_at(blocking, "example.kedi", "blocking")
+    assert "Blocking subagent workflow" in blocking_body
+    assert "synchronous `delegate_task`" in blocking_body
+    assert "Subagent workflow: `blocking`" in hover_text_at(blocking, "example.kedi", "manager")
+
 
 def test_hover_on_profile_output_describes_delegation_fallback() -> None:
     source = "> profile: worker:\n    > adapter: pydantic\n    > output: list[str]\n"

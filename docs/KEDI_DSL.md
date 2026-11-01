@@ -2388,9 +2388,13 @@ or duplicate process clause is not.
 
 #### Dynamic Workflows
 
-Subagent orchestration has two profile-level modes. Omitting `> workflow:` is
+Subagent orchestration has three profile-level modes. Omitting `> workflow:` is
 equivalent to `> workflow: delegate` and preserves the delegation and lifecycle
-tools described below. `> workflow: dynamic` instead exposes one sequential
+tools described below. `> workflow: blocking` keeps only a synchronous
+`delegate_task`: it has no `background` argument and no continuation, wait,
+cancel, status or live-input tools, and its children get no channel back to it.
+It suits fan-out work that needs none of those controls and leaves their schemas
+out of every request. `> workflow: dynamic` instead exposes one sequential
 `run_workflow(code: str)` tool:
 
 Direct children can be declared with `> subagent:` or contributed through a

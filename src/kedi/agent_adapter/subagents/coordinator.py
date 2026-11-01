@@ -324,7 +324,12 @@ class SubagentCoordinator:
             started = self.runs.transition(run_id, "running")
             self.events.append(SubagentStarted(started))
             capabilities = getattr(child_adapter, "capabilities", None)
-            control = control_for_run(self, run_id, capabilities)
+            control = control_for_run(
+                self,
+                run_id,
+                capabilities,
+                report_to_parent=getattr(parent_profile, "workflow_mode", None) != "blocking",
+            )
             with self._task_lock:
                 self._controls[run_id] = control
             if retain_for_native_owner:

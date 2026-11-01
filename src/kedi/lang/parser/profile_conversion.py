@@ -380,10 +380,12 @@ def _walk_profile_body(
                     workflow_mode = "delegate"
                 elif mode == "dynamic":
                     workflow_mode = "dynamic"
+                elif mode == "blocking":
+                    workflow_mode = "blocking"
                 else:
                     self._error(
                         value_node,
-                        "workflow mode must be 'delegate' or 'dynamic'",
+                        "workflow mode must be 'delegate', 'dynamic' or 'blocking'",
                         code="K-WORKFLOW-MODE",
                     )
                     continue

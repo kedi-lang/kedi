@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from .definitions import ProfileDefinition
 
 AgentCommand = str | tuple[str, ...]
-WorkflowMode = Literal["delegate", "dynamic"]
+WorkflowMode = Literal["delegate", "dynamic", "blocking"]
 
 
 @dataclass(frozen=True, kw_only=True)

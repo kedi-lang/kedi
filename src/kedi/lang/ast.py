@@ -662,7 +662,7 @@ class ProfileMaxAgentsEntry:
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
-WorkflowMode = Literal["delegate", "dynamic"]
+WorkflowMode = Literal["delegate", "dynamic", "blocking"]
 
 
 @dataclass

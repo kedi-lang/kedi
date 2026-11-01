@@ -683,7 +683,7 @@ def test_explicit_delegate_workflow_preserves_default_tool_surface() -> None:
     [
         (
             "> profile: manager:\n    > workflow: automatic\n",
-            "workflow mode must be 'delegate' or 'dynamic'",
+            "workflow mode must be 'delegate', 'dynamic' or 'blocking'",
         ),
         (
             "> profile: manager:\n    > workflow: delegate\n    > workflow: dynamic\n",

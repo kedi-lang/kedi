@@ -123,7 +123,7 @@ DIRECTIVE_RULES = {
         "Model reasoning effort", ("minimal", "low", "medium", "high", "xhigh", "max")
     ),
     "approval": ValueRule("Built-in tool approval policy", ("allow", "deny")),
-    "workflow": ValueRule("Subagent orchestration mode", ("delegate", "dynamic")),
+    "workflow": ValueRule("Subagent orchestration mode", ("delegate", "dynamic", "blocking")),
 }
 
 FIELD_RULES: dict[str, dict[str, ValueRule]] = {
