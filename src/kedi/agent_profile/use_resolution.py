@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from .definitions import iter_profile_members
-
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..errors import KediExecutionError
+from .definitions import iter_profile_members
 from .evaluation import eval_profile_definition
 from .profile import AgentProfile
 

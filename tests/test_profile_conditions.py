@@ -578,9 +578,10 @@ def test_guard_python_projection_declares_kedi_inputs_before_using_them():
     ],
 )
 def test_conditional_adapter_resolution_outside_profile_never_runs_guards(body, expected):
-    from kedi.lang.parser.directive_context import selected_adapter
     import tree_sitter_kedi
     from tree_sitter import Language, Parser
+
+    from kedi.lang.parser.directive_context import selected_adapter
 
     source = (
         "> adapter: pydantic\n> profile: selected:\n"

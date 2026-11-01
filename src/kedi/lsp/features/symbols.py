@@ -13,12 +13,12 @@ from kedi.lang.ast import (
     OutputSegment,
     ProcedureDef,
     ProfileDefStmt,
-    iter_profile_bodies,
     Program,
     ProgramWithValidation,
     Span,
     TestSuite,
     UseDirectiveStmt,
+    iter_profile_bodies,
 )
 from kedi.lsp.ast_spans import name_token_span
 from kedi.lsp.coordinates import span_to_range as _span_to_range

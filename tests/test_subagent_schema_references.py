@@ -9,6 +9,7 @@ import pytest
 from jsonschema import ValidationError
 from pydantic import BaseModel, TypeAdapter
 
+from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.agent_adapter.subagents import (
     effective_final_schema,
     validate_structured_result,
@@ -20,7 +21,6 @@ from kedi.agent_adapter.subagents.schema import (
     validate_final_schema,
 )
 from kedi.agent_profile import AgentProfile
-from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.lang import compile_program, parse_program
 
 

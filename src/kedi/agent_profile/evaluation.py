@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from ..errors import KediExecutionError, KediTraceFrame

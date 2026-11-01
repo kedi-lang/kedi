@@ -18,12 +18,12 @@ from kedi.agent_adapter.adapters import LangChainAdapter
 from kedi.agent_adapter.execution import OwnedAsyncLoop, use_run_deadline
 from kedi.agent_adapter.subagents.budget import SubagentBudgetExceeded
 from kedi.agent_adapter.subagents.native import NativeSubagentOwner
+from kedi.agent_adapter.subagents.schema import normalize_final_schema
 from kedi.agent_profile import AgentProfile, block_agent_profile_scope
 from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.lang.ast import AwaitStmt, TaskStmt
 from kedi.lang.compiler.statement_compiler import StatementCompiler
-from kedi.agent_adapter.subagents.schema import normalize_final_schema
 from kedi.lsp.features.completion import compute_completion
 from kedi.lsp.features.navigation import (
     _collect_value_reference_candidates,
