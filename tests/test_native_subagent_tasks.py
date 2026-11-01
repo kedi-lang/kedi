@@ -23,7 +23,7 @@ from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.lang.ast import AwaitStmt, TaskStmt
 from kedi.lang.compiler.statement_compiler import StatementCompiler
-from kedi.lang.compiler.subagent_tasks import _inline_pydantic_refs
+from kedi.agent_adapter.subagents.schema import normalize_final_schema
 from kedi.lsp.features.completion import compute_completion
 from kedi.lsp.features.navigation import (
     _collect_value_reference_candidates,
@@ -442,7 +442,7 @@ def test_invalid_task_capture_schema_is_rejected_before_child_io(
     def invalid_schema(schema: dict[str, Any]) -> None:
         raise ValueError("schema rejected")
 
-    monkeypatch.setattr(subagent_tasks_module, "validate_final_schema", invalid_schema)
+    monkeypatch.setattr(subagent_tasks_module, "normalize_final_schema", invalid_schema)
     with pytest.raises(KediExecutionError, match="schema rejected"):
         runtime.run_main()
     assert not adapter.invocations
@@ -451,7 +451,7 @@ def test_invalid_task_capture_schema_is_rejected_before_child_io(
 @pytest.mark.parametrize(
     ("schema", "message"),
     [
-        ({"$ref": "https://example.invalid/schema"}, "Unsupported"),
+        ({"$ref": "https://example.invalid/schema"}, "does not support"),
         ({"$ref": "#/$defs/Missing"}, "Unknown"),
         (
             {
@@ -464,7 +464,7 @@ def test_invalid_task_capture_schema_is_rejected_before_child_io(
 )
 def test_task_schema_reference_errors_are_explicit(schema: dict[str, Any], message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        _inline_pydantic_refs(schema)
+        normalize_final_schema(schema)
 
 
 def test_nested_python_scopes_share_budget_but_new_roots_do_not() -> None:

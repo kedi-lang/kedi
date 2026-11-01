@@ -18,7 +18,7 @@ from kedi.agent_adapter.registry import build_adapter
 from kedi.agent_adapter.subagents import (
     SubagentUsageLimits,
     SupportsSubagentExecution,
-    validate_final_schema,
+    normalize_final_schema,
     validate_structured_result,
 )
 from kedi.agent_profile import AgentProfile
@@ -133,7 +133,7 @@ class A2AServedProgram:
         if len(prompt) > self.max_input_chars:
             raise ValueError(f"A2A task exceeds the {self.max_input_chars}-character input limit")
         if output_schema is not None:
-            validate_final_schema(output_schema)
+            output_schema = normalize_final_schema(output_schema)
         await self._reserve_task(principal)
         session: _ServedSession | None = None
         try:

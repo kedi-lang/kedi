@@ -15,15 +15,16 @@ from ...errors import KediExecutionError
 from ..tools.specs import ToolSpec
 from .budget import DelegationBudget
 from .limits import SubagentUsageLimits
+from .schema import MAX_FINAL_SCHEMA_BYTES as MAX_FINAL_SCHEMA_BYTES
+from .schema import MAX_FINAL_SCHEMA_DEPTH as MAX_FINAL_SCHEMA_DEPTH
+from .schema import normalize_final_schema as normalize_final_schema
+from .schema import validate_final_schema as validate_final_schema
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.approvals.policy import ApprovalPolicy
     from kedi.agent_profile import AgentProfile
     from kedi.core import KediRuntime
 
-
-MAX_FINAL_SCHEMA_BYTES = 32 * 1024
-MAX_FINAL_SCHEMA_DEPTH = 16
 
 _NO_TYPED_OUTPUT = object()
 
@@ -46,7 +47,7 @@ def effective_final_schema(
 ) -> dict[str, Any] | None:
     """Return an explicit delegation schema or the child profile's output schema."""
     if explicit_schema is not None:
-        return explicit_schema
+        return normalize_final_schema(explicit_schema)
     if profile.output_type is None:
         return None
     try:
@@ -56,8 +57,7 @@ def effective_final_schema(
             f"Subagent profile {profile.name!r} output type cannot be represented as JSON Schema: "
             f"{exc}"
         ) from exc
-    validate_final_schema(schema)
-    return schema
+    return normalize_final_schema(schema)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -179,24 +179,8 @@ def subagent_tool_specs(
     )
 
 
-def validate_final_schema(schema: dict[str, Any]) -> None:
-    if not isinstance(schema, dict):
-        raise ValueError(
-            "final_schema must be a JSON object, not a JSON-encoded string or another value. "
-            "Omit final_schema to use the child profile's configured output type."
-        )
-    try:
-        encoded = json.dumps(schema, ensure_ascii=True, separators=(",", ":")).encode()
-    except (TypeError, ValueError) as exc:
-        raise ValueError("final_schema must be JSON serializable") from exc
-    if len(encoded) > MAX_FINAL_SCHEMA_BYTES:
-        raise ValueError(f"final_schema exceeds the {MAX_FINAL_SCHEMA_BYTES}-byte size limit")
-    _validate_schema_node(schema, depth=0)
-    validator_for(schema).check_schema(schema)
-
-
 def wrapped_final_schema(final_schema: dict[str, Any]) -> dict[str, Any]:
-    validate_final_schema(final_schema)
+    final_schema = normalize_final_schema(final_schema)
     return {
         "type": "object",
         "title": "KediSubagentResult",
@@ -227,18 +211,3 @@ def validate_structured_result(
 
 def new_subagent_run_id() -> str:
     return uuid4().hex
-
-
-def _validate_schema_node(value: Any, *, depth: int) -> None:
-    if depth > MAX_FINAL_SCHEMA_DEPTH:
-        raise ValueError(
-            f"final_schema exceeds the maximum nesting depth of {MAX_FINAL_SCHEMA_DEPTH}"
-        )
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in {"$ref", "$id"}:
-                raise ValueError(f"final_schema does not support {key}")
-            _validate_schema_node(child, depth=depth + 1)
-    elif isinstance(value, list):
-        for child in value:
-            _validate_schema_node(child, depth=depth + 1)

@@ -601,7 +601,8 @@ def test_explicit_delegation_schema_overrides_profile_output_type() -> None:
     }
     profile = AgentProfile(name="worker", output_type=str)
 
-    assert effective_final_schema(profile, explicit) is explicit
+    assert effective_final_schema(profile, explicit) == explicit
+    assert effective_final_schema(profile, explicit) is not explicit
 
 
 def test_explicit_delegation_does_not_apply_profile_python_validator() -> None:

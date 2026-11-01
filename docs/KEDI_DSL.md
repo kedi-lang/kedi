@@ -2210,6 +2210,14 @@ Both children may run before the first await. `> await [result]: job` blocks at
 that statement and binds a `SubagentResult`. `> await: job` also blocks and
 propagates errors but creates no binding. Repeated awaits return the same
 result without starting another child. `SubagentResult` exposes `output`,
+All three schema sources (explicit `final_schema`, profile `> output:`, and task
+captures) support document-local JSON Pointer references such as
+`#/$defs/Person`. Kedi expands them before wrapping the child result, preserving
+nested model, list, union, and repeated-definition constraints without mutating
+the input schema. External references, `$id`, dynamic references, unresolved
+targets, and recursive expansion are rejected. The 32 KiB size and nesting-depth
+16 limits apply to both the source schema and its expanded form.
+
 `task_summary`, `run_id`, and `subagent` as attributes. Task captures define
 a validated result model with attribute-accessible fields; they do not bind
 names in the parent. Do not combine task captures with the child's `> output:`
