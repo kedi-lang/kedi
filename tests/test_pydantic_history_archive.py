@@ -13,7 +13,6 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
-    RetryPromptPart,
     TextPart,
     ThinkingPart,
     ToolCallPart,
@@ -213,10 +212,11 @@ def test_history_archive_skips_retry_barrier_and_archives_later_closed_cycles(
     retry_call = ModelResponse(parts=[ToolCallPart("terminal", {"invalid": True}, "retry_call")])
     retry_result = ModelRequest(
         parts=[
-            RetryPromptPart(
-                "invalid arguments",
+            ToolReturnPart(
                 tool_name="terminal",
+                content="invalid arguments",
                 tool_call_id="retry_call",
+                outcome="retried",
             )
         ]
     )

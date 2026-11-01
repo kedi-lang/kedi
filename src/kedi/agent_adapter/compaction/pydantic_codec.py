@@ -91,7 +91,7 @@ class PydanticHistoryCodec:
             LoadCapabilityCallPart,
             LoadCapabilityReturnPart,
             ModelMessagesTypeAdapter,
-            RetryPromptPart,
+            RetryFeedbackPart,
             SystemPromptPart,
             TextPart,
             ThinkingPart,
@@ -127,7 +127,7 @@ class PydanticHistoryCodec:
         close_ids = tuple(
             part.tool_call_id
             for part in message.parts
-            if isinstance(part, (BaseToolReturnPart, RetryPromptPart)) and part.tool_call_id
+            if isinstance(part, BaseToolReturnPart) and part.tool_call_id
         )
         checkpoint = any(isinstance(part, CompactionPart) for part in message.parts) or bool(
             message.metadata and message.metadata.get("kedi_compaction_checkpoint")
@@ -138,7 +138,7 @@ class PydanticHistoryCodec:
                 (
                     CompactionPart,
                     FilePart,
-                    RetryPromptPart,
+                    RetryFeedbackPart,
                     SystemPromptPart,
                     TextPart,
                     ThinkingPart,
@@ -225,8 +225,9 @@ def _pydantic_entry_kind(
         BaseToolReturnPart,
         FilePart,
         ModelRequest,
-        RetryPromptPart,
+        RetryFeedbackPart,
         SystemPromptPart,
+        ToolReturnPart,
         TextPart,
         ThinkingPart,
         ToolAvailabilityDeltaPart,
@@ -241,9 +242,11 @@ def _pydantic_entry_kind(
     if isinstance(message, ModelRequest):
         if any(isinstance(part, UserPromptPart) for part in parts):
             return "user"
-        if any(isinstance(part, BaseToolReturnPart) for part in parts):
+        # A retried tool call is answered by its own return part, marked `outcome="retried"`.
+        retried = [isinstance(p, ToolReturnPart) and p.outcome == "retried" for p in parts]
+        if any(isinstance(p, BaseToolReturnPart) and not r for p, r in zip(parts, retried)):
             return "tool-result"
-        if any(isinstance(part, RetryPromptPart) for part in parts):
+        if any(retried) or any(isinstance(part, RetryFeedbackPart) for part in parts):
             return "retry"
         if any(isinstance(part, SystemPromptPart) for part in parts):
             return "system"

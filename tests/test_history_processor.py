@@ -29,7 +29,6 @@ from pydantic_ai.messages import (
     ModelResponse,
     NativeToolCallPart,
     NativeToolReturnPart,
-    RetryPromptPart,
     SystemPromptPart,
     TextPart,
     ThinkingPart,
@@ -144,10 +143,11 @@ def _pydantic_history() -> list[dict[str, Any]]:
         ),
         ModelRequest(
             parts=[
-                RetryPromptPart(
-                    "Patch context did not match; retry with current source.",
+                ToolReturnPart(
                     tool_name="apply_patch",
+                    content="Patch context did not match; retry with current source.",
                     tool_call_id="call-patch-1",
+                    outcome="retried",
                 )
             ]
         ),

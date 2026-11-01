@@ -15,7 +15,6 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelRequestPart,
     ModelResponse,
-    RetryPromptPart,
     ToolAvailabilityDeltaPart,
     ToolCallPart,
     ToolReturn,
@@ -103,7 +102,7 @@ def retain_tool_results(
         for message in messages[last_response + 1 :]
         if isinstance(message, ModelRequest)
         for part in message.parts
-        if isinstance(part, (ToolReturnPart, RetryPromptPart))
+        if isinstance(part, ToolReturnPart)
     }
     parts: list[ModelRequestPart] = []
     for call in messages[last_response].parts:

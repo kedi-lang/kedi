@@ -12,7 +12,6 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
-    RetryPromptPart,
     ToolReturnPart,
 )
 from pydantic_ai.models import ModelRequestContext
@@ -99,8 +98,6 @@ def _tool_outcomes(messages: list[ModelMessage]) -> tuple[str, ...]:
                     results[(part.tool_name, part.outcome)] += 1
                 elif isinstance(part, BaseToolReturnPart) and part.tool_name is not None:
                     results[(part.tool_name, "completed")] += 1
-                elif isinstance(part, RetryPromptPart) and part.tool_name:
-                    results[(part.tool_name, "retry")] += 1
     summaries: list[str] = []
     for tool_name in sorted(calls):
         statuses = ", ".join(

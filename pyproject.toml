@@ -17,7 +17,7 @@ dependencies = [
     "python-dotenv>=1.2.2,<2",
     "pydantic-settings>=2.14.1,<2.15",
     "prompt-toolkit>=3.0.52,<3.1",
-    "pydantic-ai-slim>=2.57.0,<2.58",
+    "pydantic-ai-slim>=2.64.0,<2.65",
     "pydantic-monty==1.2.0",
     "jsonschema>=4.26,<5",
     "tree-sitter==0.25.2",
@@ -95,7 +95,7 @@ terminal-bench = [
     "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
 typesafe = [
-    "kedi-typesafe>=0.3.1,<0.4",
+    "kedi-typesafe>=0.3.2,<0.4",
 ]
 a2a = [
     "a2a-sdk[http-server]==1.2.1",
@@ -184,7 +184,7 @@ exclude_also = [
 [dependency-groups]
 dev = [
     "a2a-sdk[http-server,sqlite]==1.2.1",
-    "anthropic==1.12.1",
+    "anthropic==1.15.0",
     "basedpyright==1.39.6",
     "cassetter[httpx]==0.5.0",
     "claude-agent-sdk==0.2.163",
@@ -192,16 +192,16 @@ dev = [
     "coverage==7.14.1",
     "dspy==3.4.0",
     "groq==1.7.0",
-    "kedi-decisions==0.1.1",
+    "kedi-decisions==0.1.2",
     "kedi-laya[pydantic,langchain]==0.1.1",
     "langchain==1.4.3",
     "langchain-aws==1.8.0",
     "langchain-mcp-adapters==0.3.2",
     "langchain-openai==1.6.7",
     "langchain-openrouter==0.2.9",
-    "kedi-typesafe[all]==0.3.1",
+    "kedi-typesafe[all]==0.3.2",
     "pre-commit==4.6.0",
-    "pydantic-ai==2.57.0",
+    "pydantic-ai==2.64.0",
     "pytest==9.0.3",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",

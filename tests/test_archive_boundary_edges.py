@@ -10,8 +10,8 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     NativeToolReturnPart,
-    RetryPromptPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
@@ -135,12 +135,12 @@ def test_native_archive_outcomes_and_invalid_usage():
         ModelRequest(
             parts=[
                 NativeToolReturnPart("search", "ok", "a"),
-                RetryPromptPart("retry", tool_name="search"),
+                ToolReturnPart("search", "retry", tool_call_id="b", outcome="retried"),
                 UserPromptPart("context"),
             ]
         ),
     ]
-    assert processor.tool_outcomes(messages) == ("search: calls=1; completed=1, retry=1",)
+    assert processor.tool_outcomes(messages) == ("search: calls=1; completed=1, retried=1",)
     assert processor.tool_outcomes([ModelRequest(parts=[])]) == ()
     assert processor.tool_outcomes([object()]) == ()
     for count in (0, True):

@@ -1,11 +1,9 @@
-"""The guidance a model holds at a request, across Pydantic AI's two delivery styles.
+"""The guidance a model holds at a request.
 
-Before 2.6x every instruction block was rendered into ``info.instructions`` on each request. Later
-releases keep a block's first rendering there and deliver later changes in the conversation: the
-first change as a full ``<context id="...">`` element, then small changes as a unified diff in a
-``<context_diff id="...">`` element. The newest statement for an id is the one in effect, and a
-withdrawn block says so instead of carrying text. On the older release nothing is appended, so this
-returns ``info.instructions`` unchanged.
+Pydantic AI keeps an instruction block's first rendering in ``info.instructions`` and delivers
+later changes in the conversation: the first change as a full ``<context id="...">`` element, then
+small changes as a unified diff in a ``<context_diff id="...">`` element. The newest statement for an
+id is the one in effect, and a withdrawn block says so instead of carrying text.
 """
 
 from __future__ import annotations
