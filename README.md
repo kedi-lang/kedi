@@ -72,7 +72,7 @@ cd kedi
 uv sync --locked --dev
 source .venv/bin/activate
 export KEDI_ADAPTER=pydantic
-export KEDI_ADAPTER_MODEL=openai:gpt-5.6-luna
+export KEDI_ADAPTER_MODEL=openai:gpt-6-luna
 kedi examples/meeting_actions/main.kedi
 ```
 

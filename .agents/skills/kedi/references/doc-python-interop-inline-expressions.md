@@ -142,7 +142,7 @@ allows dynamic values:
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ````kedi
 ```
-selected_model = "openai:gpt-5.6-luna"
+selected_model = "openai:gpt-6-luna"
 ```
 
 > model: `selected_model`

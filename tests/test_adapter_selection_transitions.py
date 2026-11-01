@@ -179,7 +179,7 @@ def test_lazy_model_hint_does_not_initialize_backend():
     adapter = LazyAdapter(fail, model="openai:original")
     assert adapter.configured_model == "openai:original"
     assert not adapter.is_initialized
-    assert _build_lazy_runtime_adapter("pydantic", None).configured_model == "groq:qwen/qwen3-32b"
+    assert _build_lazy_runtime_adapter("pydantic", None).configured_model == "openai/gpt-6-luna"
 
 
 def test_lazy_model_without_hint_is_only_read_after_initialization():

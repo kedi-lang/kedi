@@ -15,7 +15,7 @@ email. Model availability is a provider prerequisite, not a compiler guarantee.
 > adapter: pydantic
 
 @draft_reply(ticket: str, policy: str) -> str:
-  > model: openai:gpt-5.6-luna
+  > model: openai:gpt-6-luna
   >> Customer request: <ticket>.
   Policy: <policy>.
   A brief reply that does not invent completed actions is [reply].

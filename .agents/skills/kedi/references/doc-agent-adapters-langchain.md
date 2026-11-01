@@ -33,7 +33,7 @@ Other providers may require their own LangChain integration package.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > adapter: langchain
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 ```
 
 String models are passed through `langchain.chat_models.init_chat_model`.
@@ -70,7 +70,7 @@ from kedi.agent_adapter import LangChainAdapter
 from kedi.agent_adapter.conversation import ConversationState
 
 model = codex_responses_model(
-    "gpt-5.6-luna", adapter="langchain", connection="websocket",
+    "gpt-6-luna", adapter="langchain", connection="websocket",
 )
 adapter = LangChainAdapter(model, model_settings={"reasoning": {"effort": "high"}})
 conversation = ConversationState(session_id="release-review")

@@ -137,9 +137,9 @@ def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
     app._build_runtime_adapter("langchain", None)
 
     assert seen == [
-        ("dspy", "groq/qwen/qwen3-32b"),
-        ("pydantic", "groq:qwen/qwen3-32b"),
-        ("langchain", "groq:qwen/qwen3-32b"),
+        ("dspy", "openai/gpt-6-luna"),
+        ("pydantic", "openai/gpt-6-luna"),
+        ("langchain", "openai/gpt-6-luna"),
     ]
 
 
@@ -462,7 +462,7 @@ def test_dspy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
             self.config = config
 
         def configure_main_lm(self, model: str) -> None:
-            assert model == "openai/gpt-4o"
+            assert model == "openai/gpt-6-luna"
 
     import kedi.optimization.services.dspy_config as dspy_config_module
 
@@ -498,11 +498,11 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
             self.config = config
 
         def configure_main_lm(self, model: str) -> None:
-            assert model == "openai/gpt-4o"
+            assert model == "openai/gpt-6-luna"
 
     class FakeDSPyAdapter:
         def __init__(self, *, model: str) -> None:
-            assert model in {"openai/gpt-4o", "custom-dspy-model"}
+            assert model in {"openai/gpt-6-luna", "custom-dspy-model"}
 
     class FakeGEPAOptimizer:
         def __init__(

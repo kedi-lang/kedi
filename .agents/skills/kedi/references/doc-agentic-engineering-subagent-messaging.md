@@ -22,7 +22,7 @@ remain unchanged.
 ```kedi
 > profile: reviewer:
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > instructions: Review the supplied evidence. State uncertainties explicitly.
 
 > profile: coordinator:
@@ -76,7 +76,7 @@ restart the release note or consume another delegation slot:
 
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 
 > profile: reviewer:
     > adapter: pydantic

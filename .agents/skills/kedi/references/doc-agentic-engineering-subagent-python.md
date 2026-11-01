@@ -49,7 +49,7 @@ limits = SubagentUsageLimits(
 )
 runtime = compile_program(
     parse_program(source),
-    adapter=PydanticAdapter("openai:gpt-5.6-luna"),
+    adapter=PydanticAdapter("openai:gpt-6-luna"),
     subagent_max_depth=2,
     subagent_max_concurrency=2,
     subagent_timeout_seconds=60,

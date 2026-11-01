@@ -133,7 +133,7 @@ The production codegen agent is `pydantic_ai`:
 ```bash
 kedi program.kedi \
   --codegen-agent pydantic_ai \
-  --codegen-model openrouter/minimax/minimax-m2.7 \
+  --codegen-model openai/gpt-6-luna \
   --codegen-retries 5
 ```
 

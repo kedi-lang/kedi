@@ -39,7 +39,7 @@ import kedi
 
 kedi.configure(
     adapter="pydantic",
-    model="openai:gpt-5.6-luna",
+    model="openai:gpt-6-luna",
     system="Prefer precise, source-grounded answers.",
     effort="low",
     settings={"timeout": 120},
@@ -64,7 +64,7 @@ it afterward:
 
 ```python
 with kedi.context(
-    model="openai:gpt-5.6-luna",
+    model="openai:gpt-6-luna",
     system="Perform a deeper review.",
     effort="high",
 ):
@@ -83,12 +83,12 @@ an inherited policy. Conversation state changes only when an explicit
 The same object supports both forms:
 
 ```python
-with kedi.context(model="openai:gpt-5.6-luna"):
+with kedi.context(model="openai:gpt-6-luna"):
     sync_result = summarize("...")
 ```
 
 ```python
-async with kedi.context(model="openai:gpt-5.6-luna"):
+async with kedi.context(model="openai:gpt-6-luna"):
     async_result = await summarize_async("...")
 ```
 
@@ -130,7 +130,7 @@ and DSL directives:
 
 ```python
 with kedi.context(
-    model="openai:gpt-5.6-luna",
+    model="openai:gpt-6-luna",
     system="Answer for an expert reader.",
     effort="high",
     settings={

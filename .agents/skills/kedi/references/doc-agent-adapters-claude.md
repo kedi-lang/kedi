@@ -24,11 +24,20 @@ fail immediately with actionable context; transient retry events may continue.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > agent: claude
-> model: claude-sonnet-4-5
 > effort: high
 ```
 
+With no model override, the Claude Agent SDK selects its default Claude model.
 Effort is normalized through the shared Kedi effort mapping.
+
+Luna is an OpenAI model, not a Claude model. To use Luna, select a compatible
+backend instead:
+
+```kedi
+> adapter: pydantic
+> model: openai/gpt-6-luna
+> effort: high
+```
 
 ## System Presets
 

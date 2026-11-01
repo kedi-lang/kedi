@@ -14,7 +14,7 @@ This program starts two independent reviews before waiting for either one:
 ```kedi
 > profile: reviewer:
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > instructions: Review only the supplied change. Separate evidence from assumptions.
 
 > profile: coordinator:

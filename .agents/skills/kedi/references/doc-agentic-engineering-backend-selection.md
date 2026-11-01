@@ -24,7 +24,7 @@ different execution and capability contracts.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 
 >> A summary of <document> is [summary: str].
 ```
@@ -38,7 +38,7 @@ typed tools through the framework's model interface.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > agent: codex
-> model: gpt-5.6-luna
+> model: gpt-6-luna
 > settings:
     cwd: .
     sandbox: workspace-write
@@ -167,11 +167,11 @@ directives remain in scope; select a compatible model when switching kinds:
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 >> Summarize the repository requirements.
 
 > agent: codex
-> model: gpt-5.6-luna
+> model: gpt-6-luna
 >> Inspect the repository and summarize its test coverage.
 ```
 

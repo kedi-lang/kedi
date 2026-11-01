@@ -46,8 +46,8 @@ infrastructure tests, not production prompt improvement.
 
 ```bash
 kedi program.kedi --optimize --optimizer gepa \
-  --optimizer-model openrouter/minimax/minimax-m2.7 \
-  --optimizer-reflection-model openrouter/minimax/minimax-m2.7
+  --optimizer-model openai/gpt-6-luna \
+  --optimizer-reflection-model openai/gpt-6.1-sol
 ```
 
 Each option has a matching `KEDI_OPTIMIZER_*` environment variable.

@@ -93,14 +93,14 @@ configured `env` for shared dependencies or types.
 
 ## Backend and Model Selection
 
-The CLI defaults to the Pydantic adapter and `groq:qwen/qwen3-32b`, unless
+The CLI defaults to the Pydantic adapter and `openai/gpt-6-luna`, unless
 overridden by environment configuration. The learning examples explicitly select
-`openai:gpt-5.6-luna` instead. To configure a source file that has no model directive:
+`openai:gpt-6-luna` instead. To configure a source file that has no model directive:
 
 ```bash
 kedi main.kedi \
   --adapter pydantic \
-  --adapter-model openai:gpt-5.6-luna
+  --adapter-model openai:gpt-6-luna
 ```
 
 Source directives and profiles can override CLI defaults in lexical scope. A

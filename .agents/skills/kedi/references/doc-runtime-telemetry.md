@@ -131,7 +131,7 @@ A representative agent run is shaped like this:
 ```text
 kedi run program.kedi
 `-- agent researcher
-    |-- chat openai:gpt-5.6-luna
+    |-- chat openai:gpt-6-luna
     |-- call web_search
     |-- await approval write_file
     |-- planner run

@@ -118,7 +118,7 @@ entries.
 @kedi.bind(
     file="report.kedi",
     adapter="langchain",
-    model="openai:gpt-5.6-luna",
+    model="openai:gpt-6-luna",
     system="Cite the supplied records.",
     effort="medium",
     settings={"timeout": 120},

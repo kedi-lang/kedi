@@ -23,9 +23,9 @@ from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
 _DEFAULT_ADAPTER_MODELS = {
-    "pydantic": "groq:qwen/qwen3-32b",
-    "langchain": "groq:qwen/qwen3-32b",
-    "dspy": "groq/qwen/qwen3-32b",
+    "pydantic": "openai/gpt-6-luna",
+    "langchain": "openai/gpt-6-luna",
+    "dspy": "openai/gpt-6-luna",
 }
 
 
@@ -195,7 +195,7 @@ def run_optimization_cli(
             from .optimization.services.dspy_config import DSPyConfigurationService
 
             dspy_config_service = DSPyConfigurationService(config)
-            main_model = config.optimizer_model or "openai/gpt-4o"
+            main_model = config.optimizer_model or "openai/gpt-6-luna"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
             adapter_for_runtime = _build_runtime_adapter("dspy", main_model)
@@ -205,7 +205,7 @@ def run_optimization_cli(
                 "DSPy is required for GEPA optimizer. Install with: uv add 'kedi[dspy]'",
             )
     else:
-        model = adapter_model or "groq:qwen/qwen3-32b"
+        model = adapter_model or "openai/gpt-6-luna"
         if adapter == "dspy":
             try:
                 adapter_for_runtime = _build_runtime_adapter("dspy", model)

@@ -50,8 +50,8 @@ traces and proposes instruction changes:
 
 ```bash
 kedi program.kedi --optimize --optimizer gepa \
-  --optimizer-model openrouter/minimax/minimax-m2.7 \
-  --optimizer-reflection-model openrouter/minimax/minimax-m2.7
+  --optimizer-model openai/gpt-6-luna \
+  --optimizer-reflection-model openai/gpt-6.1-sol
 ```
 
 Environment equivalents are `KEDI_OPTIMIZER_MODEL` and

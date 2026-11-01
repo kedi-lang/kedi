@@ -46,7 +46,7 @@ source-file identity and adjacent artifacts.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--adapter NAME` | `pydantic` | `pydantic`, `dspy`, `langchain`, `claude`, `codex`, `acp`, or `a2a` |
-| `--adapter-model MODEL` | `groq:qwen/qwen3-32b` | Default model identifier; examples explicitly select `openai:gpt-5.6-luna` |
+| `--adapter-model MODEL` | `openai/gpt-6-luna` | Default model identifier; examples explicitly select `openai:gpt-6-luna` |
 
 The historical option name is `--adapter`, but it accepts both framework
 adapters and harnesses. In Kedi source and the Python API, `adapter` and `agent`
@@ -97,7 +97,7 @@ ambiguous combination and invoke each validation mode separately.
 | Option | Default |
 | --- | --- |
 | `--codegen-agent` | `pydantic_ai` |
-| `--codegen-model` | `openrouter/minimax/minimax-m2.7` |
+| `--codegen-model` | `openai/gpt-6-luna` |
 | `--codegen-retries` | `5` |
 
 The alternate codegen agent is `mock`, intended for deterministic tests.
@@ -109,8 +109,8 @@ the source as `SOURCE.cache.kedi`.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--optimizer` | `mock` | `mock` or `gepa` |
-| `--optimizer-model` | `openrouter/minimax/minimax-m2.7` | GEPA main model |
-| `--optimizer-reflection-model` | same | GEPA reflection model |
+| `--optimizer-model` | `openai/gpt-6-luna` | GEPA main model |
+| `--optimizer-reflection-model` | `openai/gpt-6.1-sol` | GEPA reflection model |
 | `--optimizer-max-metric-calls` | `100` | Optimization evaluation budget |
 | `--optimizer-model-max-tokens` | `8000` | Main-model output limit |
 | `--optimizer-reflection-model-max-tokens` | `32000` | Reflection output limit |

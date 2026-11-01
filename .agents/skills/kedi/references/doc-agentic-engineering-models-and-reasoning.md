@@ -19,7 +19,7 @@ framework or harness by themselves.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 ```
 
 The model identifier is passed to the selected adapter. Its accepted syntax,
@@ -50,7 +50,7 @@ Each procedure captures the top-level state present when it is defined.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ````kedi
 ```
-selected_model = "openai:gpt-5.6-luna"
+selected_model = "openai:gpt-6-luna"
 ```
 
 > model: `selected_model`

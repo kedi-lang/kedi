@@ -140,7 +140,7 @@ Backend options still apply because a tested procedure may call a model:
 ```bash
 kedi program.kedi --test \
   --adapter pydantic \
-  --adapter-model openai:gpt-5.6-luna
+  --adapter-model openai:gpt-6-luna
 ```
 
 `--test` cannot be combined with `-c/--command`; validations require a source

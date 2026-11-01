@@ -64,7 +64,7 @@ Unless a page shows a directory tree, save its complete listing as
 kedi program.kedi
 ```
 
-The model-backed listings in this section use `openai:gpt-5.6-luna`
+The model-backed listings in this section use `openai:gpt-6-luna`
 to make backend selection explicit.
 Replace it with a model configured for your environment. Provider credentials
 are read by the selected adapter; never place API keys in a `.kedi` source file.

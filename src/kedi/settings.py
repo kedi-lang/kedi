@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         "pydantic", description="Adapter to use for LLM calls"
     )
     model_name: str = Field(
-        "groq:qwen/qwen3-32b", description="Default model name to use for LLM calls"
+        "openai/gpt-6-luna", description="Default model name to use for LLM calls"
     )
     groq_api_key: str | None = Field(None, description="API key for Groq API access")
 

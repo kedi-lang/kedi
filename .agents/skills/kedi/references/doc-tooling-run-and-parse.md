@@ -96,7 +96,7 @@ import kedi
 def classify(note: str) -> str:
     """kedi
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > requires: structured_output
     >> The category of <note> is [category: str].
     = <category>
@@ -106,7 +106,7 @@ def classify(note: str) -> str:
 report = kedi.explain(classify)
 call = report.calls[0]
 assert call.adapter.value == "pydantic"
-assert call.model.value == "openai:gpt-5.6-luna"
+assert call.model.value == "openai:gpt-6-luna"
 assert call.requirements[0].status == "satisfied"
 assert not report.diagnostics
 ```
@@ -143,7 +143,7 @@ LangChain and `> agent:` for Claude/Codex/ACP/A2A.
 ```bash
 kedi program.kedi \
   --adapter pydantic \
-  --adapter-model openai:gpt-5.6-luna
+  --adapter-model openai:gpt-6-luna
 ```
 
 Environment equivalents are `KEDI_ADAPTER` and `KEDI_ADAPTER_MODEL`. Lexical

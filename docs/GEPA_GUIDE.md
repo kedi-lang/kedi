@@ -313,7 +313,7 @@ class DebugLM(dspy.BaseLM):
 **Usage**:
 ```python
 # In your optimization code
-base_lm = dspy.LM(model="openai/gpt-4o")
+base_lm = dspy.LM(model="openai/gpt-6-luna")
 debug_lm = DebugLM(base_lm)
 dspy.settings.configure(lm=debug_lm)
 ```

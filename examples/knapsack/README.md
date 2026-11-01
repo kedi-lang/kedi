@@ -13,7 +13,7 @@ From the repository root, with Kedi installed in your active environment:
 
 ```sh
 export OPENAI_API_KEY="..."
-kedi examples/knapsack/main.kedi --adapter pydantic --adapter-model openai:gpt-5.6-luna
+kedi examples/knapsack/main.kedi --adapter pydantic --adapter-model openai:gpt-6-luna
 ```
 
 The Pydantic adapter needs its OpenAI provider dependency. For a source checkout,
@@ -46,7 +46,7 @@ whether that answer actually solves the problem.
 ## Evaluate the selection
 
 ```sh
-kedi examples/knapsack/main.kedi --adapter pydantic --adapter-model openai:gpt-5.6-luna --eval
+kedi examples/knapsack/main.kedi --adapter pydantic --adapter-model openai:gpt-6-luna --eval
 ```
 
 `--eval` uses the two `> test_data:` cases in preference to the four `> data:`
@@ -70,10 +70,10 @@ Install the optional optimizer dependency in the same environment:
 python -m pip install -e '.[dspy]'
 kedi examples/knapsack/main.kedi \
   --adapter pydantic \
-  --adapter-model openai:gpt-5.6-luna \
+  --adapter-model openai:gpt-6-luna \
   --optimize --eval --optimizer gepa \
-  --optimizer-model openai/gpt-5.6-luna \
-  --optimizer-reflection-model openai/gpt-5.6-luna \
+  --optimizer-model openai/gpt-6-luna \
+  --optimizer-reflection-model openai/gpt-6.1-sol \
   --optimizer-max-metric-calls 30
 ```
 

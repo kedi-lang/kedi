@@ -126,14 +126,14 @@ from kedi.agent_adapter import PydanticAdapter
 
 client = AsyncOpenAI(max_retries=0)
 model = OpenAIResponsesModel(
-    "gpt-5.6-luna", provider=OpenAIProvider(openai_client=client)
+    "gpt-6-luna", provider=OpenAIProvider(openai_client=client)
 )
 adapter = PydanticAdapter(model)
 ```
 
 Supply `OPENAI_API_KEY`, pass this adapter to `compile_program`, and close the
 client with `await client.close()` when the embedding host finishes. LangChain's
-OpenAI model similarly accepts `ChatOpenAI(model="gpt-5.6-luna", max_retries=0)`.
+OpenAI model similarly accepts `ChatOpenAI(model="gpt-6-luna", max_retries=0)`.
 Kedi does not mutate a shared client's retry settings. If a provider's retry
 control is opaque or enabled, the finite request budget rejects it before
 generation rather than claiming a ceiling it cannot enforce.

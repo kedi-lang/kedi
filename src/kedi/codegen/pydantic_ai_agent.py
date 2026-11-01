@@ -36,7 +36,7 @@ class PydanticAIAgent(CodegenAgent):
     """Agent that generates Python code using Pydantic-AI."""
 
     def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.environ.get("MODEL_NAME") or "openrouter/minimax/minimax-m2.7"
+        self.model = model or os.environ.get("MODEL_NAME") or "openai/gpt-6-luna"
 
         self.adapter = PydanticAdapter[None, Any](model=self.model)
 

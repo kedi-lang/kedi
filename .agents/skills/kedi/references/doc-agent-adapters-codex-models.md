@@ -24,7 +24,7 @@ from kedi import codex_responses_model
 from kedi.agent_adapter import PydanticAdapter
 
 model = codex_responses_model(
-    "gpt-5.6-luna",
+    "gpt-6-luna",
     adapter="pydantic",
     connection="websocket",
     fallback="error",

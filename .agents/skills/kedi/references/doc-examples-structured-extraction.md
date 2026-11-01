@@ -18,7 +18,7 @@ after a model call.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 > instructions: Extract only facts stated in the incident report.
 
 ~Owner(

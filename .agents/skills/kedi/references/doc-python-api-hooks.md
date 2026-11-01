@@ -28,7 +28,7 @@ Every supported adapter instance exposes the same decorator:
 ```python
 from kedi.agent_adapter import PydanticAdapter
 
-adapter = PydanticAdapter("openai:gpt-5.6-luna")
+adapter = PydanticAdapter("openai:gpt-6-luna")
 observed = []
 
 

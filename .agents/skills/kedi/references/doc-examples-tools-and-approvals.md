@@ -55,7 +55,7 @@ def review_tool(request):
 ```
 
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 > instructions: Fetch incident 42, summarize it, and save reports/incident-42.md.
 > use:
     lookup_incident

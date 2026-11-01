@@ -83,7 +83,7 @@ from kedi.agent_adapter import PydanticAdapter
 from reviewed_evidence import run_review
 
 result = run_review(
-    PydanticAdapter("openai:gpt-5.6-luna"),
+    PydanticAdapter("openai:gpt-6-luna"),
     output_dir="reports",
 )
 print(result["receipt"])

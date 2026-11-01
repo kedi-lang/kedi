@@ -31,7 +31,7 @@ From the repository root:
 uv sync --dev
 source .venv/bin/activate
 export KEDI_ADAPTER=pydantic
-export KEDI_ADAPTER_MODEL=openai:gpt-5.6-luna
+export KEDI_ADAPTER_MODEL=openai:gpt-6-luna
 ```
 
 Set `OPENAI_API_KEY` in your environment or the checkout's `.env` for that provider.
@@ -54,7 +54,7 @@ To use a Codex subscription instead of a native OpenAI API key, on Python 3.11+:
 ```bash
 uv sync --dev --extra codex-model
 codex login
-export KEDI_ADAPTER_MODEL=codex/gpt-5.6-luna
+export KEDI_ADAPTER_MODEL=codex/gpt-6-luna
 ```
 
 These are model calls, not canned output. Wording, correctness, request counts,

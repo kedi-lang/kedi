@@ -42,7 +42,7 @@ changing its own override semantics.
     Reviews one change against repository evidence.
     ###
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > effort: medium
     > instructions: Cite the evidence used for every finding.
     > settings:
@@ -142,7 +142,7 @@ Procedures capture the configuration at their definition site; see
     Reviews supplied evidence and returns actionable findings.
     ###
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > instructions: Base findings only on the evidence supplied in the task.
     > output: list[Finding]
 ```
@@ -167,7 +167,7 @@ Profiles are module values and can be explicitly exported:
 ```kedi
 > profile: reviewer:
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
 
 > export:
   reviewer

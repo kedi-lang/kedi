@@ -194,7 +194,7 @@ def _run_notebook_command(arguments: list[str]) -> int:
 @click.option(
     "--adapter-model",
     envvar=["KEDI_ADAPTER_MODEL", "MODEL_NAME"],
-    default="groq:qwen/qwen3-32b",
+    default="openai/gpt-6-luna",
     help="Model for template adapter",
 )
 @click.option(
@@ -207,7 +207,7 @@ def _run_notebook_command(arguments: list[str]) -> int:
 @click.option(
     "--codegen-model",
     envvar="KEDI_CODEGEN_MODEL",
-    default="openrouter/minimax/minimax-m2.7",
+    default="openai/gpt-6-luna",
     help="Model for codegen agent",
 )
 @click.option(
@@ -229,13 +229,13 @@ def _run_notebook_command(arguments: list[str]) -> int:
 @click.option(
     "--optimizer-model",
     envvar="KEDI_OPTIMIZER_MODEL",
-    default="openrouter/minimax/minimax-m2.7",
+    default="openai/gpt-6-luna",
     help="Model for optimizer (main model for GEPA)",
 )
 @click.option(
     "--optimizer-reflection-model",
     envvar="KEDI_OPTIMIZER_REFLECTION_MODEL",
-    default="openrouter/minimax/minimax-m2.7",
+    default="openai/gpt-6.1-sol",
     help="Reflection model for GEPA optimizer",
 )
 @click.option(
@@ -344,8 +344,8 @@ def main(
     test: bool = False,
     do_eval: bool = False,
     optimizer: str = "mock",
-    optimizer_model: str = "openrouter/minimax/minimax-m2.7",
-    optimizer_reflection_model: str = "openrouter/minimax/minimax-m2.7",
+    optimizer_model: str = "openai/gpt-6-luna",
+    optimizer_reflection_model: str = "openai/gpt-6.1-sol",
     optimizer_max_metric_calls: int = 100,
     optimizer_model_max_tokens: int = 8000,
     optimizer_reflection_model_max_tokens: int = 32000,

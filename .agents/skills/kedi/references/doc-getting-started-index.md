@@ -25,7 +25,7 @@ short structured brief, and returns the captured text:
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 
 @brief(topic: str) -> str:
   >> A two-sentence brief for a software engineer about <topic> is [summary: str].

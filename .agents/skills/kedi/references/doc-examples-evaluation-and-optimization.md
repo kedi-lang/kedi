@@ -18,7 +18,7 @@ requires measurement; the listing is not evidence of a quality gain.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ````kedi
 > adapter: pydantic
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 
 @extract_owner(ticket: str) -> str:
   > optimize: owner_prompt:

@@ -26,7 +26,7 @@ they are unnecessary for deterministic helper procedures.
     Investigate one focused question and distinguish evidence from inference.
     ###
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > output: ResearchAnswer
     > instructions: Return concise evidence and identify uncertainty.
 
@@ -35,7 +35,7 @@ they are unnecessary for deterministic helper procedures.
     Split a request only when independent research is useful.
     ###
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > subagent: researcher
     > max_agents: 2
 

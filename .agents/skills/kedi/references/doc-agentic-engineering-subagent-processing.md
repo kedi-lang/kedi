@@ -12,11 +12,11 @@ result wait behind an earlier, slower child.
 ```kedi
 > profile: reviewer:
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
 
 > profile: coordinator:
     > adapter: pydantic
-    > model: openai:gpt-5.6-luna
+    > model: openai:gpt-6-luna
     > subagent: reviewer
     > max_agents: 2
 

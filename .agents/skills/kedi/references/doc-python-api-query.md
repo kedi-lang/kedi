@@ -155,7 +155,7 @@ Framework adapters use `adapter=`; process-backed harnesses use `agent=`:
 ```python
 @kedi.query(
     adapter="pydantic",
-    model="openai:gpt-5.6-luna",
+    model="openai:gpt-6-luna",
     system="Return only the requested result.",
     effort="low",
     settings={"timeout": 120},

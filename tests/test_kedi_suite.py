@@ -20,6 +20,7 @@ _WORD_CHAIN_KEDI = _FILES_DIR / "word_chain.kedi"
 
 def _build_live_adapter() -> DSPyAdapter | PydanticAdapter:
     adapter_name = os.environ.get("KEDI_ADAPTER", "pydantic").lower()
+    # The recorded cassettes were captured against this model; keep it so they replay.
     model_name = os.environ.get("MODEL_NAME", os.environ.get("GROQ_MODEL", "groq:qwen/qwen3-32b"))
     if adapter_name == "dspy":
         return DSPyAdapter(model=model_name)

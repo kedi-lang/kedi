@@ -154,7 +154,7 @@ KEDI_HISTORY="$HOME/.local/state/kedi/history" kedi --idle
 Adapter selection remains available:
 
 ```bash
-kedi --idle --adapter pydantic --adapter-model openai:gpt-5.6-luna
+kedi --idle --adapter pydantic --adapter-model openai:gpt-6-luna
 ```
 
 Interactive mode does not accept a source file, `-c/--command`, program

@@ -38,7 +38,7 @@ configuration; Kedi does not accept or persist Codex credentials.
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
 > agent: codex
-> model: gpt-5
+> model: gpt-6.1-sol
 > effort: high
 ```
 

@@ -83,7 +83,7 @@ def render(event: AgentMessageEvent | AgentRunStateEvent) -> None:
         print(f"run {event.run_id}: {event.state}")
 
 
-adapter = PydanticAdapter("openai:gpt-5.6-luna")
+adapter = PydanticAdapter("openai:gpt-6-luna")
 
 with observe_agent_events(render):
     result = asyncio.run(adapter.invoke(prompt="Inspect the parser."))
@@ -115,7 +115,7 @@ from kedi.agent_adapter import PydanticAdapter
 
 
 async def main() -> str:
-    adapter = PydanticAdapter("openai:gpt-5.6-luna")
+    adapter = PydanticAdapter("openai:gpt-6-luna")
     events = AsyncAgentEventQueue()
     root_run_id = None
 

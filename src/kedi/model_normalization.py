@@ -3,10 +3,11 @@
 The same logical id is often written two ways (any vendor, not one provider):
 
 - **LiteLLM / DSPy**: ``<provider>/<rest>`` — first slash separates the routing
-  name from the rest (which may contain more slashes), e.g. ``groq/qwen/qwen3-32b``.
+  name from the rest, e.g. ``openai/gpt-6-luna``. Additional slashes in the
+  model name are preserved, as in ``openrouter/openai/gpt-6-luna``.
 
 - **Pydantic AI** (and similar): ``<provider>:<rest>`` — first colon separates the
-  same two parts, e.g. ``groq:qwen/qwen3-32b``. OpenAI chat-completions models
+  same two parts, e.g. ``openrouter:openai/gpt-6-luna``. OpenAI chat-completions models
   use Pydantic AI's explicit ``openai-chat:`` provider to avoid the deprecated
   ambiguous ``openai:`` prefix.
 

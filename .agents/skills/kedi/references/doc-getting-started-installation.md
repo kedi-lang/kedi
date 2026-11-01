@@ -63,7 +63,7 @@ The `source` command above is for POSIX shells.
 
 No provider or API key is needed for parsing or deterministic Python expressions.
 The model-backed learning examples explicitly select
-`openai:gpt-5.6-luna` through the Pydantic adapter. Install its provider
+`openai:gpt-6-luna` through the Pydantic adapter. Install its provider
 support in the same environment:
 
 ```bash

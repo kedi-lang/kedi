@@ -106,7 +106,7 @@ Select the runtime adapter and model as usual:
 ```bash
 kedi program.kedi --eval \
   --adapter pydantic \
-  --adapter-model openai:gpt-5.6-luna
+  --adapter-model openai:gpt-6-luna
 ```
 
 Each row gets fresh metric bindings but shares the compiled runtime. This is

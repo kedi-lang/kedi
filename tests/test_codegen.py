@@ -625,6 +625,11 @@ def test_pydantic_ai_agent_uses_configured_adapter(
     assert explicit.model == "explicit/model"
     assert FakeAdapter.instances[-1].model == "explicit/model"
 
+    monkeypatch.delenv("MODEL_NAME")
+    fallback = agent_module.PydanticAIAgent()
+    assert fallback.model == "openai/gpt-6-luna"
+    assert FakeAdapter.instances[-1].model == "openai/gpt-6-luna"
+
 
 @pytest.mark.parametrize("async_host", [False, True])
 @pytest.mark.parametrize("fail_implementation", [False, True])

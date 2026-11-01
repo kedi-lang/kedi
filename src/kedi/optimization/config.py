@@ -23,10 +23,10 @@ class OptimizerConfig:
     """Max tokens for the reflection model (GEPA)."""
 
     optimizer_model: str | None = None
-    """Main model identifier for optimizer (e.g., 'openai/gpt-4o')."""
+    """Main model identifier for optimizer (e.g., 'openai/gpt-6-luna')."""
 
     reflection_model: str | None = None
-    """Reflection model identifier for GEPA (e.g., 'openai/gpt-5')."""
+    """Reflection model identifier for GEPA (e.g., 'openai/gpt-6.1-sol')."""
 
     reflection_minibatch_size: int = 3
     """Number of examples to evaluate before triggering reflection in GEPA."""

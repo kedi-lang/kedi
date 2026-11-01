@@ -72,7 +72,7 @@ The equivalent Python API is available on every supported adapter:
 ```python
 from kedi.agent_adapter import PydanticAdapter
 
-adapter = PydanticAdapter("openai:gpt-5.6-luna", codemode=True)
+adapter = PydanticAdapter("openai:gpt-6-luna", codemode=True)
 ```
 
 Use `CodeModeSettings` when Python should preload known tools:
@@ -81,7 +81,7 @@ Use `CodeModeSettings` when Python should preload known tools:
 from kedi.agent_adapter import CodeModeSettings, PydanticAdapter
 
 adapter = PydanticAdapter(
-    "openai:gpt-5.6-luna",
+    "openai:gpt-6-luna",
     codemode=CodeModeSettings(preload_tools=("lookup_release",)),
 )
 ```
@@ -293,7 +293,7 @@ Use the public capability directly for a single native Pydantic run:
 ```python
 from kedi.agent_adapter import PydanticAdapter, PydanticCodeModeCapability
 
-adapter = PydanticAdapter("openai:gpt-5.6-luna")
+adapter = PydanticAdapter("openai:gpt-6-luna")
 result = adapter.run_sync(
     "Use CodeMode for this task.",
     capabilities=[PydanticCodeModeCapability()],

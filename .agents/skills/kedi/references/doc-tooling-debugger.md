@@ -137,7 +137,7 @@ A model-backed program uses the usual Kedi directives:
 
 <!-- Kedi snippet: parse-checked; execution/context/provider requirements are defined by the surrounding text. -->
 ```kedi
-> model: openai:gpt-5.6-luna
+> model: openai:gpt-6-luna
 [country] = Sweden
 >> The capital of <country> is [capital].
 > show: The capital is <capital>.
