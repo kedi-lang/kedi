@@ -28,7 +28,11 @@ def with_pydantic_native_compaction(
 
     from pydantic_ai.models.anthropic import AnthropicCompaction, AnthropicModel
     from pydantic_ai.models.openai import OpenAICompaction, OpenAIResponsesModel
+    from pydantic_ai.models.wrapper import WrapperModel
 
+    # Run budgets and other Kedi layers wrap the provider model; the provider decides support.
+    while isinstance(model, WrapperModel):
+        model = model.wrapped
     if isinstance(model, OpenAIResponsesModel):
         capability = OpenAICompaction(token_threshold=settings.threshold)
     elif isinstance(model, AnthropicModel):

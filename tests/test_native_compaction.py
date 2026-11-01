@@ -254,6 +254,17 @@ def test_pydantic_native_compaction_maps_openai_and_anthropic_capabilities() -> 
     assert anthropic.token_threshold == 75_000
 
 
+def test_pydantic_native_compaction_sees_through_budget_wrappers() -> None:
+    from kedi.agent_adapter.adapters.pydantic.budget import BudgetedModel
+
+    wrapped = BudgetedModel(BudgetedModel(_openai_responses_model()))
+    capabilities = with_pydantic_native_compaction(
+        None, model=wrapped, settings=CompactionSettings(threshold=18_000)
+    )
+    assert [type(item) for item in capabilities] == [OpenAICompaction]
+    assert capabilities[0].token_threshold == 18_000
+
+
 def test_pydantic_adapter_applies_profile_compaction_and_rejects_chat_model() -> None:
     adapter = PydanticAdapter(_openai_responses_model())
     with adapter.profile_override(
