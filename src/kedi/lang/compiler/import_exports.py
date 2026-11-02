@@ -446,6 +446,12 @@ def _wrap_imported_procedure(
     if retry_policy is not None:
         # Preserve definition-site exception classes, including across re-exports.
         setattr(wrapper, "__kedi_tool_retry_policy__", retry_policy)
+    # Annotations name the defining module's types, which the importer need not import.
+    setattr(
+        wrapper,
+        "__kedi_definition_runtime__",
+        getattr(fn, "__kedi_definition_runtime__", imported_rt),
+    )
     metadata = get_procedure_metadata(fn)
     if metadata is not None:
         setattr(wrapper, "__signature__", metadata.introspection_signature())

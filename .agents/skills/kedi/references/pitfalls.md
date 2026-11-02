@@ -26,6 +26,7 @@ so the check fails once it is fixed.
 | --- | --- |
 | Bare ordinary prompt line | Start a template with `>>` |
 | Read a capture in a continuation row of its own block | Start a second `>>` call |
+| Put a backtick expression (e.g. `` `decision_info("x")` ``) directly under `>>` as if it were a statement | It is a prompt row of that block, even after a blank line; read the capture in a separate statement such as `[x2] = ...` |
 | Use `= <model>` for an object result | Use a native backtick return and explicit procedure return type |
 | Omit the return annotation for an int/list/model | Declare `-> int`, `-> list[T]`, or the named model |
 | Pass `5` as text to an int parameter | Pass a native backtick expression or use a Python call |

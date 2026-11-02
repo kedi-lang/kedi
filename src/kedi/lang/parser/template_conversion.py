@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from typing import TYPE_CHECKING, List
 
 from tree_sitter import Node
@@ -11,6 +12,7 @@ from kedi.lang.ast import (
     InputSegment,
     LiteralArg,
     OutputSegment,
+    PythonExprNativeSegment,
     PythonExprSegment,
     Segment,
     Span,
@@ -151,21 +153,40 @@ def _validate_template_block_scope(self: _Walker, lines: List[TemplateLine]) -> 
             else:
                 seen_output_names.add(output.name)
         for seg in line.segments:
-            if isinstance(seg, InputSegment) and seg.name in produced_names:
+            for name in sorted(_read_names(seg) & produced_names):
                 self.diagnostics.append(
                     KediDiagnostic(
                         severity="error",
                         message=(
-                            f"Template block cannot read LLM output '{seg.name}' "
-                            "before the block has finished. Start a new `>>` block "
-                            "before using it as a substitution."
+                            f"Template block cannot read LLM output '{name}' "
+                            "before the block has finished. A row under `>>` is part of "
+                            "the same prompt, even after a blank line; read it in a "
+                            "separate statement (for example `[value] = ...`) or a new "
+                            "`>>` block."
                         ),
                         span=seg.loc or line.loc or Span(0, 0, 1, 1, 1, 1),
                         code="K-TEMPLATE-BLOCK-FORWARD-OUTPUT",
                     )
                 )
-            elif isinstance(seg, OutputSegment):
+            if isinstance(seg, OutputSegment):
                 produced_names.add(seg.name)
+
+
+def _read_names(seg: Segment) -> set[str]:
+    """Names a prompt segment reads when it is rendered."""
+    if isinstance(seg, InputSegment):
+        return {seg.name}
+    if isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
+        try:
+            tree = ast.parse(seg.code.strip(), mode="eval")
+        except SyntaxError:
+            return set()  # Reported where the expression is compiled.
+        return {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+    return set()
 
 
 def _walk_template_line(self: _Walker, node: Node, *, deprecated: bool = False) -> TemplateLine:

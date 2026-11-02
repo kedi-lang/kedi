@@ -326,6 +326,9 @@ class KediEnv(dict[str, Any]):
         dict.__init__(self)
         self._binding_owners: dict[str, dict[str, Any]] = {}
         self._dirty_bindings: set[str] = set()
+        # STORE_GLOBAL (``global x`` in a nested function) bypasses ``__setitem__``, so a
+        # write-back is also detected by comparing against the installed value.
+        self._installed_values: dict[str, Any] = {}
         if args or kwargs:
             self.update(*args, **kwargs)
 
@@ -334,6 +337,7 @@ class KediEnv(dict[str, Any]):
         assert_not_cli_args_identifier(name)
         dict.__setitem__(self, name, value)
         self._binding_owners[name] = owner
+        self._installed_values[name] = value
         self._dirty_bindings.discard(name)
 
     def _set_unowned(self, name: str, value: Any) -> None:
@@ -348,9 +352,10 @@ class KediEnv(dict[str, Any]):
 
     def changed_binding_owners(self) -> dict[str, dict[str, Any]]:
         return {
-            name: self._binding_owners[name]
-            for name in self._dirty_bindings
-            if name in self._binding_owners
+            name: owner
+            for name, owner in self._binding_owners.items()
+            if name in self._dirty_bindings
+            or (name in self and dict.__getitem__(self, name) is not self._installed_values[name])
         }
 
     def _set_cli_args(self, value: Any) -> None:
@@ -402,6 +407,7 @@ class KediEnv(dict[str, Any]):
         copied = KediEnv()
         dict.update(copied, self)
         copied._binding_owners.update(self._binding_owners)
+        copied._installed_values.update(self._installed_values)
         copied._dirty_bindings.update(self._dirty_bindings)
         return copied
 
@@ -910,7 +916,8 @@ def _make_proc_wrapper(
         display_source.splitlines(True),
         filename,
     )
-    namespace = build_type_env(rt, local_env)
+    definition_rt = getattr(proc_fn, "__kedi_definition_runtime__", rt)
+    namespace = build_type_env(definition_rt, local_env if definition_rt is rt else None)
     namespace.update(metadata.default_namespace())
     namespace["__kedi_call__"] = lambda *args: rt._invoke_procedure(rt._get_proc(proc_name), args)
     try:

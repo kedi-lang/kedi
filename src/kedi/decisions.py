@@ -504,7 +504,11 @@ def decision_info_for_env(env: dict[str, Any], name: str) -> DecisionInfo | None
     if not isinstance(name, str) or not name:
         raise ValueError("Decision binding name must be a non-empty string")
     if name not in env:
-        raise NameError(f"Value not found in environment: {name}")
+        raise NameError(
+            f"Value not found in environment: {name}. If it is a capture, it is bound only "
+            "after its template block finishes; a row directly under `>>` is still part of "
+            "that block, so read it in a separate statement such as `[value] = ...`."
+        )
     metadata = env.binding_metadata(name) if isinstance(env, ScopeFrame) else None
     reference = metadata.decision if metadata is not None else None
     if not isinstance(reference, DecisionReference):

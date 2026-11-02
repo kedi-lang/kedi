@@ -744,6 +744,18 @@ def test_if_python_rebinding_updates_existing_outer_owner() -> None:
     assert runtime.run_main() is True
 
 
+def test_python_writeback_includes_global_statement_in_nested_function() -> None:
+    runtime = compile_program(
+        parse_program(
+            "[count: int] = `0`\n"
+            "```\ndef bump():\n    global count\n    count += 1\nbump()\nbump()\n```\n"
+            "= `count`\n"
+        )
+    )
+
+    assert runtime.run_main() == 2
+
+
 def test_python_writeback_validates_all_changes_before_committing() -> None:
     runtime = compile_program(
         parse_program(

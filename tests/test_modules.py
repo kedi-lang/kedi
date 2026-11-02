@@ -85,6 +85,27 @@ def test_parser_reads_star_export_directive() -> None:
     assert prog.exports[0].names == []
 
 
+def test_imported_procedure_accepts_keywords_with_unimported_return_type(tmp_path: Path) -> None:
+    (tmp_path / "pricing.kedi").write_text(
+        "~Quote(total: int)\n"
+        "\n"
+        "@quote(subtotal: int, discount_percent: int = `0`) -> Quote:\n"
+        "  = `Quote(total=subtotal - subtotal * discount_percent // 100)`\n"
+        "\n"
+        "> export:\n"
+        "  Quote\n"
+        "  quote\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: pricing:\n  quote\n\n= `quote(1000, discount_percent=10).total`\n",
+        encoding="utf-8",
+    )
+
+    assert _compile_file(main).run_main() == 900
+
+
 def test_import_exposes_only_exported_procedure_value_and_type(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
         "~Profile(name: str, id: int)\n"

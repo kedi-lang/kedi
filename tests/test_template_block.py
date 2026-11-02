@@ -185,6 +185,17 @@ def test_optimize_span_cannot_read_its_own_pending_output() -> None:
     assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in exc.value.diagnostics)
 
 
+# A blank line does not end the block, so the second row is still part of it.
+@pytest.mark.parametrize("rows", ["`print(dup)`", "\n`print(dup)`", "Seen: <`dup or False`>"])
+def test_python_row_cannot_read_output_of_its_own_block(rows: str) -> None:
+    src = f">> Is this a duplicate? [dup: bool]\n{rows}\n= `dup`\n"
+
+    with pytest.raises(KediParseError) as exc:
+        parse_program(src)
+
+    assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in exc.value.diagnostics)
+
+
 def test_merge_template_block_lines_joins_with_newline() -> None:
     block = parse_program(">> line one [x]\nline two <seed>\n").toplevel_body[0]
     assert isinstance(block, TemplateBlock)

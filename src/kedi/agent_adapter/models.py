@@ -92,7 +92,7 @@ def typesafe_pydantic_model(model_id: str) -> Model:
         if exc.name != "kedi_typesafe":
             raise
         raise ModuleNotFoundError(
-            "TypeSafe-backed models require kedi-typesafe==0.2.1. "
+            "TypeSafe-backed models require kedi-typesafe. "
             "Install Kedi with: uv add 'kedi[typesafe]'"
         ) from exc
     return TypeSafeModel(model_name)
@@ -108,7 +108,7 @@ def typesafe_langchain_model(model_id: str) -> BaseChatModel:
         if exc.name not in {"kedi_typesafe", "langchain_core", "langchain_typesafe"}:
             raise
         raise ModuleNotFoundError(
-            "TypeSafe-backed LangChain models require kedi-typesafe[langchain]==0.2.1. "
+            "TypeSafe-backed LangChain models require kedi-typesafe[langchain]. "
             "Install Kedi with: uv add 'kedi[langchain,typesafe]' 'kedi-typesafe[langchain]'"
         ) from exc
     return TypeSafeChatModel(model_name)
