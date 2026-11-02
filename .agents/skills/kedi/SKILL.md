@@ -10,7 +10,7 @@ Treat Kedi as an indentation-scoped, Python-integrated language for typed model 
 ## Work sequence
 
 1. Read [environment and execution](references/environment.md) and [language rules](references/language.md) before creating a program. Inspect the target project's instructions, environment, Kedi version, parser version, and existing conventions.
-2. In a Kedi checkout, `docs/KEDI_DSL.md` is the language specification and `kedi-docs/docs/` the feature documentation. [references/docs/](references/docs/INDEX.md) mirrors those pages for offline use (kept in sync by CI); prefer the target checkout's copy when it is newer. Check [pitfalls](references/pitfalls.md) for version gates and known runtime defects, and record implementation disagreements rather than redefining the language.
+2. In a Kedi checkout, `docs/KEDI_DSL.md` is the language specification and `kedi-docs/docs/` the feature documentation. [references/docs/](references/docs.md) mirrors those pages for offline use (kept in sync by CI); prefer the target checkout's copy when it is newer. Check [pitfalls](references/pitfalls.md) for version gates and known runtime defects, and record implementation disagreements rather than redefining the language.
 3. Choose the smallest complete [example](references/examples.md) and the relevant topic below. Follow links on demand; do not load the whole documentation.
 4. Define native input/output contracts, deterministic operations, model calls, and explicit tool/context boundaries. Configure the intended backend before defining procedures that capture it.
 5. Parse with `python "$KEDI_SKILL/scripts/check_kedi.py" path/to/program.kedi` or `kedi parse path/to/program.kedi`. These checks do not execute source. Tree-sitter alone is only a grammar check; the Kedi AST validator also checks structure.
@@ -59,7 +59,7 @@ Use explicit annotations for non-string procedure parameters and returns; omitte
 | Unit tests, evaluation, prompt optimization, code generation | [Validation](references/validation.md) |
 | Working recipes and their exact validation level | [Examples](references/examples.md) |
 | Common mistakes, documentation inconsistencies, version gates | [Pitfalls](references/pitfalls.md) |
-| Full documentation: exact APIs/settings, adapter-specific details, editors, notebook, telemetry, A2A, Jev/Laya, benchmarks | [Documentation index](references/docs/INDEX.md) |
+| Full documentation: exact APIs/settings, adapter-specific details, editors, notebook, telemetry, A2A, Jev/Laya, benchmarks | [Documentation index](references/docs.md) |
 
 Search the documentation for exact names: `rg -n 'SubagentUsageLimits|processor_condition' "$KEDI_SKILL/references"`. Read the linked detailed page before using a less common API; do not invent directives or infer an adapter capability from another adapter.
 

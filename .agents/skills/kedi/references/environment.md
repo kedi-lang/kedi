@@ -71,7 +71,7 @@ Read the exact documentation page before using an optional surface:
 | `debugger` | [debugger](docs/tooling/debugger.md) |
 | `notebook` | [notebook](docs/tooling/notebook.md), [runtimes](docs/tooling/notebook-runtimes.md), [files](docs/tooling/notebook-files.md) |
 | `kedi-otel` | [telemetry](docs/runtime/telemetry.md) |
-| `kedi-docs` | Mirrored offline in [docs/](docs/INDEX.md) |
+| `kedi-docs` | Mirrored offline in [docs/](docs.md) |
 | Harbor integration | [Terminal-Bench](docs/tooling/terminal-bench.md); separate dependency environment |
 
 `.gitmodules` lists these repositories; they are not installation requirements for every Kedi program. Do not claim an editor, notebook, telemetry, or remote harness was tested unless you ran it.

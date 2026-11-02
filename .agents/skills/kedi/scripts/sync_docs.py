@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Mirror the Kedi documentation into references/docs/ for offline use.
 
-    python scripts/sync_docs.py [--docs PATH]      # rewrite references/docs/
-    python scripts/sync_docs.py --check            # exit 1 if the mirror is stale
+    python scripts/sync_docs.py [--docs PATH]      # rewrite references/docs/ and docs.md
+    python scripts/sync_docs.py --check            # exit 1 if either is stale
 
 The mirror keeps the source layout, so relative links work unchanged. Pages are copied
-verbatim; only assets a page links to are copied. INDEX.md is generated from page titles.
+verbatim; only assets a page links to are copied. references/docs.md is an index generated
+from page titles; it lives outside the mirror because docs/index.md already exists and
+INDEX.md would collide with it on case-insensitive file systems.
 """
 
 from __future__ import annotations
@@ -19,12 +21,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MIRROR = ROOT / "references" / "docs"
+REFERENCES = ROOT / "references"
 DEFAULT_DOCS = ROOT.parents[2] / "kedi-docs" / "docs"
 LINK = re.compile(r"\]\(([^)#\s]+)")
 
 
-def build(docs: Path, out: Path) -> None:
+def build(docs: Path, references: Path) -> None:
+    out = references / "docs"
     pages = sorted(docs.rglob("*.md"))
     if not pages:
         raise SystemExit(f"No documentation pages under {docs}")
@@ -56,9 +59,9 @@ def build(docs: Path, out: Path) -> None:
     ]
     for section in sorted(sections):
         lines += [f"## {section}", "", "| Page | File |", "| --- | --- |"]
-        lines += [f"| {title} | [{rel}]({rel}) |" for title, rel in sections[section]]
+        lines += [f"| {title} | [{rel}](docs/{rel}) |" for title, rel in sections[section]]
         lines.append("")
-    (out / "INDEX.md").write_text("\n".join(lines), encoding="utf-8")
+    (references / "docs.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def differences(left: Path, right: Path) -> list[str]:
@@ -81,14 +84,17 @@ def main() -> int:
     cli.add_argument("--check", action="store_true")
     args = cli.parse_args()
     if not args.check:
-        shutil.rmtree(MIRROR, ignore_errors=True)
-        build(args.docs, MIRROR)
-        print(f"Mirrored {args.docs} -> {MIRROR}")
+        shutil.rmtree(REFERENCES / "docs", ignore_errors=True)
+        build(args.docs, REFERENCES)
+        print(f"Mirrored {args.docs} -> {REFERENCES / 'docs'}")
         return 0
     with tempfile.TemporaryDirectory() as tmp:
-        fresh = Path(tmp) / "docs"
+        fresh = Path(tmp)
         build(args.docs, fresh)
-        problems = differences(fresh, MIRROR)
+        problems = differences(fresh / "docs", REFERENCES / "docs")
+        index = REFERENCES / "docs.md"
+        if not index.exists() or index.read_bytes() != (fresh / "docs.md").read_bytes():
+            problems.append("changed: docs.md (index)")
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:

@@ -62,7 +62,7 @@ Read [hooks](docs/agentic-engineering/hooks.md) before implementing lifecycle ha
 
 ## Decision models
 
-Jev/Typesafe and Laya classify decision fields using capture questions/criteria, unlike completion field filling. Use the exact provider/model setup from [Typesafe](docs/agent-adapters/typesafe.md), [Laya](docs/agent-adapters/laya.md), and the Jev guides in the [documentation index](docs/INDEX.md). Import shared `Probability`, `Rubric`, `BooleanCriteria`, `ChoiceCriteria` through `> import: decisions` or `kedi.decisions`; those optional criteria do not select a model or load weights.
+Jev/Typesafe and Laya classify decision fields using capture questions/criteria, unlike completion field filling. Use the exact provider/model setup from [Typesafe](docs/agent-adapters/typesafe.md), [Laya](docs/agent-adapters/laya.md), and the Jev guides in the [documentation index](docs.md). Import shared `Probability`, `Rubric`, `BooleanCriteria`, `ChoiceCriteria` through `> import: decisions` or `kedi.decisions`; those optional criteria do not select a model or load weights.
 
 A nullable output field allows None but does not prevent a model from inventing a syntactically valid value. If an owner or identifier must come only from caller input, enforce that provenance deterministically before returning the result.
 

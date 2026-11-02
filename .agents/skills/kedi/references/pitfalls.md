@@ -53,7 +53,7 @@ so the check fails once it is fixed.
 ## Documentation notes
 
 The language specification is `docs/KEDI_DSL.md` in a Kedi checkout; the pages under
-[docs/](docs/INDEX.md) mirror `kedi-docs` and give each feature's detailed contract. Where they disagree with
+[docs/](docs.md) mirror `kedi-docs` and give each feature's detailed contract. Where they disagree with
 observed behavior, report the disagreement rather than redefining the language.
 
 - The syntax reference says procedures support positional and named calls. Angle calls (`<f(a, b)>`) are
