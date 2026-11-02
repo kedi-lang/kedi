@@ -744,6 +744,22 @@ def test_if_python_rebinding_updates_existing_outer_owner() -> None:
     assert runtime.run_main() is True
 
 
+def test_binding_shadows_procedure_of_same_name_in_python_expressions() -> None:
+    runtime = compile_program(
+        parse_program(
+            "@river() -> str:\n"
+            "  [river: str] = amazon\n"
+            "  = `river`\n"
+            "\n"
+            "[top: str] = `river()`\n"
+            "[river: str] = nile\n"
+            "= `(top, river)`\n"
+        )
+    )
+
+    assert runtime.run_main() == ("amazon", "nile")
+
+
 def test_python_writeback_includes_global_statement_in_nested_function() -> None:
     runtime = compile_program(
         parse_program(

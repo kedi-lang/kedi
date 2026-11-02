@@ -826,9 +826,12 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
     # Add type environment
     _add_type_env(rt, env, local_env)
 
-    # Wrap procedures as callables
+    # Wrap procedures as callables. A Kedi binding with the same name shadows the
+    # procedure, as it does for `<name>` substitutions.
+    bound = env.binding_owners()
     for name, fn in rt._procedures.items():
-        env._set_unowned(name, _make_proc_wrapper(rt, name, fn, local_env))
+        if name not in bound:
+            env._set_unowned(name, _make_proc_wrapper(rt, name, fn, local_env))
 
     return env
 

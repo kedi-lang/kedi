@@ -12,6 +12,23 @@ def _run(src: str) -> Any:
     return run_without_llm(src)
 
 
+@pytest.mark.parametrize(
+    "annotation",
+    ["Optional[Node]", "Node | None", "list[Node]", "Optional[list[Node]]"],
+)
+def test_custom_type_can_refer_to_itself(annotation: str):
+    default = "`[]`" if annotation == "list[Node]" else "`None`"
+    value = "[Node(v=2)]" if "list" in annotation else "Node(v=2)"
+    src = (
+        f"~Node(v: int, next: {annotation} = {default})\n"
+        f"[n: Node] = `Node(v=1, next={value})`\n"
+        "= `n`\n"
+    )
+    node = _run(src)
+    child = node.next[0] if "list" in annotation else node.next
+    assert (node.v, child.v, type(child) is type(node)) == (1, 2, True)
+
+
 def test_basic_type_usage():
     src = (
         "~Person(age:int, name, city)\n"

@@ -16,7 +16,7 @@ import ast
 import copy
 import json
 import shlex
-from typing import Annotated, Any, Optional, Union, cast
+from typing import Annotated, Any, ForwardRef, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -411,18 +411,13 @@ def is_value_compatible(
         return False
 
 
-def register_type(
-    rt: KediRuntime,
-    typedef: TypeDef,
-    type_env: dict[str, Any],
-    local_env: dict[str, Any] | None = None,
-) -> None:
-    """Register a custom type definition as a Pydantic model."""
-    annotations: dict[str, Any] = {}
-    field_defs: dict[str, tuple[Any, Any]] = {}
-    default_values: dict[str, Any] = {}
-    default_env = build_type_env(rt, local_env or {})
+_MISSING = object()
 
+
+def _resolve_typedef_fields(
+    rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]
+) -> list[Any]:
+    resolved_fields = []
     for field in typedef.fields:
         kedi_type = KediType.from_node(field.type_expr, field.type_annotation)
         if kedi_type.is_none():
@@ -436,6 +431,34 @@ def register_type(
         resolved = kedi_type.resolve(rt, env=type_env)
         if resolved is None:
             raise TypeError(f"Unknown type annotation {kedi_type!s} in type {typedef.name}")
+        resolved_fields.append(resolved)
+    return resolved_fields
+
+
+def register_type(
+    rt: KediRuntime,
+    typedef: TypeDef,
+    type_env: dict[str, Any],
+    local_env: dict[str, Any] | None = None,
+) -> None:
+    """Register a custom type definition as a Pydantic model."""
+    annotations: dict[str, Any] = {}
+    field_defs: dict[str, tuple[Any, Any]] = {}
+    default_values: dict[str, Any] = {}
+    default_env = build_type_env(rt, local_env or {})
+    # A field may refer to the type being defined (``children: list[Person]``); it
+    # resolves as a forward reference that the finished model rebuilds against itself.
+    previous = type_env.get(typedef.name, _MISSING)
+    type_env[typedef.name] = ForwardRef(typedef.name)
+    try:
+        field_types = _resolve_typedef_fields(rt, typedef, type_env)
+    finally:
+        if previous is _MISSING:
+            del type_env[typedef.name]
+        else:
+            type_env[typedef.name] = previous
+
+    for field, resolved in zip(typedef.fields, field_types, strict=True):
         annotation, description = _annotated_field_metadata(resolved)
         annotations[field.name] = annotation
         if field.default_expr is None:
@@ -469,6 +492,7 @@ def register_type(
         ),
     )
 
+    new_model.model_rebuild(_types_namespace={typedef.name: new_model})
     type_env[typedef.name] = new_model
     type_env[f"__{typedef.name}_fields__"] = annotations
 
