@@ -21,7 +21,7 @@ kedi install path/to/package.kedi
 
 Installation copies the manifest/source under `$KEDI_HOME/registry/<name>`; the default home is `~/.kedi`. An override must be absolute. To test installation, set a temporary absolute `KEDI_HOME` rather than overwriting a user's registry. Package root imports map to `main.kedi`.
 
-`kedi add NAME` uses a verified exact registry commit; explicit credential-free GitHub `git+https` is a separate unverified source path. `kedi audit` checks receipts/status, not all code or sandbox permissions. Imported package Python executes with process authority. Read [installation and registries](doc-modules-and-packaging-installation-and-registries.md) before publishing/installing third-party packages.
+`kedi add NAME` uses a verified exact registry commit; explicit credential-free GitHub `git+https` is a separate unverified source path. `kedi audit` checks receipts/status, not all code or sandbox permissions. Imported package Python executes with process authority. Read [installation and registries](docs/modules-and-packaging/installation-and-registries.md) before publishing/installing third-party packages.
 
 ## Bundled modules
 
@@ -35,6 +35,6 @@ Installation copies the manifest/source under `$KEDI_HOME/registry/<name>`; the 
 | `decisions` | Shared optional decision criteria; import does not select a model |
 | `this`, `wordle` | Demonstrations; `this` imports with output, wordle needs optional GUI dependencies |
 
-Do not shadow a bundled module accidentally with a sibling file. Treat [filesystem](doc-modules-and-packaging-filesystem.md) as the API reference rather than inventing signatures. Bundled filesystem tools restrict paths to process CWD by default and protect secret files; relative Python `Path(...)` uses CWD too. Source-relative resource reads should derive from `__file__`.
+Do not shadow a bundled module accidentally with a sibling file. Treat [filesystem](docs/modules-and-packaging/filesystem.md) as the API reference rather than inventing signatures. Bundled filesystem tools restrict paths to process CWD by default and protect secret files; relative Python `Path(...)` uses CWD too. Source-relative resource reads should derive from `__file__`.
 
-Read [imports/exports](doc-modules-and-packaging-imports-and-exports.md), [manifests](doc-modules-and-packaging-package-manifests.md), and [built-ins](doc-modules-and-packaging-built-in-modules.md) for the detailed contracts. Ordinary embedded Python is not protected by the filesystem tool policy.
+Read [imports/exports](docs/modules-and-packaging/imports-and-exports.md), [manifests](docs/modules-and-packaging/package-manifests.md), and [built-ins](docs/modules-and-packaging/built-in-modules.md) for the detailed contracts. Ordinary embedded Python is not protected by the filesystem tool policy.

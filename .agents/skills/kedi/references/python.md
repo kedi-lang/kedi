@@ -16,9 +16,9 @@ A query docstring starts with a standalone `kedi` line; its content is a **proce
 
 Bind files are full programs and may define types/profiles/imports/procedures. A relative `file=` resolves from the defining Python source file, falling back to CWD where that identity is unavailable. The file main return is the call result. `reload=True` rereads each call; the initial decoration still requires valid source. Hash-based parse caching never makes invalid new source fall back to old code.
 
-`query`/`bind` accept backend/profile/tools/env/MCP/approval/skills/cache options; read [public parameters](doc-python-api-public-parameters.md) before passing anything else. Use `adapter=` for frameworks, `agent=` for harnesses, never both. Configured/local `env` can override function arguments; avoid accidental collisions. Arguments cannot use registered tool names. `tools=` makes callables available; `> use:` exposes the intended callable in source.
+`query`/`bind` accept backend/profile/tools/env/MCP/approval/skills/cache options; read [public parameters](docs/python-api/public-parameters.md) before passing anything else. Use `adapter=` for frameworks, `agent=` for harnesses, never both. Configured/local `env` can override function arguments; avoid accidental collisions. Arguments cannot use registered tool names. `tools=` makes callables available; `> use:` exposes the intended callable in source.
 
-Run [python_api.py](../assets/examples/python_api.py) for a deterministic query/bind example. Read [query](doc-python-api-query.md), [bind](doc-python-api-bind.md), and [types/tools](doc-python-api-types-and-tools.md) for dynamic output types and `@kedi.type` registration.
+Run [python_api.py](../assets/examples/python_api.py) for a deterministic query/bind example. Read [query](docs/python-api/query.md), [bind](docs/python-api/bind.md), and [types/tools](docs/python-api/types-and-tools.md) for dynamic output types and `@kedi.type` registration.
 
 ## Low-level lifecycle
 
@@ -37,18 +37,18 @@ finally:
 
 This minimal loader is appropriate for ordinary source. File execution with generated/optimized companions should follow Kedi's source-loading/CLI pipeline; `parse_program` alone does not perform every file-run preprocessing step. Pass an explicit adapter and `runtime_globals` when the host supplies models/inputs. Preserve source paths so imports/resources and tracebacks work.
 
-In an async host, keep reusable async clients on one owner loop. Use `use_async_owner_loop()`, run `runtime.run_main` via `asyncio.to_thread`, and `await runtime.aclose()` on that loop; do not nest `asyncio.run()` or reuse loop-bound clients across separate runs. See [embedding](doc-python-api-embedding.md). Closing a runtime does not transfer ownership of every caller-created adapter/client; follow its explicit integration contract.
+In an async host, keep reusable async clients on one owner loop. Use `use_async_owner_loop()`, run `runtime.run_main` via `asyncio.to_thread`, and `await runtime.aclose()` on that loop; do not nest `asyncio.run()` or reuse loop-bound clients across separate runs. See [embedding](docs/python-api/embedding.md). Closing a runtime does not transfer ownership of every caller-created adapter/client; follow its explicit integration contract.
 
 ## Configuration, sessions and executors
 
-`configure` sets defaults; `context` temporarily merges/restores them. Neither is a live session. Low-level executors and subagent limits belong to `compile_program`/interactive runtime parameters, not arbitrary adapter kwargs on configure. Read [configuration](doc-python-api-configuration-and-context.md).
+`configure` sets defaults; `context` temporarily merges/restores them. Neither is a live session. Low-level executors and subagent limits belong to `compile_program`/interactive runtime parameters, not arbitrary adapter kwargs on configure. Read [configuration](docs/python-api/configuration-and-context.md).
 
-Interactive `execute` returns `None`; use `> show:` at the root, and normal returns in procedures. Fragments execute once and preserve earlier completed side effects on failure. No concurrent/reentrant execution. Strict dump/load snapshots reject unsupported state, imports/preludes and live objects instead of replaying or silently dropping them. See [interactive execution](doc-runtime-interactive-execution.md).
+Interactive `execute` returns `None`; use `> show:` at the root, and normal returns in procedures. Fragments execute once and preserve earlier completed side effects on failure. No concurrent/reentrant execution. Strict dump/load snapshots reject unsupported state, imports/preludes and live objects instead of replaying or silently dropping them. See [interactive execution](docs/runtime/interactive-execution.md).
 
-`DefaultExecutor` uses Python eval/exec with host authority. A protocol stub is not a sandbox. Read [executors](doc-python-api-executors.md) before implementing one; incremental preludes require an additional supported operation.
+`DefaultExecutor` uses Python eval/exec with host authority. A protocol stub is not a sandbox. Read [executors](docs/python-api/executors.md) before implementing one; incremental preludes require an additional supported operation.
 
 ## Native adapter APIs
 
 `PydanticAdapter` also exposes Pydantic AI native run/iter/stream calls; these retain Kedi profile/policy behavior. Native framework inputs are not the same as `produce(template=..., output_schema=...)`. The structured low-level schema maps names to Python types, not JSON dictionaries. `invoke` returns text; `produce` returns typed output.
 
-Do not invent asynchronous, tool, approval, stream or persistence methods from another framework. For external deferred approval, retain exact ToolSpecs and use Kedi's argument-validating conversion helpers. See [Pydantic adapter](doc-agent-adapters-pydantic-ai.md), [LangChain](doc-agent-adapters-langchain.md), [custom adapters](doc-agent-adapters-custom-adapters.md), and the [public export list](doc-python-api-public-exports.md).
+Do not invent asynchronous, tool, approval, stream or persistence methods from another framework. For external deferred approval, retain exact ToolSpecs and use Kedi's argument-validating conversion helpers. See [Pydantic adapter](docs/agent-adapters/pydantic-ai.md), [LangChain](docs/agent-adapters/langchain.md), [custom adapters](docs/agent-adapters/custom-adapters.md), and the [public export list](docs/python-api/public-exports.md).

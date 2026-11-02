@@ -10,8 +10,8 @@ Treat Kedi as an indentation-scoped, Python-integrated language for typed model 
 ## Work sequence
 
 1. Read [environment and execution](references/environment.md) and [language rules](references/language.md) before creating a program. Inspect the target project's instructions, environment, Kedi version, parser version, and existing conventions.
-2. In a Kedi checkout, use its current `docs/KEDI_DSL.md` and relevant `kedi-docs/docs/` pages for language contracts. The bundled manual is an offline snapshot; use it when matching current documentation is unavailable. Check [version boundaries and pitfalls](references/pitfalls.md), verify snapshot limitations against the target revision, and record implementation disagreements rather than redefining the language.
-3. Choose the smallest complete [example](references/examples.md) and the relevant topic below. Follow links on demand; do not load the whole manual.
+2. In a Kedi checkout, `docs/KEDI_DSL.md` is the language specification and `kedi-docs/docs/` the feature documentation. [references/docs/](references/docs/INDEX.md) mirrors those pages for offline use (kept in sync by CI); prefer the target checkout's copy when it is newer. Check [pitfalls](references/pitfalls.md) for version gates and known runtime defects, and record implementation disagreements rather than redefining the language.
+3. Choose the smallest complete [example](references/examples.md) and the relevant topic below. Follow links on demand; do not load the whole documentation.
 4. Define native input/output contracts, deterministic operations, model calls, and explicit tool/context boundaries. Configure the intended backend before defining procedures that capture it.
 5. Parse with `python "$KEDI_SKILL/scripts/check_kedi.py" path/to/program.kedi` or `kedi parse path/to/program.kedi`. These checks do not execute source. Tree-sitter alone is only a grammar check; the Kedi AST validator also checks structure.
 6. Execute deterministic behavior and handwritten tests, then exercise model paths with controlled fixtures. Test with the actual selected provider only when that environment is available and the task calls for it. Parse success or a mock response does not establish live model quality.
@@ -59,15 +59,15 @@ Use explicit annotations for non-string procedure parameters and returns; omitte
 | Unit tests, evaluation, prompt optimization, code generation | [Validation](references/validation.md) |
 | Working recipes and their exact validation level | [Examples](references/examples.md) |
 | Common mistakes, documentation inconsistencies, version gates | [Pitfalls](references/pitfalls.md) |
-| Full documentation: all 154 pages, exact APIs/settings, adapter-specific details, editors, notebook, telemetry, A2A, Jev/Laya, benchmarks | [Manual catalog](references/catalog.md) |
-| Snapshot identity, example checks, reproducibility limits | [Provenance](references/provenance.md) |
+| Full documentation: exact APIs/settings, adapter-specific details, editors, notebook, telemetry, A2A, Jev/Laya, benchmarks | [Documentation index](references/docs/INDEX.md) |
 
-Search the offline manual for exact names: `rg -n 'SubagentUsageLimits|processor_condition' "$KEDI_SKILL/references"`. Read the linked detailed page before using a less common API; do not invent directives or infer an adapter capability from another adapter.
+Search the documentation for exact names: `rg -n 'SubagentUsageLimits|processor_condition' "$KEDI_SKILL/references"`. Read the linked detailed page before using a less common API; do not invent directives or infer an adapter capability from another adapter.
 
 ## Included tools
 
 - `scripts/check_kedi.py FILE_OR_DIR ...`: recursively validate `.kedi` files, preserving source paths and `package.kedi` identity; `--tree-only` checks only CST grammar, `--json` emits a report. Missing dependencies and parse failures exit nonzero.
-- `scripts/verify_examples.py`: run the bundled examples and negative contract checks without credentials or live provider calls. Uses real Kedi and Pydantic AI `FunctionModel`/`TestModel`; also checks actual tool execution and child results.
-- `assets/examples/`: copyable complete programs; use the catalog for execution mode and prerequisites. Do not treat isolated manual snippets as complete applications.
+- `scripts/verify_examples.py`: run the bundled examples, negative contract checks, a parse of every documentation snippet, and known-defect checks, without credentials or live provider calls. Uses real Kedi and Pydantic AI `FunctionModel`/`TestModel`; also checks actual tool execution and child results.
+- `scripts/sync_docs.py [--check]`: regenerate (or verify) `references/docs/` from `kedi-docs/docs`.
+- `assets/examples/`: copyable complete programs; see [examples](references/examples.md) for execution mode and prerequisites. Do not treat isolated documentation snippets as complete applications.
 
 Read [validation](references/validation.md) before changing either checker. Never make a failing check pass by replacing the program's expected behavior with the observed wrong result.

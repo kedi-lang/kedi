@@ -56,4 +56,4 @@ The budget example is a negative fixture: use its controlled host test or an act
 5. Add handwritten assertions for boundary/failure cases, then parse and run.
 6. Inspect real provider/tool evidence when moving from fixtures to an actual integration.
 
-For broader patterns, consult the original [complete program](doc-examples-complete-program.md), [structured extraction](doc-examples-structured-extraction.md), [agent delegation](doc-examples-agent-delegation.md), and [evaluation](doc-examples-evaluation-and-optimization.md). Those manual snippets retain their original context requirements.
+For broader patterns, consult the original [complete program](docs/examples/complete-program.md), [structured extraction](docs/examples/structured-extraction.md), [agent delegation](docs/examples/agent-delegation.md), and [evaluation](docs/examples/evaluation-and-optimization.md). Those manual snippets retain their original context requirements.

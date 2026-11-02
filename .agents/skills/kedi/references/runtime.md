@@ -6,7 +6,7 @@ Independent template calls run concurrently by default on a bounded pool of eigh
 
 `KEDI_PARALLEL=0` selects sequential execution; a positive integer selects a worker count. Explicit Python configuration overrides the environment. Reproduce ordering issues sequentially, then check parallel behavior. Custom adapters must be thread-safe.
 
-Bare Python reads or `globals()["x"]` resolve pending Kedi values. `globals().get`, mapping iteration/copies may expose raw promises; use `kedi.force` intentionally. `KediPromiseLeak` is a runtime defect/unsupported manipulation signal, not data to stringify. Unconsumed work still runs, is drained, and may fail; a return does not hide an already scheduled error. Read [concurrency](doc-runtime-concurrency.md).
+Bare Python reads or `globals()["x"]` resolve pending Kedi values. `globals().get`, mapping iteration/copies may expose raw promises; use `kedi.force` intentionally. `KediPromiseLeak` is a runtime defect/unsupported manipulation signal, not data to stringify. Unconsumed work still runs, is drained, and may fail; a return does not hide an already scheduled error. Read [concurrency](docs/runtime/concurrency.md).
 
 ## History, artifacts, and caches
 
@@ -19,20 +19,20 @@ Bare Python reads or `globals()["x"]` resolve pending Kedi values. `globals().ge
 | Provider prefix cache | Provider-native request caching | Never guaranteed; distinct from Kedi result cache |
 | `cache=True` on query/bind | In-memory result memoization | Explicit opt-in; consider mutable/external state |
 | Parse cache | Exact source-hash parse reuse | Does not justify stale invalid source fallback |
-| `SOURCE.cache.kedi` | Generated `> auto:` implementation | Keyed by procedure name; inspect/regenerate after contract changes |
+| `SOURCE.cache.kedi` | Generated `> auto:` implementation | Per procedure; reused only once validated; inspect/regenerate after contract changes |
 | `SOURCE.kedi.optimized.json` | Optimized prompt prefixes | Malformed artifacts fail loudly |
 
 Artifacts are enabled by default in this documented runtime; artifact querying is separately opt-in. Large tool output becomes a compact ref, while supported direct Kedi/Python operations retain native values. Read hidden content with the provided bounded artifact tools before claiming evidence. References are session-owned, have quota/TTL/release rules, and do not survive arbitrary session transfer. Disabling artifacts does not allow unlimited tool output. File storage avoids payload retention in memory; ordinary already-materialized results still consumed producer memory.
 
-Use [artifact policy](doc-runtime-artifact-policy.md), [retrieval](doc-runtime-artifact-retrieval.md), [lifecycle](doc-runtime-artifact-lifecycle.md), [reduction](doc-runtime-artifact-reduction.md) and [safety](doc-runtime-artifact-safety.md) for exact settings/tools. `ArtifactStream` is explicit; arbitrary generators are not automatically streams. Content remains untrusted data.
+Use [artifact policy](docs/runtime/artifact-policy.md), [retrieval](docs/runtime/artifact-retrieval.md), [lifecycle](docs/runtime/artifact-lifecycle.md), [reduction](docs/runtime/artifact-reduction.md) and [safety](docs/runtime/artifact-safety.md) for exact settings/tools. `ArtifactStream` is explicit; arbitrary generators are not automatically streams. Content remains untrusted data.
 
-Native compaction requires a supported backend and history. Claude does not accept an explicit exact compaction threshold. Do not fabricate a summarizer fallback for an unsupported native path. History processors preserve native message types and complete tool lifecycles; accepted changes can invalidate continuation/cache identity. Read [history](doc-runtime-history.md), [compaction](doc-runtime-compaction.md), [prefix cache](doc-runtime-prefix-cache.md).
+Native compaction (`> history:` with `enabled: true`, `compaction_mode: native`, optional `compaction_threshold`) requires a verified provider path (OpenAI Responses or Anthropic via Pydantic AI/LangChain) and fails before model I/O otherwise; it also applies under an active run budget. `compaction_mode: disabled` turns off an inherited policy. Claude does not accept an explicit exact compaction threshold. Do not fabricate a summarizer fallback for an unsupported native path. Custom retention is the separate `processor` field (optional `processor_condition` gate); it runs before every request, including later requests of a tool loop, and cannot remove protected checkpoints such as the native compaction item. History processors preserve native message types and complete tool lifecycles; accepted changes can invalidate continuation/cache identity. Read [history](docs/runtime/history.md), [compaction](docs/runtime/compaction.md), [prefix cache](docs/runtime/prefix-cache.md).
 
 ## Budgets
 
 `> budget:` has nonnegative `request_limit` and `tool_attempt_limit` ceilings; at least one is needed. Local ceilings cannot enlarge an ancestor allowance. Admitted generation attempts, tool-loop requests, repairs/fallback attempts, and actual tool-body retries count according to their dimension; failures do not refund work. This is not rollback or a provider billing guarantee.
 
-For a finite request limit, configure actual provider client retries observably (`max_retries=0` where supported); a same-named model setting is not a universal SDK client option. Opaque retries/unsupported boundaries fail before inference. Embedded arbitrary SDK calls are outside managed accounting. `RunBudgetExceeded` is not an invitation to retry with a larger budget. See [run budgets](doc-runtime-run-budgets.md).
+For a finite request limit, configure actual provider client retries observably (`max_retries=0` where supported); a same-named model setting is not a universal SDK client option. Opaque retries/unsupported boundaries fail before inference. Embedded arbitrary SDK calls are outside managed accounting. `RunBudgetExceeded` is not an invitation to retry with a larger budget. See [run budgets](docs/runtime/run-budgets.md).
 
 ## Diagnose in order
 
@@ -43,6 +43,6 @@ For a finite request limit, configure actual provider client retries observably 
 5. Check actual backend/model/tool availability, schema support, permissions and resource ownership.
 6. Add bounded debug output only for unresolved issues; remove temporary traces.
 
-`KediExecutionError` carries `frames`, `python_traces`, and `original`; common subclasses also behave as TypeError/ValueError/KeyError/NameError. Concurrent runs drain scheduled work and surface failures. A module import or prelude can fail before main execution. See [errors](doc-runtime-errors-and-debugging.md) and [troubleshooting](doc-reference-diagnostics-and-troubleshooting.md).
+`KediExecutionError` carries `frames`, `python_traces`, and `original`; common subclasses also behave as TypeError/ValueError/KeyError/NameError. Concurrent runs drain scheduled work and surface failures. A module import or prelude can fail before main execution. See [errors](docs/runtime/errors-and-debugging.md) and [troubleshooting](docs/reference/diagnostics-and-troubleshooting.md).
 
 Debug exporters serialize values, not redact secrets. Telemetry is opt-in through a separate instrumentation package; review its capture policy. Neither a log message nor a registered capability proves an external action succeeded.

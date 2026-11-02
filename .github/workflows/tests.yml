@@ -66,6 +66,9 @@ jobs:
       - name: Run tests with coverage
         run: make check-coverage
 
+      - name: Check Kedi skill docs mirror
+        run: python .agents/skills/kedi/scripts/sync_docs.py --check
+
       - name: Verify bundled Kedi skill examples
         run: uv run --locked --group dev --python 3.12 python .agents/skills/kedi/scripts/verify_examples.py
 

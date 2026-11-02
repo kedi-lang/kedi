@@ -5,12 +5,13 @@
 | Need | Mechanism |
 | --- | --- |
 | Known child tasks started by the program | Native `> task` / `> await` |
-| Let a model choose a permitted child | Profile child graph plus `delegate_task` |
+| Let a model choose a permitted child | Profile child graph plus `delegate_task` (`> workflow: delegate`, the default) |
+| Model-chosen children, synchronous only, minimal tool schemas | `> workflow: blocking` |
 | Process results as children finish | `> task_group:` with per-await `> process:` |
 | Let a model write orchestration | `> workflow: dynamic` and sandboxed `run_workflow` |
 | Host-controlled async orchestration | `async with runtime.subagents(parent=...)` |
 
-Read [native tasks](doc-agentic-engineering-subagent-tasks.md), [results](doc-agentic-engineering-subagent-results.md), and [limits](doc-agentic-engineering-subagent-limits.md). The complete [parallel_review.kedi](../assets/examples/parallel_review.kedi) starts two children and combines typed results.
+Read [native tasks](docs/agentic-engineering/subagent-tasks.md), [results](docs/agentic-engineering/subagent-results.md), and [limits](docs/agentic-engineering/subagent-limits.md). The complete [parallel_review.kedi](../assets/examples/parallel_review.kedi) starts two children and combines typed results.
 
 ## Declare a graph
 
@@ -43,12 +44,12 @@ There are no direct enclosing `=` returns in a process, including nested branch/
 
 ## Send, interrupt, continue
 
-`> send: job:` and `> interrupt: job:` each contain one fieldless `>>` block. They cannot change tools/profile/schema. Admission is not proof of delivery or understanding; finished tasks reject input. Interrupt waits for the old attempt to stop before replacement work starts. Use [messaging](doc-agentic-engineering-subagent-messaging.md) for supported backends and receipts.
+`> send: job:` and `> interrupt: job:` each contain one fieldless `>>` block. They cannot change tools/profile/schema. Admission is not proof of delivery or understanding; finished tasks reject input. Interrupt waits for the old attempt to stop before replacement work starts. Use [messaging](docs/agentic-engineering/subagent-messaging.md) for supported backends and receipts.
 
-Continuation creates a new admitted run in the same bounded completed child conversation, owned by the parent. It is distinct from sending input to a running task. Only the latest completed run can be continued; the documented bound is eight completed turns. Persistence stores terminal records/serializable state; in-flight work restores as interrupted failure, not a resumed provider request. Read [lifecycle](doc-agentic-engineering-subagent-lifecycle.md) and [continuations](doc-agentic-engineering-subagent-continuations.md).
+Continuation creates a new admitted run in the same bounded completed child conversation, owned by the parent. It is distinct from sending input to a running task. Only the latest completed run can be continued; the documented bound is eight completed turns. Persistence stores terminal records/serializable state; in-flight work restores as interrupted failure, not a resumed provider request. Read [lifecycle](docs/agentic-engineering/subagent-lifecycle.md) and [continuations](docs/agentic-engineering/subagent-continuations.md).
 
 ## Dynamic orchestration and CodeMode
 
-`> workflow: dynamic` exposes `run_workflow(code)` instead of delegation lifecycle tools and requires a resolved direct child. Its code runs in Monty, not host Python. Direct child names are async keyword-only functions taking a self-contained `task` and optional schema. The last expression becomes bounded JSON-safe output. It cannot import arbitrary modules or access host files/network/credentials. Dynamic workflows cannot nest; completed identical calls can be salvaged during correction. Read [dynamic workflows](doc-agentic-engineering-dynamic-workflows.md).
+`> workflow: dynamic` exposes `run_workflow(code)` instead of delegation lifecycle tools and requires a resolved direct child. Its code runs in Monty, not host Python. Direct child names are async keyword-only functions taking a self-contained `task` and optional schema. The last expression becomes bounded JSON-safe output. It cannot import arbitrary modules or access host files/network/credentials. Dynamic workflows cannot nest; completed identical calls can be salvaged during correction. Read [dynamic workflows](docs/agentic-engineering/dynamic-workflows.md).
 
-CodeMode is a separate tool-discovery/execution surface, not the task scheduler. Load exact tool schemas before use, respect its allowlist and limits, and let inner tool calls keep their approval checks. Read [CodeMode](doc-agentic-engineering-codemode.md) and [sandbox boundaries](doc-agentic-engineering-codemode-sandbox.md) rather than treating all embedded Python as sandboxed.
+CodeMode is a separate tool-discovery/execution surface, not the task scheduler. Load exact tool schemas before use, respect its allowlist and limits, and let inner tool calls keep their approval checks. Read [CodeMode](docs/agentic-engineering/codemode.md) and [sandbox boundaries](docs/agentic-engineering/codemode-sandbox.md) rather than treating all embedded Python as sandboxed.

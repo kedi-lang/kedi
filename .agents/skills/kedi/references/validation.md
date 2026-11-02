@@ -15,7 +15,7 @@ python "$KEDI_SKILL/scripts/check_kedi.py" "$KEDI_SKILL/assets/examples"
 python "$KEDI_SKILL/scripts/verify_examples.py"
 ```
 
-The offline manual preserves 154 supplied documentation pages. Its 354 Kedi snippets were checked individually for parseability using the documented source context (`package.kedi` for manifests). They are **not all complete executable programs**; some intentionally rely on definitions/inputs/models from adjacent prose. Copy full examples from assets for executable starting points. Do not treat parse-only status as execution evidence.
+`references/docs/` mirrors `kedi-docs/docs` (`scripts/sync_docs.py`). `verify_examples.py` parses every Kedi snippet in it (`package.kedi` for manifests). Snippets are **not all complete executable programs**; some intentionally rely on definitions/inputs/models from adjacent prose. Copy full examples from assets for executable starting points. Do not treat parse-only status as execution evidence.
 
 ## Handwritten tests
 
@@ -33,20 +33,20 @@ Use one metric per `@eval:` and give it a named dataset. Prefer rows `(input, {"
 
 `> data:` supplies training/fallback rows. Matching `> test_data:` replaces training rows for ordinary `--eval`; it does not print both scores. Metrics return bool, numeric score, or `(score, feedback)`. Row exceptions become zero with error feedback, and an empty set scores zero. A completed zero-score eval can exit 0: inspect scores and feedback and apply the application's threshold.
 
-During optimization, test_data participates in candidate selection and is not untouched final holdout data. Keep a separate final evaluation set. See [datasets](doc-evals-and-optimization-datasets-and-metrics.md), [eval suites](doc-evals-and-optimization-evaluation-suites.md), and [reproducibility](doc-evals-and-optimization-reproducibility.md).
+During optimization, test_data participates in candidate selection and is not untouched final holdout data. Keep a separate final evaluation set. See [datasets](docs/evals-and-optimization/datasets-and-metrics.md), [eval suites](docs/evals-and-optimization/evaluation-suites.md), and [reproducibility](docs/evals-and-optimization/reproducibility.md).
 
 ## Prompt optimization
 
 `> optimize: stable_name:` belongs in a procedure and contains one `>>` template block. Each optimized procedure needs a same-named eval with training data and a metric. Kedi stores a prefix while retaining source captures/types. Name changes detach old artifact keys.
 
-`--optimize` defaults to the **mock** optimizer; explicitly select `--optimizer gepa` for GEPA and configure its separate model/budget. `--optimizer-fresh` removes optimized JSON/scores/checkpoints; it is unrelated to `--no-cache`. Inspect corrupted optimized state rather than hiding it. Use [prompt optimization](doc-evals-and-optimization-prompt-optimization.md) and [GEPA](doc-evals-and-optimization-gepa.md).
+`--optimize` defaults to the **mock** optimizer; explicitly select `--optimizer gepa` for GEPA and configure its separate model/budget. `--optimizer-fresh` removes optimized JSON/scores/checkpoints; it is unrelated to `--no-cache`. Inspect corrupted optimized state rather than hiding it. Use [prompt optimization](docs/evals-and-optimization/prompt-optimization.md) and [GEPA](docs/evals-and-optimization/gepa.md).
 
 ## Generated procedures
 
 `> auto:` takes an indented natural-language implementation specification, without `>>`. Give a precise signature and independent handwritten boundary tests. The generator emits tests then a Python body, translates/merges/parses them and runs tests. Its escalating retry stages can make more requests than the numerical stage count suggests.
 
-Generated source is cached by procedure name in `program.cache.kedi`; review/regenerate when changing a contract. `--codegen-agent mock` generates placeholders, not a correct implementation of an arbitrary specification. Passing generated tests is not independent evidence that the task was understood correctly. See [auto](doc-evals-and-optimization-ai-generated-procedures.md).
+Generated source is cached per procedure in `program.cache.kedi`; a block is reused only after its tests passed and Kedi wrote its completion marker (older unmarked blocks regenerate once). Review/regenerate when changing a contract. `--codegen-agent mock` generates placeholders, not a correct implementation of an arbitrary specification. Passing generated tests is not independent evidence that the task was understood correctly. See [auto](docs/evals-and-optimization/ai-generated-procedures.md).
 
 ## Changing this skill
 
-Keep source-document names/hashes in provenance. Recheck all added complete examples with both parser and asserted runtime behavior. Preserve expected failures as failures. When documentation and runtime disagree, write a version-specific note and a reproducer; do not silently rewrite normative semantics. Run the skill metadata validator as well as code checks. Test a realistic user task from the skill alone before saving a substantial change.
+After a documentation change run `python scripts/sync_docs.py`; CI fails on a stale mirror (`sync_docs.py --check`). Recheck all added complete examples with both parser and asserted runtime behavior. Preserve expected failures as failures. When documentation and runtime disagree, add a row to [known runtime defects](pitfalls.md#known-runtime-defects) and a check in `verify_examples.py` that asserts the defect still reproduces; do not silently rewrite normative semantics. Run the skill metadata validator as well as code checks. Test a realistic user task from the skill alone before saving a substantial change.

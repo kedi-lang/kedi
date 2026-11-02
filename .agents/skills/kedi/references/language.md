@@ -44,7 +44,7 @@ Prefer direct `str`, `int`, `float`, `bool`, `list[T]`, `dict[K,V]`, unions, `Op
 
 For constraints, import `Constraints` from `kedi` in the prelude; then use it in backtick `Annotated` metadata or define a complete Python alias. Descriptions guide a model; constraints validate a result; neither guarantees correct model reasoning. Check provider schema support: Codex rejects the documented `Regex`, `HttpUrl`, and `FileUrl` output formats. A descriptive string can be appropriate when structured format validation is unnecessary.
 
-Read [types](doc-core-language-types.md) for optional/default behavior, runtime namespace and exact supported constraints. Read [parameters](doc-core-language-parameters-and-returns.md) before constructing unusual signatures.
+Read [types](docs/core-language/types.md) for optional/default behavior, runtime namespace and exact supported constraints. Read [parameters](docs/core-language/parameters-and-returns.md) before constructing unusual signatures.
 
 ## Scope and Python
 
@@ -64,10 +64,10 @@ Use `Path(__file__).with_name(...)` for resources beside a file-backed program/m
 - `> loop [item]: `iterable`:` evaluates the iterable once and traverses it sequentially. Each binder is iteration-local; it does not overwrite an outer binding of the same name.
 - One immediately following sibling `> map:` is a deferred stage over retained iteration scopes. It creates no automatic list. It may overlap continuations and joins before the next statement. Use preallocated indexed destinations or synchronization for shared results; `total += value` is not an atomic reduction.
 
-Read [loops/map](doc-core-language-loops-and-map.md) for iterator cleanup and nested stages. Read [scope](doc-core-language-scopes-and-bindings.md) for shadowing and write-back.
+Read [loops/map](docs/core-language/loops-and-map.md) for iterator cleanup and nested stages. Read [scope](docs/core-language/scopes-and-bindings.md) for shadowing and write-back.
 
 ## Escaping
 
 `#` begins a comment unless escaped; standalone paired `###` delimit block comments. A leading procedure/profile `###` becomes a docstring. Escape literal delimiters where they conflict: `\<`, `\>`, `\[`, `\]`, `\(`, `\)`, `\,`, `\=`, `\@`, `\#`, `\~`, a backtick, and backslash. `\n`, `\t`, `\s` preserve whitespace. Unsupported escapes fail. Backslash line continuation applies to rendered returns, not multiline model templates.
 
-Use the executable [core examples](examples.md), [source structure](doc-core-language-source-structure.md), [substitutions](doc-core-language-substitutions-and-calls.md), and [escaping](doc-core-language-multiline-and-escaping.md) when syntax is uncertain.
+Use the executable [core examples](examples.md), [source structure](docs/core-language/source-structure.md), [substitutions](docs/core-language/substitutions-and-calls.md), and [escaping](docs/core-language/multiline-and-escaping.md) when syntax is uncertain.

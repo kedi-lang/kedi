@@ -384,6 +384,24 @@ def main() -> int:
             ),
         )
 
+    def documentation_snippets():
+        import re
+
+        failures = []
+        for page in sorted((ROOT / "references" / "docs").rglob("*.md")):
+            for block in re.finditer(r"^```kedi[^\n]*\n(.*?)^```", page.read_text(), re.S | re.M):
+                source = block.group(1)
+                # Manifest snippets are only valid under their exact basename.
+                name = "package.kedi" if re.search(r"^> package:", source, re.M) else "snippet.kedi"
+                try:
+                    parse_program(source, source_path=str(Path(tempfile.gettempdir()) / name))
+                except KediParseError as exc:
+                    failures.append(f"{page.relative_to(ROOT)}: {str(exc).splitlines()[-1]}")
+        if failures:
+            raise AssertionError("\n".join(failures))
+
+    record("every documentation Kedi snippet parses", documentation_snippets)
+
     versions = {
         name: importlib.metadata.version(name)
         for name in ("kedi", "tree-sitter", "tree-sitter-kedi", "pydantic", "pydantic-ai-slim")
