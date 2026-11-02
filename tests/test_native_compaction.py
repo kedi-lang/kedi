@@ -285,6 +285,27 @@ def test_pydantic_adapter_applies_profile_compaction_and_rejects_chat_model() ->
         chat_adapter._run_kwargs({}, tool_specs=())
 
 
+def test_pydantic_adapter_applies_native_compaction_under_an_active_run_budget() -> None:
+    # Interactive sessions always run under a budget, which swaps in Kedi's BudgetedModel.
+    from kedi.agent_adapter.adapters.pydantic.budget import budget_model
+    from kedi.run_budget import RunBudget, run_budget_scope
+
+    model = _openai_responses_model()
+    model.client.max_retries = 0  # request budgets refuse hidden SDK retries
+    adapter = PydanticAdapter(model)
+    with (
+        run_budget_scope(RunBudget(request_limit=50)),
+        adapter.profile_override(
+            AgentProfile(history=True, compaction=CompactionSettings(threshold=18_000))
+        ),
+    ):
+        run_kwargs = adapter._run_kwargs({"model": budget_model(adapter.model)}, tool_specs=())
+    capability = next(
+        item for item in run_kwargs["capabilities"] if isinstance(item, OpenAICompaction)
+    )
+    assert capability.token_threshold == 18_000
+
+
 def test_pydantic_disabled_compaction_does_not_remove_caller_capability() -> None:
     caller = OpenAICompaction(token_threshold=12_345)
     adapter = PydanticAdapter(_openai_responses_model())
