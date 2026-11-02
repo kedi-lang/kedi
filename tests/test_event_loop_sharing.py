@@ -8,9 +8,9 @@ delegation steps) reuse another loop's connection fail with "bound to a differen
 "Event loop is closed". These tests drive real OpenAIResponsesModel calls against a local fake
 Responses server; no credentials or network access are needed.
 
-The failing synchronous cases are asserted deterministically through a recording FunctionModel
-(overlapping requests must share one loop): over real HTTP they fail by racing, and can also
-hang, so only the cases that pass today run over HTTP.
+Each synchronous operation now runs its async work on one event loop. A recording FunctionModel
+asserts that deterministically (overlapping requests share one loop); the HTTP cases confirm it
+end to end and run under a hard timeout, because the old failure could also hang.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import json
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import Future as ConcurrentFuture
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -32,14 +33,11 @@ from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from kedi.agent_adapter import PydanticAdapter
-from kedi.agent_adapter.execution import use_async_owner_loop
+from kedi.agent_adapter import execution
+from kedi.agent_adapter.execution import operation_event_loop, run_sync, use_async_owner_loop
 from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
 
-LOOP_SHARING_BUG = (
-    "Synchronous Kedi runs concurrent model calls on separate live event loops that share one "
-    "provider client (L3.1); remove this marker when that is fixed"
-)
 LOOKUP = """@lookup(key: str) -> str:
   ###
   Look up a value.
@@ -226,6 +224,26 @@ def _run_http(
     return asyncio.run(async_host())
 
 
+def _bounded(run: Any, seconds: float = 60.0) -> Any:
+    """Run ``run()`` in a thread and fail instead of hanging the suite."""
+    outcome: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            outcome["value"] = run()
+        except BaseException as exc:  # noqa: BLE001
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise AssertionError(f"Kedi run did not finish within {seconds} s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
 class _Recorder:
     """A FunctionModel that records (loop, start, end) for every request."""
 
@@ -240,7 +258,7 @@ class _Recorder:
             self.spans.append((loop, start, time.monotonic()))
         answered = any(part.part_kind == "tool-return" for m in messages for part in m.parts)
         tools = {tool.name: tool for tool in info.function_tools}
-        for name in ("lookup", "delegate_task"):
+        for name in ("outer", "lookup", "delegate_task"):
             if name in tools and not answered:
                 schema = tools[name].parameters_json_schema
                 return ModelResponse(
@@ -291,7 +309,6 @@ CONCURRENT = pytest.mark.parametrize(
 
 
 @CONCURRENT
-@pytest.mark.xfail(strict=True, reason=LOOP_SHARING_BUG)
 def test_overlapping_requests_share_one_loop(source: str, count: int) -> None:
     recorder = _Recorder()
     assert _run_recorded(source, recorder) == ["ok"] * count
@@ -311,7 +328,7 @@ def test_native_tasks_run_their_requests_on_the_coordinator_loop() -> None:
     assert recorder.overlapping_loops() == 0
 
 
-# The same programs through an async host (one owner loop per run) pass today.
+# Over HTTP: synchronous runs and async hosts, the same model reused across runs.
 
 
 @pytest.mark.parametrize(
@@ -323,15 +340,16 @@ def test_native_tasks_run_their_requests_on_the_coordinator_loop() -> None:
     ],
     ids=["retries", "tool-loops", "delegations"],
 )
-def test_async_host_runs_concurrent_calls_on_its_owner_loop(
-    source: str, fail_first: int, expected: list[str]
+@pytest.mark.parametrize("host", [False, True], ids=["sync", "async-host"])
+def test_concurrent_calls_over_http(
+    source: str, fail_first: int, expected: list[str], host: bool
 ) -> None:
     with _fake_model(fail_first=fail_first) as model:
         for _ in range(2):  # the same model in a second run, after the first loop closed
-            assert _run_http(source, model, host=True) == expected
+            assert _bounded(lambda: _run_http(source, model, host=host)) == expected
 
 
-# Calls that do not overlap, and native tasks on one coordinator loop, pass today.
+# Calls that do not overlap, and native tasks on one coordinator loop.
 
 
 def test_sequential_calls_survive_retries_across_loops() -> None:
@@ -347,3 +365,194 @@ def test_dependent_chain_survives_retries_across_loops() -> None:
 def test_native_tasks_with_tool_loops_share_the_coordinator_loop() -> None:
     with _fake_model(fail_first=2) as model:
         assert _run_http(NATIVE_TASKS, model) == ["ok"] * 4
+
+
+# The operation scope.
+
+
+class _CountingLoop(execution.OwnedAsyncLoop):
+    started = 0
+
+    def __init__(self) -> None:
+        type(self).started += 1
+        super().__init__()
+
+
+@pytest.fixture
+def counting_loops(monkeypatch: pytest.MonkeyPatch) -> type[_CountingLoop]:
+    counter = type("Counter", (_CountingLoop,), {"started": 0})
+    monkeypatch.setattr(execution, "OwnedAsyncLoop", counter)
+    return counter
+
+
+def test_deterministic_operation_starts_no_event_loop(counting_loops: type[_CountingLoop]) -> None:
+    runtime = compile_program(parse_program("= `1 + 1`\n"))
+    assert runtime.run_main() == 2
+    assert counting_loops.started == 0
+
+
+def test_operation_loop_closes_with_the_operation(counting_loops: type[_CountingLoop]) -> None:
+    loops = []
+    for _ in range(2):
+        recorder = _Recorder()
+        assert _run_recorded(INDEPENDENT, recorder) == ["ok"] * 8
+        run_loops = {id(loop): loop for loop, _, _ in recorder.spans}
+        assert len(run_loops) == 1
+        (loop,) = run_loops.values()
+        assert loop.is_closed()
+        loops.append(loop)
+    assert loops[0] is not loops[1]
+    assert counting_loops.started == 2
+
+
+def test_nested_procedure_calls_reuse_the_operation_loop(tmp_path: Any) -> None:
+    (tmp_path / "helper.kedi").write_text(
+        "@remote() -> str:\n  >> Remote [r: str]\n  = `r`\n\n> export:\n  remote\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: helper:\n  remote\n\n"
+        "@local() -> str:\n  >> Local [l: str]\n  = `l`\n\n"
+        "[a: str] = `local()`\n[b: str] = `remote()`\n>> Top [c: str]\n= `[a, b, c]`\n",
+        encoding="utf-8",
+    )
+    recorder = _Recorder()
+    runtime = compile_program(
+        parse_program(main.read_text(encoding="utf-8"), source_path=str(main)),
+        adapter=PydanticAdapter(FunctionModel(recorder.respond)),
+    )
+    assert runtime.run_main() == ["ok"] * 3
+    assert len(recorder.spans) == 3
+    assert len({id(loop) for loop, _, _ in recorder.spans}) == 1
+
+
+def test_async_host_creates_no_operation_loop(counting_loops: type[_CountingLoop]) -> None:
+    recorder = _Recorder()
+    assert _run_recorded(INDEPENDENT, recorder, host=True) == ["ok"] * 8
+    assert counting_loops.started == 0
+
+
+def test_interrupted_wait_cancels_its_task_and_awaits_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started, cleaned = threading.Event(), threading.Event()
+
+    async def slow() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        finally:
+            await asyncio.sleep(0.05)  # cleanup that still needs the loop
+            cleaned.set()
+
+    def interrupted(self: ConcurrentFuture, timeout: float | None = None) -> Any:
+        started.wait(5)
+        raise KeyboardInterrupt
+
+    with operation_event_loop():
+        with monkeypatch.context() as patch:
+            patch.setattr(ConcurrentFuture, "result", interrupted)
+            with pytest.raises(KeyboardInterrupt):
+                run_sync(slow())
+        assert cleaned.is_set()
+
+
+def test_operation_loop_rejects_use_after_close() -> None:
+    scope = execution._OperationLoop()
+    scope.loop()
+    scope.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        scope.loop()
+
+
+def test_sync_code_on_the_operation_loop_keeps_a_nested_loop() -> None:
+    async def inner() -> asyncio.AbstractEventLoop:
+        return asyncio.get_running_loop()
+
+    async def outer() -> tuple[asyncio.AbstractEventLoop, asyncio.AbstractEventLoop]:
+        # Synchronous code running inline on the operation loop must not block it.
+        return asyncio.get_running_loop(), run_sync(inner())
+
+    with operation_event_loop():
+        operation, nested = run_sync(outer())
+    assert operation is not nested
+
+
+# Decision models close their per-loop client after each synchronous call.
+
+
+class _DecisionModel(FunctionModel):
+    """Mimics kedi-typesafe: one client per event loop, closed by ``aclose_current``."""
+
+    kedi_prompt_mode = "decision"
+
+    def __init__(self) -> None:
+        self.clients: dict[int, dict[str, bool]] = {}
+        self.used_after_close = 0
+        super().__init__(self._respond)
+
+    async def _respond(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        client = self.clients.setdefault(id(asyncio.get_running_loop()), {"closed": False})
+        await asyncio.sleep(0.1)
+        if client["closed"]:
+            self.used_after_close += 1
+        output = info.output_tools[0]
+        schema = output.parameters_json_schema
+        return ModelResponse(
+            parts=[ToolCallPart(output.name, _instance(schema, schema.get("$defs", {})))]
+        )
+
+    async def aclose_current(self) -> None:
+        client = self.clients.pop(id(asyncio.get_running_loop()), None)
+        if client is not None:
+            client["closed"] = True
+
+
+@pytest.mark.parametrize("host", [False, True], ids=["sync", "async-host"])
+def test_concurrent_decisions_close_their_shared_client_once(host: bool) -> None:
+    model = _DecisionModel()
+    source = "\n".join(f">> Item {i} is a duplicate [a{i}: bool]" for i in range(8)) + _captures(8)
+    runtime = compile_program(parse_program(source), adapter=PydanticAdapter(model))
+    if host:
+
+        async def async_host() -> Any:
+            with use_async_owner_loop():
+                return await asyncio.to_thread(runtime.run_main)
+
+        result = asyncio.run(async_host())
+    else:
+        result = runtime.run_main()
+    assert result == [True] * 8
+    assert model.used_after_close == 0
+    assert model.clients == {}  # closed when the operation ended
+
+
+def test_cleanup_on_another_loop_is_not_deferred() -> None:
+    async def defer() -> bool:
+        return execution.defer_to_operation_end(1, asyncio.sleep)
+
+    with operation_event_loop():
+        # A call on its own loop (not the operation's) closes its client itself.
+        assert asyncio.run(defer()) is False
+
+
+# Sync tools that make nested model calls inside one operation. Four parallel calls: eight
+# would exhaust Kedi's eight engine workers, which hangs on stable too (separate issue).
+
+NESTED_TOOLS = (
+    LOOKUP
+    + "@inner(key: str) -> str:\n  > use: lookup\n  >> Inner <key> [x: str]\n  = `x`\n\n"
+    + "@outer(key: str) -> str:\n  ###\n  Ask the inner model.\n\n  Args:\n    key: The key.\n  ###\n"
+    + "  > tool:\n    risk: read_only\n  = `inner(key)`\n\n"
+    + "> profile: worker:\n  > instructions: Call outer first.\n  > use: outer\n\n> use: worker\n"
+    + "\n".join(f">> Item {i}: [a{i}: str]" for i in range(4))
+    + _captures(4)
+)
+
+
+def test_nested_tool_model_calls_share_the_operation_loop() -> None:
+    recorder = _Recorder()
+    assert _bounded(lambda: _run_recorded(NESTED_TOOLS, recorder)) == ["ok"] * 4
+    assert len(recorder.spans) > 8  # the four tool calls made nested model calls
+    assert recorder.overlapping_loops() == 0

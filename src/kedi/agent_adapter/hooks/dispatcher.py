@@ -11,7 +11,7 @@ from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterator, cast
 
-from ..execution import run_in_worker
+from ..execution import run_in_worker, run_sync
 from .models import (
     HOOK_EVENT_NAMES,
     HookEvent,
@@ -202,7 +202,9 @@ class HookDispatcher:
                 try:
                     asyncio.get_running_loop()
                 except RuntimeError:
-                    return asyncio.run(
+                    # The host's or the operation's loop when one is active: provider
+                    # clients a handler awaits must not run on a second live loop.
+                    return run_sync(
                         self._await_sync_result(
                             cast(Awaitable[HookResult], result),
                             event,

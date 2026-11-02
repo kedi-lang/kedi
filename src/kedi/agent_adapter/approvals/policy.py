@@ -208,7 +208,10 @@ def resolve_tool_approval(
                     try:
                         asyncio.get_running_loop()
                     except RuntimeError:
-                        decision = asyncio.run(
+                        from ..execution import run_sync
+
+                        # The host's or the operation's loop when one is active.
+                        decision = run_sync(
                             _resolve_awaitable(cast(Awaitable[ApprovalDecision], result))
                         )
                     else:
