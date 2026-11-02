@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from threading import Condition
 
 from kedi.agent_adapter.cancellation import RunCancellation, use_run_cancellation
-from kedi.agent_adapter.execution import operation_event_loop, run_in_worker
+from kedi.agent_adapter.execution import _operation_event_loop, run_in_worker
 
 
 class RuntimeLifecycle:
@@ -36,7 +36,7 @@ class RuntimeLifecycle:
         try:
             # One event loop for the whole operation: concurrent model calls share provider
             # clients, which support a single running loop at a time.
-            with use_run_cancellation(owner), operation_event_loop():
+            with use_run_cancellation(owner), _operation_event_loop():
                 yield
         finally:
             self._current.reset(token)

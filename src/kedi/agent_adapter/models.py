@@ -121,12 +121,12 @@ async def close_typesafe_model_current(model: object) -> None:
         return
     close_current = getattr(model, "aclose_current", None)
     if callable(close_current):
-        from .execution import defer_to_operation_end
+        from .execution import _defer_to_operation_end
 
         cleanup = cast(Callable[[], Awaitable[None]], close_current)
         # On an operation's shared loop concurrent calls use the same client: close it once,
         # when the operation ends.
-        if not defer_to_operation_end(id(model), cleanup):
+        if not _defer_to_operation_end(id(model), cleanup):
             await cleanup()
 
 

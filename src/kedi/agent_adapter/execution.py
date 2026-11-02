@@ -241,7 +241,7 @@ _OPERATION_LOOP: contextvars.ContextVar[_OperationLoop | None] = contextvars.Con
 
 
 @contextmanager
-def operation_event_loop() -> Iterator[None]:
+def _operation_event_loop() -> Iterator[None]:
     """Run one synchronous operation's async work on a single event loop.
 
     A no-op inside an enclosing operation. Under an async host the host's loop is used;
@@ -260,13 +260,13 @@ def operation_event_loop() -> Iterator[None]:
         scope.close()
 
 
-def defer_to_operation_end(key: int, cleanup: Callable[[], Awaitable[None]]) -> bool:
+def _defer_to_operation_end(key: int, cleanup: Callable[[], Awaitable[None]]) -> bool:
     """Run ``cleanup`` once when the operation ends, if called on its shared loop."""
     scope = _OPERATION_LOOP.get()
     return scope is not None and scope.defer(key, cleanup)
 
 
-def shared_execution_loop() -> asyncio.AbstractEventLoop | None:
+def _shared_execution_loop() -> asyncio.AbstractEventLoop | None:
     """The async host's loop, else the current operation's loop, else ``None``."""
     owner = current_async_owner_loop()
     if owner is not None:

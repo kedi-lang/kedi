@@ -27,14 +27,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from mcp.server.fastmcp import FastMCP
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+import kedi
 from kedi.agent_adapter import PydanticAdapter
+from kedi.agent_adapter.approvals.policy import (
+    ApprovalDecision,
+    ApprovalPolicy,
+    ApprovalRequest,
+    resolve_tool_approval,
+)
 from kedi.agent_adapter import execution
-from kedi.agent_adapter.execution import operation_event_loop, run_sync, use_async_owner_loop
+from kedi.agent_adapter.execution import _operation_event_loop, run_sync, use_async_owner_loop
+from kedi.agent_adapter.hooks import HookDispatcher, HookDispatcherSnapshot
+from kedi.agent_adapter.hooks.models import UserPromptSubmitRequest
+from kedi.agent_profile import AgentProfile, HookSettings
+from kedi.agent_profile.mcp import McpServerSpec
 from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
 
@@ -450,7 +463,7 @@ def test_interrupted_wait_cancels_its_task_and_awaits_cleanup(
         started.wait(5)
         raise KeyboardInterrupt
 
-    with operation_event_loop():
+    with _operation_event_loop():
         with monkeypatch.context() as patch:
             patch.setattr(ConcurrentFuture, "result", interrupted)
             with pytest.raises(KeyboardInterrupt):
@@ -474,7 +487,7 @@ def test_sync_code_on_the_operation_loop_keeps_a_nested_loop() -> None:
         # Synchronous code running inline on the operation loop must not block it.
         return asyncio.get_running_loop(), run_sync(inner())
 
-    with operation_event_loop():
+    with _operation_event_loop():
         operation, nested = run_sync(outer())
     assert operation is not nested
 
@@ -530,9 +543,9 @@ def test_concurrent_decisions_close_their_shared_client_once(host: bool) -> None
 
 def test_cleanup_on_another_loop_is_not_deferred() -> None:
     async def defer() -> bool:
-        return execution.defer_to_operation_end(1, asyncio.sleep)
+        return execution._defer_to_operation_end(1, asyncio.sleep)
 
-    with operation_event_loop():
+    with _operation_event_loop():
         # A call on its own loop (not the operation's) closes its client itself.
         assert asyncio.run(defer()) is False
 
@@ -556,3 +569,134 @@ def test_nested_tool_model_calls_share_the_operation_loop() -> None:
     assert _bounded(lambda: _run_recorded(NESTED_TOOLS, recorder)) == ["ok"] * 4
     assert len(recorder.spans) > 8  # the four tool calls made nested model calls
     assert recorder.overlapping_loops() == 0
+
+
+# Other entry points that must use the operation's loop.
+
+
+def test_interactive_fragments_each_run_on_one_closed_loop() -> None:
+    recorder = _Recorder()
+    fragment = "\n".join(f">> Item {i}: [a{i}: str]" for i in range(4)) + "\n"
+    loops = []
+    with kedi.interactive(adapter=PydanticAdapter(FunctionModel(recorder.respond))) as session:
+        for _ in range(2):
+            before = len(recorder.spans)
+            session.execute(fragment)
+            fragment_loops = {id(loop): loop for loop, _, _ in recorder.spans[before:]}
+            assert len(fragment_loops) == 1
+            (loop,) = fragment_loops.values()
+            assert loop.is_closed()
+            loops.append(loop)
+    assert loops[0] is not loops[1]
+
+
+def _prompt_event() -> UserPromptSubmitRequest:
+    return UserPromptSubmitRequest(
+        run_id="run", sequence=0, adapter_shortname="fake", content="prompt"
+    )
+
+
+def test_awaitable_from_a_sync_hook_runs_on_the_operation_loop() -> None:
+    seen: list[asyncio.AbstractEventLoop] = []
+
+    async def record(event: Any) -> None:
+        seen.append(asyncio.get_running_loop())
+
+    # A synchronous handler that returns an awaitable.
+    dispatcher = HookDispatcher(
+        HookDispatcherSnapshot.compose(
+            None, HookSettings(user_prompt_submit=(lambda event: record(event),))
+        )
+    )
+    with _operation_event_loop():
+        expected = execution._shared_execution_loop()
+        dispatcher.dispatch_sync(_prompt_event())
+    assert seen == [expected]
+
+
+def test_awaitable_from_a_sync_approval_handler_runs_on_the_operation_loop() -> None:
+    seen: list[asyncio.AbstractEventLoop] = []
+
+    async def decide(call: Any) -> ApprovalDecision:
+        seen.append(asyncio.get_running_loop())
+        return ApprovalDecision.allow()
+
+    request = ApprovalRequest.create(
+        tool_name="write_draft",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="test",
+        description="Write a scratch draft",
+        metadata=None,
+    )
+    with _operation_event_loop():
+        expected = execution._shared_execution_loop()
+        decision = resolve_tool_approval(ApprovalPolicy.dynamic(lambda call: decide(call)), request)
+    assert decision.decision == "allow"
+    assert seen == [expected]
+
+
+def test_codegen_inside_an_operation_uses_the_operation_loop(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kedi.codegen import runner as runner_module
+    from kedi.codegen.mock_agents import MockPassingAgent
+
+    seen: list[asyncio.AbstractEventLoop] = []
+
+    async def record() -> None:
+        seen.append(asyncio.get_running_loop())
+
+    class LoopRecordingAgent(MockPassingAgent):
+        def generate_tests(self, *args: Any, **kwargs: Any) -> str:
+            run_sync(record())
+            return super().generate_tests(*args, **kwargs)
+
+        def generate_impl(self, *args: Any, **kwargs: Any) -> str:
+            run_sync(record())
+            return super().generate_impl(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "_select_agent", lambda kind, model: LoopRecordingAgent())
+    source = tmp_path / "auto.kedi"
+    source.write_text("@f() -> str:\n  > auto:\n    Return ok.\n", encoding="utf-8")
+    with _operation_event_loop():
+        expected = execution._shared_execution_loop()
+        assert runner_module.run_codegen(source, quiet=True, use_cache=False)
+        assert not expected.is_closed()
+    assert seen == [expected, expected]
+    assert expected.is_closed()
+
+
+def test_mcp_tool_works_in_consecutive_operations(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FastMCP("reader")
+    tool_calls: list[str] = []
+    model_loops: list[asyncio.AbstractEventLoop] = []
+
+    @server.tool()
+    async def read() -> str:
+        tool_calls.append("read")
+        return "value"
+
+    monkeypatch.setattr(
+        "kedi.agent_adapter.adapters.pydantic.tools._mcp_toolset_from_config",
+        lambda name, config: MCPToolset(server),
+    )
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        model_loops.append(asyncio.get_running_loop())
+        if any(part.part_kind == "tool-return" for m in messages for part in m.parts):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(parts=[ToolCallPart(info.function_tools[0].name, {})])
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    profile = AgentProfile(
+        mcp_servers=(McpServerSpec(command="reader"),), approval=ApprovalPolicy.allow()
+    )
+    for _ in range(2):  # a session opened in the first operation must not leak into the second
+        with _operation_event_loop(), adapter.profile_override(profile):
+            assert adapter.invoke_sync(prompt="Read the value.") == "done"
+    assert tool_calls == ["read", "read"]
+    first, second = model_loops[:2], model_loops[2:]
+    assert len({id(loop) for loop in first}) == len({id(loop) for loop in second}) == 1
+    assert first[0] is not second[0]
+    assert first[0].is_closed() and second[0].is_closed()
