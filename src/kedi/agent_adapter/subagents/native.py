@@ -17,7 +17,7 @@ from pydantic import TypeAdapter
 from kedi.agent_adapter.execution import (
     OwnedAsyncLoop,
     _resolve_deadline,
-    current_async_owner_loop,
+    _shared_execution_loop,
 )
 from kedi.agent_adapter.subagents import (
     _NO_TYPED_OUTPUT,
@@ -271,7 +271,7 @@ class NativeSubagentOwner:
     ) -> Future[_T]:
         with self._state_lock:
             if self._loop is None and self._execution_loop is None:
-                self._execution_loop = current_async_owner_loop()
+                self._execution_loop = _shared_execution_loop()
                 if self._execution_loop is None:
                     self._loop = OwnedAsyncLoop()
             owned_loop = self._loop

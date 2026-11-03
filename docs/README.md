@@ -10,6 +10,7 @@ reference and development notes; it is not a second copy of the cookbook.
 | [GEPA_GUIDE.md](GEPA_GUIDE.md) | Optimizer integration and configuration |
 | [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md) | Distribution, platform, and release checks |
 | [LOCAL_PACKAGE_REGISTRY.md](LOCAL_PACKAGE_REGISTRY.md) | Run and test the development registry |
+| [EVENT_LOOPS.md](EVENT_LOOPS.md) | Design record: which event loop synchronous Kedi work runs on, and why |
 | [Runnable examples](../examples/README.md) | Focused programs with input fixtures, guides, and tests |
 
 For a complete optimization example, use [Knapsack](../examples/knapsack/README.md).

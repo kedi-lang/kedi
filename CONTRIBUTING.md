@@ -163,3 +163,5 @@ Before opening a pull request:
 - Prefer `uv run ...` or `make ...` over calling tools directly.
 - Do not add contributor instructions that depend on `pip`, `poetry`, `pdm`, or `pip-tools`.
 - Keep generated caches, coverage reports, and local virtual environments out of commits.
+- Event-loop handling (`run_sync`, operation scopes, the Codex tool bridges) follows a
+  recorded design: read [docs/EVENT_LOOPS.md](docs/EVENT_LOOPS.md) before changing it.

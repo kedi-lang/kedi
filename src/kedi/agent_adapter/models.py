@@ -121,7 +121,13 @@ async def close_typesafe_model_current(model: object) -> None:
         return
     close_current = getattr(model, "aclose_current", None)
     if callable(close_current):
-        await cast(Callable[[], Awaitable[None]], close_current)()
+        from .execution import _defer_loop_cleanup
+
+        cleanup = cast(Callable[[], Awaitable[None]], close_current)
+        # On a loop Kedi shares, concurrent calls use the same client: close it once, when
+        # Kedi stops using the loop.
+        if not _defer_loop_cleanup(id(model), cleanup):
+            await cleanup()
 
 
 def codex_responses_model(

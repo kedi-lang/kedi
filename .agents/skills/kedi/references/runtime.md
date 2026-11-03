@@ -6,6 +6,8 @@ Independent template calls run concurrently by default on a bounded pool of eigh
 
 `KEDI_PARALLEL=0` selects sequential execution; a positive integer selects a worker count. Explicit Python configuration overrides the environment. Reproduce ordering issues sequentially, then check parallel behavior. Custom adapters must be thread-safe.
 
+Synchronous Kedi work that overlaps in time (runs and procedure calls on any thread, test/eval runs, interactive fragments, direct `adapter.invoke_sync()`/`produce_sync()`, Codex App Server tools) shares one event loop that Kedi starts on first use and closes once nothing uses it, so concurrent calls, retries, tool loops and delegations share provider clients safely. A coroutine blocking that loop stalls all concurrent Kedi work; sync Kedi code called from an async tool gets a separate loop instead of deadlocking. Not covered (separate loops; do not share one provider client across them concurrently): sync Kedi code called from a coroutine on a loop Kedi uses, and Kedi work outside an async host's `use_async_owner_loop()` scope while that host's loop runs Kedi work. Read [event loops](docs/runtime/concurrency.md#event-loops).
+
 Bare Python reads or `globals()["x"]` resolve pending Kedi values. `globals().get`, mapping iteration/copies may expose raw promises; use `kedi.force` intentionally. `KediPromiseLeak` is a runtime defect/unsupported manipulation signal, not data to stringify. Unconsumed work still runs, is drained, and may fail; a return does not hide an already scheduled error. Read [concurrency](docs/runtime/concurrency.md).
 
 ## History, artifacts, and caches

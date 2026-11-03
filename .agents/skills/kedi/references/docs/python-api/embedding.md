@@ -35,9 +35,11 @@ adapters and external clients according to their integration's contract.
 ## Async Hosts With Reusable Clients
 
 An async HTTP client can keep sockets bound to the event loop where it was
-used. Do not reuse it across independent `asyncio.run()` calls. In an async
-server or notebook host, keep model requests on the host's existing loop while
-the synchronous Kedi program runs in a worker:
+used. Kedi runs concurrent synchronous work on one shared loop (see
+[Event Loops](../runtime/concurrency.md#event-loops)); do not reuse your own
+client across independent `asyncio.run()` calls. In an async server or notebook
+host, keep model requests on the host's existing loop while the synchronous Kedi
+program runs in a worker:
 
 ```python
 import asyncio
@@ -59,7 +61,8 @@ through Kedi's workers, preserves deadlines and cancellation, and does not
 take ownership of the loop or client. Create and close caller-owned clients
 on that same host loop. Calling synchronous Kedi code directly on the selected
 loop is rejected instead of blocking the loop on itself. Outside this explicit
-scope, the existing synchronous execution behavior is unchanged.
+scope, synchronous Kedi work runs on Kedi's shared loop, which closes once no
+work uses it.
 
 ## Which Configuration Surface?
 
