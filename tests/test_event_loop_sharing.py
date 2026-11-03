@@ -30,23 +30,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 import kedi
-from kedi.agent_adapter import PydanticAdapter
+from kedi.agent_adapter import PydanticAdapter, execution
 from kedi.agent_adapter.approvals.policy import (
     ApprovalDecision,
     ApprovalPolicy,
     ApprovalRequest,
     resolve_tool_approval,
 )
-from kedi.agent_adapter import execution
 from kedi.agent_adapter.execution import _operation_event_loop, run_sync, use_async_owner_loop
 from kedi.agent_adapter.hooks import HookDispatcher, HookDispatcherSnapshot
 from kedi.agent_adapter.hooks.models import UserPromptSubmitRequest
