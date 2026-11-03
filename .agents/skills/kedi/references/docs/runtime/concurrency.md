@@ -106,6 +106,45 @@ custom adapter must be thread-safe or serialize its own critical section.
 Agent/tool calls must also keep invocation scopes isolated. Do not store
 request-specific mutable state on a shared adapter without synchronization.
 
+## Event Loops
+
+Synchronous Kedi work in a process shares one event loop while it overlaps in
+time: operations (`run_main`, a procedure called from Python, a test or eval
+run, an interactive fragment) started from any thread, direct adapter calls
+such as `adapter.invoke_sync()`, and tools run by the Codex App Server. Kedi
+starts the loop when work first needs it and, like `asyncio.run`, closes it once
+no work holds it. An operation holds it from its first model request to its
+end; nested calls, including procedures imported from other modules and native
+subagents, reuse it. Deterministic programs start no loop.
+
+Provider clients such as Pydantic AI's HTTP connection pool support one running
+loop at a time. One shared loop lets concurrent calls, provider retries, tool
+loops and delegations share a client safely, within a run and across runs.
+Decision-model clients shared on a loop are closed once, when Kedi stops using
+that loop. A Codex App Server client holds the loop from its first tool call
+until it is closed, so a background delegation outlives the tool that started
+it.
+
+Because the loop is shared, a coroutine that blocks it stalls all concurrent
+Kedi work in the process: offload blocking work from coroutines, for example
+with `asyncio.to_thread`. Synchronous Kedi code called directly from a
+coroutine, such as an async tool, blocks the loop that coroutine runs on, so
+Kedi runs that code's work on a separate loop instead of deadlocking.
+
+An async host that enters `use_async_owner_loop()` keeps its own loop instead
+(see [Embedding](../python-api/embedding.md)); decision-model clients shared on
+it are closed once no Kedi operation or call uses it.
+
+Not covered — these run on a loop of their own, so do not share one provider
+client between them and other work concurrently:
+
+- Synchronous Kedi code called directly from a coroutine running on a loop Kedi
+  uses (see above). A synchronous Codex App Server turn started from a coroutine
+  runs its tools on a loop of its own for the same reason.
+- Kedi work outside an async host's `use_async_owner_loop()` scope while the
+  host's loop runs Kedi work: the host's loop and Kedi's shared loop are
+  separate.
+
 ## Shared Pools
 
 Thread pools are process-global and cached by worker count. The first request

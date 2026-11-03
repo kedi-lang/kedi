@@ -2,31 +2,35 @@
 
 Pydantic AI providers support one running event loop at a time: an HTTP client used on a loop
 that has stopped is replaced, but a loop that is still running keeps sharing it, and pooled
-connections are bound to the loop that opened them. Synchronous Kedi runs every adapter call on
-its own short-lived loop, so concurrent calls whose follow-up requests (retries, tool-loop steps,
-delegation steps) reuse another loop's connection fail with "bound to a different event loop" or
+connections are bound to the loop that opened them. When synchronous Kedi ran every adapter call
+on its own short-lived loop, concurrent calls whose follow-up requests (retries, tool-loop steps,
+delegation steps) reused another loop's connection failed with "bound to a different event loop" or
 "Event loop is closed". These tests drive real OpenAIResponsesModel calls against a local fake
 Responses server; no credentials or network access are needed.
 
-Each synchronous operation now runs its async work on one event loop. A recording FunctionModel
-asserts that deterministically (overlapping requests share one loop); the HTTP cases confirm it
-end to end and run under a hard timeout, because the old failure could also hang.
+Synchronous Kedi work that overlaps in time now shares one loop: operations on any thread, direct
+adapter calls and Codex tool calls (design and invariants: docs/EVENT_LOOPS.md). A recording
+FunctionModel asserts that deterministically (overlapping requests share one loop); the HTTP cases
+confirm it end to end and run under a hard timeout, because the old failure could also hang.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import itertools
 import json
+import sys
 import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import Future as ConcurrentFuture
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -46,6 +50,7 @@ from kedi.agent_adapter import execution
 from kedi.agent_adapter.execution import _operation_event_loop, run_sync, use_async_owner_loop
 from kedi.agent_adapter.hooks import HookDispatcher, HookDispatcherSnapshot
 from kedi.agent_adapter.hooks.models import UserPromptSubmitRequest
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, HookSettings
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.engine import SequentialEngine
@@ -479,17 +484,80 @@ def test_operation_loop_rejects_use_after_close() -> None:
         scope.loop()
 
 
-def test_sync_code_on_the_operation_loop_keeps_a_nested_loop() -> None:
+@pytest.mark.parametrize("in_operation", [True, False], ids=["operation", "direct"])
+def test_sync_code_on_the_shared_loop_keeps_a_nested_loop(in_operation: bool) -> None:
     async def inner() -> asyncio.AbstractEventLoop:
         return asyncio.get_running_loop()
 
     async def outer() -> tuple[asyncio.AbstractEventLoop, asyncio.AbstractEventLoop]:
-        # Synchronous code running inline on the operation loop must not block it.
+        # Synchronous code running inline on the shared loop must not block it.
         return asyncio.get_running_loop(), run_sync(inner())
 
-    with _operation_event_loop():
-        operation, nested = run_sync(outer())
-    assert operation is not nested
+    with _operation_event_loop() if in_operation else nullcontext():
+        shared, nested = run_sync(outer())
+    assert shared is not nested
+
+
+@pytest.mark.parametrize("mode", ["direct", "operation", "nested"])
+def test_async_tool_running_a_sync_operation_inline_does_not_deadlock(mode: str) -> None:
+    recorder = _Recorder()
+    source = "\n".join(f">> Item {i}: [a{i}: str]" for i in range(2)) + _captures(2)
+    inner = compile_program(
+        parse_program(source), adapter=PydanticAdapter(FunctionModel(recorder.respond))
+    )
+
+    async def research() -> str:
+        """Research the topic."""
+        if mode == "nested":  # sync code, then a nested call's loop runs the operation inline
+
+            async def deeper() -> Any:
+                return inner.run_main()
+
+            return str(run_sync(deeper()))
+        return str(inner.run_main())  # blocks the loop running this tool
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if any(part.part_kind == "tool-return" for m in messages for part in m.parts):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(parts=[ToolCallPart("research", {})])
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    tool = ToolSpec(fn=research, name="research", description="Research", risk="read_only")
+
+    def run() -> str:
+        with adapter.tool_scope([tool]):
+            with _operation_event_loop() if mode == "operation" else nullcontext():
+                return adapter.invoke_sync(prompt="Go")
+
+    assert _bounded(run, 20) == "done"
+    assert len({id(loop) for loop, _, _ in recorder.spans}) == 1  # the inline operation's loop
+
+
+def test_a_last_release_on_the_shared_loop_itself_still_closes_it() -> None:
+    shared = execution._SharedLoop()
+    loop = shared.hold()
+
+    async def release() -> None:
+        shared.release(loop)
+
+    asyncio.run_coroutine_threadsafe(release(), loop).result(5)
+    fresh = shared.hold()  # waits for the closing loop
+    assert loop.is_closed() and fresh is not loop
+    shared.release(fresh)
+
+
+def test_holds_from_before_a_fork_are_stale_in_the_child() -> None:
+    shared = execution._SharedLoop()
+    parent = shared.hold()
+    owned = shared._owned
+    assert owned is not None
+    shared._reset()  # runs in a forked child, which has no loop thread
+    shared.release(parent)  # ignored there: held before the fork
+    child = shared.hold()
+    assert child is not parent and child.is_running()
+    shared.release(child)
+    assert child.is_closed()
+    owned.close()  # this process did not fork: stop the parent's loop
 
 
 # Decision models close their per-loop client after each synchronous call.
@@ -541,9 +609,70 @@ def test_concurrent_decisions_close_their_shared_client_once(host: bool) -> None
     assert model.clients == {}  # closed when the operation ended
 
 
+@pytest.mark.parametrize("host", [False, True], ids=["sync", "async-host"])
+def test_overlapping_operations_close_a_shared_decision_client_once(host: bool) -> None:
+    model = _DecisionModel()
+    single = ">> Item 0 is a duplicate [a0: bool]" + _captures(1)
+    chain = "\n".join(
+        ">> Item 0 is a duplicate [a0: bool]" if i == 0 else f">> After <a{i - 1}> [a{i}: bool]"
+        for i in range(4)
+    ) + _captures(4)
+    first, second = (
+        compile_program(parse_program(source), adapter=PydanticAdapter(model))
+        for source in (single, chain)
+    )
+
+    async def operations() -> Any:
+        async def later() -> Any:
+            await asyncio.sleep(0.05)  # ends while the chain has a call in flight
+            return await asyncio.to_thread(first.run_main)
+
+        with use_async_owner_loop() if host else nullcontext():
+            return await asyncio.gather(later(), asyncio.to_thread(second.run_main))
+
+    assert asyncio.run(operations()) == [[True], [True] * 4]
+    assert model.used_after_close == 0
+    assert model.clients == {}  # closed once the last operation on the loop ended
+
+
+class _Duplicate(BaseModel):
+    duplicate: bool
+
+
+@pytest.mark.parametrize("host", [False, True], ids=["sync", "async-host"])
+def test_overlapping_direct_decisions_close_a_shared_client_once(host: bool) -> None:
+    model = _DecisionModel()
+    adapter = PydanticAdapter(model)
+
+    async def calls() -> Any:
+        async def call(delay: float) -> Any:
+            await asyncio.sleep(delay)
+            return await asyncio.to_thread(
+                adapter.produce_sync, "Is the item a duplicate?", output_type=_Duplicate
+            )
+
+        with use_async_owner_loop() if host else nullcontext():
+            return await asyncio.gather(call(0), call(0.05))
+
+    asyncio.run(calls())
+    assert model.used_after_close == 0
+    assert model.clients == {}
+
+
+def test_a_decision_on_a_nested_loop_closes_its_client_itself() -> None:
+    model = _DecisionModel()
+    adapter = PydanticAdapter(model)
+
+    async def inline() -> Any:  # a sync call inside a coroutine runs on a loop of its own
+        return adapter.produce_sync("Is the item a duplicate?", output_type=_Duplicate)
+
+    assert run_sync(inline()).duplicate is True
+    assert model.clients == {}
+
+
 def test_cleanup_on_another_loop_is_not_deferred() -> None:
     async def defer() -> bool:
-        return execution._defer_to_operation_end(1, asyncio.sleep)
+        return execution._defer_loop_cleanup(1, asyncio.sleep)
 
     with _operation_event_loop():
         # A call on its own loop (not the operation's) closes its client itself.
@@ -700,3 +829,224 @@ def test_mcp_tool_works_in_consecutive_operations(monkeypatch: pytest.MonkeyPatc
     assert len({id(loop) for loop in first}) == len({id(loop) for loop in second}) == 1
     assert first[0] is not second[0]
     assert first[0].is_closed() and second[0].is_closed()
+
+
+# Work that starts outside one operation's context still shares one loop while it overlaps.
+
+
+def _concurrently(fn: Any, items: list[Any], seconds: float = 60.0) -> list[Any]:
+    """Call ``fn`` on every item at once, each from its own thread; fail instead of hanging."""
+    barrier = threading.Barrier(len(items))
+    results: dict[int, Any] = {}
+    errors: list[BaseException] = []
+
+    def target(index: int, item: Any) -> None:
+        try:
+            barrier.wait(5)
+            results[index] = fn(item)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=target, args=(i, item), daemon=True) for i, item in enumerate(items)
+    ]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + seconds
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    if any(thread.is_alive() for thread in threads):
+        raise AssertionError(f"Concurrent calls did not finish within {seconds} s")
+    if errors:
+        raise errors[0]
+    return [results[i] for i in range(len(items))]
+
+
+TWO_TOOL_LOOPS = (
+    LOOKUP
+    + "> profile: worker:\n  > instructions: Call lookup first.\n  > use: lookup\n\n> use: worker\n"
+    + "\n".join(f">> Item {i}: [a{i}: str]" for i in range(2))
+    + _captures(2)
+)
+
+
+def _runtimes(source: str, model: Any, count: int) -> list[Any]:
+    return [
+        compile_program(
+            parse_program(source, source_path="loops.kedi"), adapter=PydanticAdapter(model)
+        )
+        for _ in range(count)
+    ]
+
+
+def test_concurrent_operations_from_user_threads_share_one_loop() -> None:
+    recorder = _Recorder()
+    source = "\n".join(f">> Item {i}: [a{i}: str]" for i in range(2)) + _captures(2)
+    runtimes = _runtimes(source, FunctionModel(recorder.respond), 4)
+    assert _concurrently(lambda runtime: runtime.run_main(), runtimes) == [["ok", "ok"]] * 4
+    assert recorder.overlapping_loops() == 0
+
+
+def test_concurrent_direct_adapter_calls_share_one_loop() -> None:
+    recorder = _Recorder()
+    adapter = PydanticAdapter(FunctionModel(recorder.respond))
+    assert (
+        _concurrently(lambda i: adapter.invoke_sync(prompt=f"Item {i}"), [0, 1, 2, 3]) == ["ok"] * 4
+    )
+    assert recorder.overlapping_loops() == 0
+
+
+def test_codex_tool_bridge_runs_on_the_operation_loop() -> None:
+    from kedi.agent_adapter.adapters.codex.app_server import CodexAppServerClient
+
+    client = CodexAppServerClient((sys.executable,))
+    seen: list[asyncio.AbstractEventLoop] = []
+
+    async def record() -> str:
+        seen.append(asyncio.get_running_loop())
+        return "ok"
+
+    try:
+        with _operation_event_loop():
+            expected = execution._shared_execution_loop()
+            assert client._await_sync_result(contextvars.copy_context(), record()) == "ok"
+    finally:
+        client.close()
+    assert seen == [expected]
+
+
+def test_codex_tool_bridge_and_direct_calls_share_one_loop() -> None:
+    from kedi.agent_adapter.adapters.codex.app_server import CodexAppServerClient
+
+    client = CodexAppServerClient((sys.executable,))
+    recorder = _Recorder()
+    adapter = PydanticAdapter(FunctionModel(recorder.respond))
+    seen: list[asyncio.AbstractEventLoop] = []
+    started, finished = threading.Event(), threading.Event()
+
+    async def tool() -> str:
+        seen.append(asyncio.get_running_loop())
+        started.set()
+        while not finished.is_set():
+            await asyncio.sleep(0.01)
+        return "ok"
+
+    def bridge(_: Any) -> Any:
+        return client._await_sync_result(contextvars.copy_context(), tool())
+
+    try:
+        bridged = threading.Thread(target=bridge, args=(None,), daemon=True)
+        bridged.start()
+        assert started.wait(5)
+        assert adapter.invoke_sync(prompt="Item") == "ok"  # while the tool is running
+    finally:
+        finished.set()
+        client.close()
+    assert {id(loop) for loop, _, _ in recorder.spans} == {id(seen[0])}
+
+
+# The same over HTTP, where a second loop breaks the shared connection pool.
+
+
+def test_concurrent_operations_from_user_threads_over_http() -> None:
+    with _fake_model() as model:
+        runtimes = _runtimes(TWO_TOOL_LOOPS, model, 4)
+        assert _concurrently(lambda runtime: runtime.run_main(), runtimes) == [["ok", "ok"]] * 4
+
+
+def test_concurrent_direct_adapter_calls_over_http() -> None:
+    with _fake_model(fail_first=4) as model:
+        adapter = PydanticAdapter(model)
+        assert (
+            _concurrently(lambda i: adapter.invoke_sync(prompt=f"Item {i}"), [0, 1, 2, 3])
+            == ["ok"] * 4
+        )
+
+
+def test_codex_tool_calls_and_direct_calls_over_http() -> None:
+    from kedi.agent_adapter.adapters.codex.app_server import CodexAppServerClient
+
+    client = CodexAppServerClient((sys.executable,))
+    with _fake_model(fail_first=4) as model:
+        adapter = PydanticAdapter(model)
+
+        def call(bridged: bool) -> str:
+            if not bridged:
+                return adapter.invoke_sync(prompt="Direct")
+            return client._await_sync_result(
+                contextvars.copy_context(), adapter.invoke(prompt="Tool")
+            )
+
+        try:
+            assert _concurrently(call, [True, True, False, False]) == ["ok"] * 4
+        finally:
+            client.close()
+
+
+def test_codex_tool_bridge_under_an_async_host_uses_the_host_loop() -> None:
+    from kedi.agent_adapter.adapters.codex.app_server import CodexAppServerClient
+
+    client = CodexAppServerClient((sys.executable,))
+    seen: list[asyncio.AbstractEventLoop] = []
+
+    async def record() -> str:
+        seen.append(asyncio.get_running_loop())
+        return "ok"
+
+    async def host() -> asyncio.AbstractEventLoop:
+        with use_async_owner_loop():
+            context = contextvars.copy_context()
+            assert await asyncio.to_thread(client._await_sync_result, context, record()) == "ok"
+        return asyncio.get_running_loop()
+
+    try:
+        assert seen == [asyncio.run(host())]
+        assert client._tool_loop is None  # no shared loop held for the host's tools
+    finally:
+        client.close()
+
+
+def test_codex_sync_turn_inline_on_a_running_loop_keeps_a_tool_loop_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kedi.agent_adapter.adapters.codex import app_server
+
+    client = app_server.CodexAppServerClient((sys.executable,))
+    seen: list[asyncio.AbstractEventLoop] = []
+
+    async def tool_call() -> str:
+        seen.append(asyncio.get_running_loop())
+        return "ok"
+
+    def request(method: str, params: Any, **kwargs: Any) -> dict[str, Any]:
+        if method == "turn/start":  # the App Server calls the tool while the turn runs
+            bridge = client._thread_tools["thread"]["tool"].await_result
+            for _ in range(2):
+                assert bridge(contextvars.copy_context(), tool_call()) == "ok"
+            return {"turn": {"id": "turn"}}
+        return {}
+
+    state = app_server._TurnState(messages=["{}"])
+    state.done.set()
+    monkeypatch.setattr(client, "_start_thread", lambda params: {"thread": {"id": "thread"}})
+    monkeypatch.setattr(client, "request", request)
+    monkeypatch.setattr(client, "_turn_state", lambda turn_id: state)
+
+    async def inline() -> asyncio.AbstractEventLoop:
+        with pytest.raises(app_server.CodexAppServerProtocolError, match="without turn data"):
+            client.run_stateless_turn_sync(  # blocks this loop until the turn ends
+                thread_params={},
+                turn_params={},
+                tools={"tool": lambda: None},
+                tool_context=contextvars.copy_context(),
+                turn_timeout=1,
+            )
+        return asyncio.get_running_loop()
+
+    try:
+        blocked = asyncio.run(inline())
+        assert seen[0] is seen[1] and seen[0] is not blocked
+        assert not execution._SHARED_LOOP.runs(seen[0])
+    finally:
+        client.close()
+    assert seen[0].is_closed()

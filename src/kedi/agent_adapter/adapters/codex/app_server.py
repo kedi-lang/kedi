@@ -17,7 +17,13 @@ from threading import BoundedSemaphore, Event, Lock, RLock, Thread, current_thre
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 
 from kedi.agent_adapter.events import AgentMessagePhase, AgentMessageResolver
-from kedi.agent_adapter.execution import OwnedAsyncLoop
+from kedi.agent_adapter.execution import (
+    _SHARED_LOOP,
+    OwnedAsyncLoop,
+    _running_loop,
+    current_async_owner_loop,
+    run_sync,
+)
 from kedi.agent_adapter.subagents.control import current_live_input, current_live_revision
 
 from .live import TurnBindings, ensure_turn_current, run_cancellable_binding, run_cancellable_turn
@@ -140,7 +146,9 @@ class CodexAppServerClient:
         self._initialized = False
         self._last_disconnect: CodexAppServerDisconnected | None = None
         self._closed = False
-        self._tool_loop: OwnedAsyncLoop | None = None
+        self._tool_lock = Lock()
+        self._tool_loop: asyncio.AbstractEventLoop | None = None
+        self._private_tool_loop: OwnedAsyncLoop | None = None
         self._dynamic_slots = BoundedSemaphore(max_dynamic_requests)
         self._dynamic_executor = ThreadPoolExecutor(
             max_workers=dynamic_request_workers,
@@ -291,7 +299,15 @@ class CodexAppServerClient:
         )
         thread = _required_object(thread_response, "thread")
         resolved_thread_id = _required_string(thread, "id")
-        resolve_awaitable = await_result if await_result is not None else self._await_sync_result
+        # A sync turn called inline on a running loop blocks that loop until the turn ends, so
+        # its tools run on a loop of the client's own.
+        resolve_awaitable = (
+            await_result
+            if await_result is not None
+            else self._await_private_result
+            if _running_loop() is not None
+            else self._await_sync_result
+        )
         lifetime = TurnBindings()
         bindings = {
             name: _ToolBinding(
@@ -448,24 +464,40 @@ class CodexAppServerClient:
             self._fail_waiters(CodexAppServerDisconnected("Codex App Server client closed."))
             self._stop_process()
             self._dynamic_executor.shutdown(wait=False, cancel_futures=True)
-            tool_loop = self._tool_loop
+            private_tool_loop = self._private_tool_loop
+        with self._tool_lock:
+            tool_loop, self._tool_loop = self._tool_loop, None
         if tool_loop is not None:
-            tool_loop.close()
+            _SHARED_LOOP.release(tool_loop)
+        if private_tool_loop is not None:
+            private_tool_loop.close()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
 
     def _await_sync_result(self, context: Context, awaitable: Awaitable[Any]) -> Any:
         with self._start_lock:
-            if self._closed:
-                if inspect.iscoroutine(awaitable):
-                    awaitable.close()
-                raise CodexAppServerDisconnected("Codex App Server client is closed.")
-            if self._tool_loop is None:
-                self._tool_loop = OwnedAsyncLoop()
-            # A background delegation must outlive the dynamic tool that started it.
-            result = context.run(self._tool_loop.submit, run_cancellable_binding(awaitable))
+            self._ensure_open(awaitable)
+        if context.run(current_async_owner_loop) is None:
+            with self._tool_lock:  # not the start lock: holding can wait for a closing loop
+                if self._tool_loop is None and not self._closed:
+                    # A background delegation must outlive the dynamic tool that started it.
+                    self._tool_loop = _SHARED_LOOP.hold()
+        return context.run(run_sync, run_cancellable_binding(awaitable))
+
+    def _await_private_result(self, context: Context, awaitable: Awaitable[Any]) -> Any:
+        with self._start_lock:
+            self._ensure_open(awaitable)
+            if self._private_tool_loop is None:
+                self._private_tool_loop = OwnedAsyncLoop()
+            result = context.run(self._private_tool_loop.submit, run_cancellable_binding(awaitable))
         return result.result()
+
+    def _ensure_open(self, awaitable: Awaitable[Any]) -> None:
+        if self._closed:
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            raise CodexAppServerDisconnected("Codex App Server client is closed.")
 
     def _start_thread(self, params: JsonObject) -> JsonObject:
         try:
