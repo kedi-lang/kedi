@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -26,32 +27,38 @@ def with_pydantic_native_compaction(
     if settings.mode == "disabled":
         return capabilities
 
-    from pydantic_ai.models.anthropic import AnthropicCompaction, AnthropicModel
-    from pydantic_ai.models.openai import OpenAICompaction, OpenAIResponsesModel
     from pydantic_ai.models.wrapper import WrapperModel
 
     # Run budgets and other Kedi layers wrap the provider model; the provider decides support.
     while isinstance(model, WrapperModel):
         model = model.wrapped
-    if isinstance(model, OpenAIResponsesModel):
-        capability = OpenAICompaction(token_threshold=settings.threshold)
-    elif isinstance(model, AnthropicModel):
-        capability = (
-            AnthropicCompaction()
-            if settings.threshold is None
-            else AnthropicCompaction(token_threshold=settings.threshold)
-        )
-    else:
+    # A provider's model module imports that provider's SDK, which only its users install.
+    # Its models and capabilities exist only once the module is loaded, so never load it here.
+    capability: object | None = None
+    owned: list[type] = []
+    if "pydantic_ai.models.openai" in sys.modules:
+        from pydantic_ai.models.openai import OpenAICompaction, OpenAIResponsesModel
+
+        owned.append(OpenAICompaction)
+        if isinstance(model, OpenAIResponsesModel):
+            capability = OpenAICompaction(token_threshold=settings.threshold)
+    if "pydantic_ai.models.anthropic" in sys.modules:
+        from pydantic_ai.models.anthropic import AnthropicCompaction, AnthropicModel
+
+        owned.append(AnthropicCompaction)
+        if isinstance(model, AnthropicModel):
+            capability = (
+                AnthropicCompaction()
+                if settings.threshold is None
+                else AnthropicCompaction(token_threshold=settings.threshold)
+            )
+    if capability is None:
         raise CompactionSettingsError(
             "native compaction for Pydantic AI requires OpenAIResponsesModel or "
             f"AnthropicModel; got {type(model).__name__}"
         )
 
-    capabilities = [
-        item
-        for item in capabilities
-        if not isinstance(item, (OpenAICompaction, AnthropicCompaction))
-    ]
+    capabilities = [item for item in capabilities if not isinstance(item, tuple(owned))]
     capabilities.append(capability)
     return capabilities
 

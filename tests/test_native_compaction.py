@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
@@ -252,6 +253,32 @@ def test_pydantic_native_compaction_maps_openai_and_anthropic_capabilities() -> 
         item for item in anthropic_capabilities if isinstance(item, AnthropicCompaction)
     )
     assert anthropic.token_threshold == 75_000
+
+
+@pytest.mark.parametrize(
+    ("make_model", "unused", "capability"),
+    [
+        (_openai_responses_model, "anthropic", OpenAICompaction),
+        (_anthropic_model, "openai", AnthropicCompaction),
+    ],
+)
+def test_pydantic_native_compaction_never_imports_another_providers_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+    make_model: Any,
+    unused: str,
+    capability: type,
+) -> None:
+    # Users of one provider need not install the other's SDK: block it as if it were missing.
+    model = make_model()
+    monkeypatch.setitem(sys.modules, unused, None)
+    monkeypatch.delitem(sys.modules, f"pydantic_ai.models.{unused}")
+
+    capabilities = with_pydantic_native_compaction(
+        None, model=model, settings=CompactionSettings(threshold=18_000)
+    )
+
+    assert [type(item) for item in capabilities] == [capability]
+    assert f"pydantic_ai.models.{unused}" not in sys.modules
 
 
 def test_pydantic_native_compaction_sees_through_budget_wrappers() -> None:
