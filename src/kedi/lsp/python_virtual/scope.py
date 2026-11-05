@@ -179,7 +179,7 @@ def _collect_toplevel_scope(statements: Iterable[Stmt]) -> dict[str, ScopeName]:
             )
         elif isinstance(stmt, RawInvokeStmt):
             scope[stmt.name] = ScopeName(
-                typ="str",
+                typ=_type_to_python(stmt.type_expr, stmt.type_annotation),
                 source_range=_raw_invoke_name_range(stmt),
             )
         elif isinstance(stmt, TaskStmt):

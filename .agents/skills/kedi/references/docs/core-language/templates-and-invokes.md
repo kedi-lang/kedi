@@ -54,9 +54,26 @@ text:
 = <explanation>
 ```
 
-The result is always a string. `[explanation: str]` is accepted but redundant;
-any non-string capture type is invalid. A raw prompt cannot contain output
-fields such as `[count: int]`.
+An untyped capture is a string. `[explanation: str]` is accepted but redundant.
+
+Give the capture another type when the whole response should be that type:
+
+```kedi
+~Report(title, risks: list[str], score: int)
+
+[report: Report] << Review <diff> and report the main risks.
+[count: int] << How many services does <spec> describe?
+```
+
+Kedi sends the prompt unchanged and asks the adapter for the capture type
+through its native structured output. No field-filling rules are added, and the
+response schema is the type itself, not an object with one property per field.
+The value is validated like a template output and keeps its declared type, so a
+later `:=` is checked against it. A typed capture is a structured model call:
+the adapter must support structured output, and hooks and telemetry report it
+as structured rather than raw.
+
+A raw prompt cannot contain output fields such as `[count: int]`.
 
 ## Structured and Text Results
 
@@ -69,9 +86,11 @@ Choose `>>` with output fields when:
 
 Prefer `>>` with `[name: str]` even for one piece of prose when the result is a
 declared part of program dataflow. Choose `[name] << ...` only when deliberately
-retaining an opaque, provider-native text response without an output schema. Do
-not parse a predictable structured response from raw text when a typed output
-can express the contract directly.
+retaining an opaque, provider-native text response without an output schema.
+Choose `[name: Type] << ...` when one typed value is the whole answer and the
+prompt should reach the model exactly as written. Do not parse a predictable
+structured response from raw text when a typed output can express the contract
+directly.
 
 ## Procedure-Local Backend State
 

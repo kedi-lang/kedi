@@ -421,11 +421,7 @@ def test_raw_invoke_is_visible_in_virtual_python() -> None:
     assert virtual_scope_module._raw_invoke_name_range(RawInvokeStmt(name="x")) is None
 
 
-def test_raw_invoke_rejects_output_fields_and_non_string_capture_type() -> None:
-    with pytest.raises(KediParseError) as typed:
-        parse_program("[answer: int] << Hello\n")
-    assert any(d.code == "K-RAW-INVOKE-TYPE" for d in typed.value.diagnostics)
-
+def test_raw_invoke_rejects_output_fields() -> None:
     with pytest.raises(KediParseError) as output:
         parse_program("[answer] << Hello [field]\n")
     assert any(d.code == "K-RAW-INVOKE-OUTPUT" for d in output.value.diagnostics)

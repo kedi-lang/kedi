@@ -13,7 +13,7 @@
 
 Use spaces consistently. Declarations and executable statements follow source order. The first top-level Python fence, apart from comments/allowed metadata, is the prelude; it runs during compilation. Keep imports/constants/helpers there. Later Python blocks have fresh locals.
 
-Begin executable model prompts with `>>`. Same-indent continuation rows form **one** request with one output schema. Outputs become available only after that entire call completes. Start a new `>>` to use an earlier capture. A fieldless `>>` calls the model and discards its reply. `[answer] << prompt` preserves the entire reply as `str`; `<<` cannot contain output fields or a non-string capture type.
+Begin executable model prompts with `>>`. Same-indent continuation rows form **one** request with one output schema. Outputs become available only after that entire call completes. Start a new `>>` to use an earlier capture. A fieldless `>>` calls the model and discards its reply. `[answer] << prompt` preserves the entire reply as `str`; `[answer: Type] << prompt` sends the prompt unchanged (no field-filling rules) and returns `Type` through the adapter's native structured output, validated like a template output. `<<` cannot contain output fields.
 
 Use `<input>` for reading/rendering, `[output: T]` for capturing. Use `Annotated[T, "field meaning"]` to specify output semantics without changing T. Do not assume the prompt itself reads a path, searches the web, or observes external state.
 

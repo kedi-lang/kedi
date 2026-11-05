@@ -665,9 +665,15 @@ def _describe_ast_node(node) -> Optional[str]:
     if isinstance(node, TemplateLine):
         return "**Template line**\n\nPart of the surrounding template block's single model call."
     if isinstance(node, RawInvokeStmt):
+        if node.type_annotation in (None, "str"):
+            return (
+                f"**Raw model invoke** `{node.name}: str`\n\n"
+                "Raw model response from the active adapter. No structured output schema is used."
+            )
         return (
-            f"**Raw model invoke** `{node.name}: str`\n\n"
-            "Raw model response from the active adapter. No structured output schema is used."
+            f"**Raw model invoke** `{node.name}: {node.type_annotation}`\n\n"
+            "The prompt is sent unchanged; the active adapter returns this type through "
+            "native structured output."
         )
     if isinstance(node, VariableInitStmt):
         ann = node.type_annotation or "str"

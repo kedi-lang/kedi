@@ -169,14 +169,23 @@ class StatementCompiler:
         return self.compile_template_line(merged, trace_label=label)
 
     def compile_raw_invoke(self, stmt: RawInvokeStmt) -> Callable:
-        """Compile ``[name] << prompt`` as a raw string model invocation."""
+        """Compile ``[name] << prompt``; a non-``str`` capture type requests typed output."""
 
         def _fn(**kwargs: Any) -> Any:
             with self.rt.trace_frame(
                 KediTraceFrame(kind="template", label=f"raw invoke {stmt.name}", span=stmt.loc)
             ):
                 expr, _ = prepare_segments(self.rt, stmt.segments, kwargs)
-                return self.rt.invoke(expr, capture=stmt.name)
+                kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
+                output_type = kedi_type.resolve_required(self.rt, kwargs)
+                if output_type is None or output_type is str:
+                    return self.rt.invoke(expr, capture=stmt.name)
+                return self.rt.invoke(
+                    expr,
+                    capture=stmt.name,
+                    output_type=output_type,
+                    binding_contract=kedi_type,
+                )
 
         return _fn
 

@@ -901,19 +901,12 @@ def _walk_raw_invoke_stmt(self: _Walker, node: Node) -> RawInvokeStmt:
     type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
     type_expr = self._walk_type_expr(type_node) if type_node is not None else None
 
-    if type_node is not None:
-        if type_anno == "str":
-            self._warning(
-                type_node,
-                "Raw invoke captures always produce string values; ': str' is redundant.",
-                code="K-RAW-INVOKE-REDUNDANT-STR",
-            )
-        else:
-            self._error(
-                type_node,
-                "Raw invoke captures always produce string values.",
-                code="K-RAW-INVOKE-TYPE",
-            )
+    if type_node is not None and type_anno == "str":
+        self._warning(
+            type_node,
+            "Untyped raw invoke captures are already strings; ': str' is redundant.",
+            code="K-RAW-INVOKE-REDUNDANT-STR",
+        )
 
     prompt_node = _field(node, "prompt")
     segments = self._walk_template_expr(prompt_node) if prompt_node is not None else []

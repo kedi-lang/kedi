@@ -530,7 +530,8 @@ def _emit_raw_invoke_stmt(
     scope: dict[str, ScopeName],
     indent: str,
 ) -> None:
-    line = builder.add(f"{indent}{stmt.name}: str = cast(str, _kedi_placeholder())")
+    typ = _type_to_python(stmt.type_expr, stmt.type_annotation)
+    line = builder.add(f"{indent}{stmt.name}: {typ} = cast({typ}, _kedi_placeholder())")
     source_range = _raw_invoke_name_range(stmt)
     builder.add_symbol(
         kind="local",
@@ -538,7 +539,7 @@ def _emit_raw_invoke_stmt(
         source_range=source_range,
         virtual_range=_line_range(line, len(indent), stmt.name),
     )
-    scope[stmt.name] = ScopeName(typ="str", source_range=source_range)
+    scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
 
 
 def _emit_return(

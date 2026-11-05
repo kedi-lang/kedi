@@ -52,8 +52,9 @@ The reference describes public behavior. Internal modules not exported from
 
 - **Template call** is the Kedi-level `>>` operation. It may request structured
   output fields or discard a raw response when no fields are present.
-- **Raw invoke** is `[name] << prompt`, which retains the model's complete text
-  response as a string.
+- **Raw invoke** is `[name] << prompt`, which sends the prompt unchanged and
+  retains the model's complete text response as a string, or, with a typed
+  capture such as `[name: Report] << prompt`, the response as that type.
 - **Adapter invocation** is the runtime call through Kedi's `AgentAdapter`
   protocol.
 - **Provider request** is the outbound model or harness request made by an
