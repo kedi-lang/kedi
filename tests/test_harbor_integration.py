@@ -3646,7 +3646,7 @@ def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
             "harbor.agents",
             "harbor.agents.installed",
             "harbor.agents.installed.base",
-            "harbor.agents.model_connection",
+            "harbor.agents.agent_auth_resolution",
             "harbor.environments",
             "harbor.environments.base",
             "harbor.models",
@@ -3656,8 +3656,7 @@ def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
     }
 
     class ModelConnectionSpec:
-        def __init__(self, *, passthrough: bool = False) -> None:
-            self.passthrough = passthrough
+        pass
 
     class BaseEnvironment:
         pass
@@ -3709,7 +3708,7 @@ def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
 
     setattr(modules["harbor.agents.installed.base"], "BaseInstalledAgent", BaseInstalledAgent)
     setattr(
-        modules["harbor.agents.model_connection"],
+        modules["harbor.agents.agent_auth_resolution"],
         "ModelConnectionSpec",
         ModelConnectionSpec,
     )
@@ -3969,7 +3968,7 @@ def test_harbor_agent_installs_pinned_codex_helper_distribution(
     ]
     install_command = environment.root_calls[-1]["command"]
     assert "/installed-agent/codex_auth_helper-1.8.0-py3-none-any.whl" in install_command
-    assert "codex-auth-helper[websocket]==1.8.0" not in install_command
+    assert "codex-auth-helper[websocket]==1.10.1" not in install_command
 
     with pytest.raises(ValueError, match="requires a codex/ model"):
         KediAgent(
@@ -4373,7 +4372,7 @@ def test_harbor_agent_transfers_codex_auth_privately(
 
     asyncio.run(agent.install(environment))
     install_command = environment.root_calls[-1]["command"]
-    assert "codex-auth-helper[websocket]==1.8.0" in install_command
+    assert "codex-auth-helper[websocket]==1.10.1" in install_command
     assert source_secret not in install_command
 
     asyncio.run(agent.run("solve", environment, SimpleNamespace(metadata=None)))
@@ -4677,7 +4676,9 @@ def test_real_harbor_contract_when_extra_is_installed(
     assert isinstance(agent, BaseInstalledAgent)
     assert agent.name() == "kedi"
     assert agent.MODEL_CONNECTION is not None
-    assert agent.MODEL_CONNECTION.passthrough is True
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fixture-provider-key")
+    # The provider credential reaches the runner under its own name.
+    assert agent.model_connection.env["OPENROUTER_API_KEY"] == "fixture-provider-key"
 
     async def no_upload(*_args: Any, **_kwargs: Any) -> None:
         return None

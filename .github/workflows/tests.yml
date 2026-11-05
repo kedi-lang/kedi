@@ -141,8 +141,8 @@ jobs:
 
       - name: Run Harbor integration tests
         run: >-
-          uv run --no-dev --extra terminal-bench --with pytest==9.0.3 --python 3.12
-          --with 'cassetter[httpx]==0.5.0'
+          uv run --no-dev --extra terminal-bench --with pytest==9.2.0 --python 3.12
+          --with 'cassetter[httpx]==0.17.0'
           pytest tests/test_harbor_integration.py -q -p no:cov
 
       - name: Verify Terminal-Bench CLI
