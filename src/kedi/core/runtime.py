@@ -275,7 +275,15 @@ class KediRuntime:
             raise RuntimeError("m() called outside of a kedi procedure context")
         return self._kedi_run(expressions, env)
 
-    def invoke(self, expressions: Sequence[Expression], *, capture: str | None = None) -> Any:
+    def invoke(
+        self,
+        expressions: Sequence[Expression],
+        *,
+        capture: str | None = None,
+        output_type: Any | None = None,
+        binding_contract: Any | None = None,
+    ) -> Any:
+        """Send a raw prompt; ``output_type`` requests that type instead of the text reply."""
         env = self._current_env.get()
         if env is None:
             raise RuntimeError("invoke() called outside of a kedi procedure context")
@@ -291,7 +299,14 @@ class KediRuntime:
                 if isinstance(text, KediPromise):
                     deps.append(text._future)
 
-        result = self._invoke_text_parts(parts, deps, env, capture_key=capture)
+        result = self._invoke_text_parts(
+            parts,
+            deps,
+            env,
+            capture_key=capture,
+            output_type=output_type,
+            binding_contract=binding_contract,
+        )
         if capture is None:
             return None
         return result[capture]
@@ -403,8 +418,18 @@ class KediRuntime:
         env: ValueEnv,
         *,
         capture_key: str | None,
+        output_type: Any | None = None,
+        binding_contract: Any | None = None,
     ) -> Dict[str, Any]:
-        return _model_calls._invoke_text_parts(self, parts, deps, env, capture_key=capture_key)
+        return _model_calls._invoke_text_parts(
+            self,
+            parts,
+            deps,
+            env,
+            capture_key=capture_key,
+            output_type=output_type,
+            binding_contract=binding_contract,
+        )
 
     def _evaluate_claim(self, claim: str) -> bool:
         """Classify a rendered control-flow claim through the active agent lane."""

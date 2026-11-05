@@ -78,7 +78,10 @@ def _invoke_text_parts(
     env: ValueEnv,
     *,
     capture_key: str | None,
+    output_type: Any | None = None,
+    binding_contract: Any | None = None,
 ) -> Dict[str, Any]:
+    """Run a raw prompt: a text ``invoke``, or a typed ``produce`` when ``output_type`` is set."""
     if capture_key is not None:
         from kedi.lang.compiler.environment import assert_not_cli_args_identifier
 
@@ -95,12 +98,17 @@ def _invoke_text_parts(
         block_profile, adapter, captured_tool_specs
     )
 
-    def _call_invoke() -> str:
+    def _call_invoke() -> Any:
         resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
         prompt = "".join(resolved_parts)
 
         from kedi.agent_adapter.meta import SupportsProfileOverride
-        from kedi.agent_adapter.request import RawPromptBuilder, TextOutput, lower_request_sync
+        from kedi.agent_adapter.request import (
+            RawPromptBuilder,
+            TextOutput,
+            TypedOutput,
+            lower_request_sync,
+        )
         from kedi.agent_adapter.tools.specs import SupportsToolRegistration
 
         profile = block_profile
@@ -123,16 +131,30 @@ def _invoke_text_parts(
             def invoke_request(request: AgentRunRequest) -> str:
                 return str(lower_request_sync(adapter, request))
 
+            def produce_request(request: AgentRunRequest) -> Any:
+                value = self._validate_adapter_output(
+                    lower_request_sync(adapter, request), output_type, explicit_type=True
+                )
+                if profile.artifacts is None:
+                    return value
+                return self.artifacts.artifactize(
+                    value, policy=profile.artifacts, source=f"output:{capture_key}"
+                )
+
             with override_ctx:
                 return self._run_conversation_call(
                     adapter,
                     RawPromptBuilder(content=prompt).build(),
-                    invoke_request,
+                    invoke_request if output_type is None else produce_request,
                     instructions=instruction_parts,
                     tools=captured_tool_specs,
                     profile=profile,
-                    call_kind="invoke",
-                    output=TextOutput(),
+                    call_kind="invoke" if output_type is None else "produce",
+                    output=(
+                        TextOutput()
+                        if output_type is None
+                        else TypedOutput(output_type=output_type)
+                    ),
                     conversation_state=conversation_state,
                     conversation_ticket=conversation_ticket,
                     lane_identity=lane_identity,
@@ -147,7 +169,7 @@ def _invoke_text_parts(
             raise
         if capture_key is None:
             return {}
-        env[capture_key] = response
+        _declare_capture(env, capture_key, response, binding_contract)
         return {capture_key: response}
 
     from kedi.lang.compiler.environment import snapshot_visible_values
@@ -182,8 +204,18 @@ def _invoke_text_parts(
     if capture_key is None:
         return {}
     view = KediPromise(future, capture_key)
-    env[capture_key] = view
+    _declare_capture(env, capture_key, view, binding_contract)
     return {capture_key: view}
+
+
+def _declare_capture(env: ValueEnv, key: str, value: Any, contract: Any | None) -> None:
+    """Bind a raw invoke capture; a typed capture keeps its contract for later ``:=``."""
+    from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
+
+    if contract is not None and isinstance(env, ScopeFrame):
+        env.declare(key, value, BindingMetadata(type_contract=contract))
+    else:
+        env[key] = value
 
 
 def _evaluate_claim(self: KediRuntime, claim: str) -> bool:

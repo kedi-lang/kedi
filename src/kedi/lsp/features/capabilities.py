@@ -33,6 +33,7 @@ from kedi.lang.ast import (
     ProfileDefStmt,
     Program,
     ProgramWithValidation,
+    RawInvokeStmt,
     RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SettingsField,
@@ -403,6 +404,9 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
+            continue
+        if isinstance(stmt, RawInvokeStmt):
+            diagnostics.extend(_raw_invoke_capability_diagnostics(active, stmt, type_defs))
             continue
         if isinstance(stmt, TaskGroupStmt):
             for arm in stmt.arms:
@@ -913,12 +917,43 @@ def _template_line_capability_diagnostics(
     line: TemplateLine,
     type_defs: dict[str, TypeDef],
 ) -> list[lsp.Diagnostic]:
-    output_segments = [seg for seg in line.segments if isinstance(seg, OutputSegment)]
+    return _structured_output_diagnostics(
+        state,
+        [
+            (seg.type_expr, seg.loc, seg.type_expr.loc if seg.type_expr is not None else seg.loc)
+            for seg in line.segments
+            if isinstance(seg, OutputSegment)
+        ],
+        "structured template output fields",
+        type_defs,
+    )
+
+
+def _raw_invoke_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    stmt: RawInvokeStmt,
+    type_defs: dict[str, TypeDef],
+) -> list[lsp.Diagnostic]:
+    if stmt.type_annotation in (None, "str"):
+        return []
+    span = stmt.type_expr.loc if stmt.type_expr is not None else stmt.loc
+    return _structured_output_diagnostics(
+        state, [(stmt.type_expr, span, span)], "typed raw invoke captures", type_defs
+    )
+
+
+def _structured_output_diagnostics(
+    state: _AdapterDiagnosticState,
+    outputs: Sequence[tuple[TypeExpr | None, Span | None, Span | None]],
+    description: str,
+    type_defs: dict[str, TypeDef],
+) -> list[lsp.Diagnostic]:
+    """Check outputs, given as (type, capability span, format span), against the adapter."""
     diagnostics = _unsupported_capability_diagnostics(
         state,
         "structured_output",
-        [seg.loc for seg in output_segments],
-        "structured template output fields",
+        [capability_span for _, capability_span, _ in outputs],
+        description,
     )
     if diagnostics or state.shortname is None:
         return diagnostics
@@ -930,18 +965,11 @@ def _template_line_capability_diagnostics(
     if supported_formats is None:
         return diagnostics
 
-    for segment in output_segments:
-        unsupported = _unsupported_type_formats(
-            segment.type_expr,
-            type_defs,
-            supported_formats,
-        )
-        if not unsupported:
+    for type_expr, _, span in outputs:
+        unsupported = _unsupported_type_formats(type_expr, type_defs, supported_formats)
+        if not unsupported or span is None:
             continue
         type_name, schema_format = unsupported[0]
-        span = segment.type_expr.loc if segment.type_expr is not None else segment.loc
-        if span is None:
-            continue
         diagnostics.append(
             lsp.Diagnostic(
                 range=_span_to_range(span),

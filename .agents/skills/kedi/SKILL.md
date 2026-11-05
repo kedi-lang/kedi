@@ -34,6 +34,7 @@ Set `KEDI_SKILL` to the absolute directory containing this file. Use the same Py
 | `>> ... [field: Type]` | One structured model call; same-indent continuation rows share it |
 | `<name>` / `<procedure(args)>` | Read/render a value or call into text |
 | `[name] << ...` | Capture the complete raw model response as a string |
+| `[name: Type] << ...` | Send the prompt unchanged and get `Type` through the adapter's native structured output |
 | `[name: Type] = ...` / `[name] := ...` | Declare locally / update an existing nearest binding |
 | `@name(args) -> Type:` / `~Type(fields)` | Typed procedure / Pydantic-compatible data type |
 | ``= `expression` `` | Return a native Python value and end this invocation |

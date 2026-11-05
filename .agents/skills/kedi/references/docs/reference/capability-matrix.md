@@ -105,7 +105,8 @@ not only the adapter.
 | `stream_events` | Completed semantic commentary/final messages and run lifecycle events |
 | `hooks` | Agent lifecycle interception; support is declared separately for each event |
 
-Raw invokes with no structured fields can run on a text-only adapter. A profile
+Untyped raw invokes can run on a text-only adapter; a typed raw invoke capture
+needs `structured_output`. A profile
 may be syntactically valid but capability-invalid for its selected backend;
 that mismatch is an error before Kedi pretends the feature is active.
 
