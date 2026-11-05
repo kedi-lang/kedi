@@ -585,7 +585,7 @@ def _eval_history_fields(
 
     values = eval_settings_fields(rt, fields, env, scope="history")
     enabled = values.pop("enabled", enabled)
-    compaction_values = {
+    compaction_values: dict[str, object] = {
         name.removeprefix("compaction_"): value
         for name, value in values.items()
         if name in {"compaction_mode", "compaction_threshold"}

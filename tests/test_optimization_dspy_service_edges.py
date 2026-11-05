@@ -43,8 +43,10 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="No model"):
         service.configure_reflection_lm()
 
-    monkeypatch.setattr(dspy_config_module.dspy.settings, "lm", None, raising=False)
-    with pytest.raises(RuntimeError, match="not configured"):
+    with (
+        dspy_config_module.dspy.settings.context(lm=None),
+        pytest.raises(RuntimeError, match="not configured"),
+    ):
         service.verify_configured()
 
     class FakeLM:

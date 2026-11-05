@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import RLock
@@ -91,7 +91,7 @@ _execution_cells: ContextVar[dict[CapturedAgentProfile, _CaptureCell]] = Context
 
 
 @contextmanager
-def profile_capture_scope(captures: Iterable[CapturedAgentProfile]) -> Iterator[None]:
+def profile_capture_scope(captures: Iterable[CapturedAgentProfile]) -> Generator[None, None, None]:
     cells = {**_execution_cells.get(), **{capture: _CaptureCell() for capture in captures}}
     token = _execution_cells.set(cells)
     try:

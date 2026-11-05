@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
 from typing import Any, cast
@@ -12,7 +12,7 @@ _ACTIVE_MODELS: ContextVar[frozenset[tuple[int, int]]] = ContextVar(
 
 
 @asynccontextmanager
-async def model_responses_session(model: Any) -> AsyncIterator[None]:
+async def model_responses_session(model: Any) -> AsyncGenerator[None, None]:
     session_factory = getattr(model, "responses_session", None)
     if not callable(session_factory):
         yield
@@ -37,7 +37,7 @@ async def model_responses_session(model: Any) -> AsyncIterator[None]:
 
 
 @asynccontextmanager
-async def model_responses_turn(model: Any) -> AsyncIterator[None]:
+async def model_responses_turn(model: Any) -> AsyncGenerator[None, None]:
     """Separate one agent run's routing state from a reusable model connection."""
     async with model_responses_session(model):
         turn_factory = getattr(model, "responses_turn", None)

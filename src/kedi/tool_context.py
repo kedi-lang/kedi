@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
+from typing import Generator
 
 _KEDI_TOOL_CALL_DEPTH: ContextVar[int] = ContextVar(
     "kedi_tool_call_depth",
@@ -19,7 +19,7 @@ def inside_kedi_tool_call() -> bool:
 
 
 @contextmanager
-def kedi_tool_call_context() -> Iterator[None]:
+def kedi_tool_call_context() -> Generator[None, None, None]:
     """Mark nested execution as originating from a registered Kedi tool."""
 
     token = _KEDI_TOOL_CALL_DEPTH.set(_KEDI_TOOL_CALL_DEPTH.get() + 1)

@@ -14,10 +14,10 @@ from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
-from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[unresolved-import]
-from harbor.agents.model_connection import ModelConnectionSpec  # ty: ignore[unresolved-import]
-from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-import]
-from harbor.models.agent.context import AgentContext  # ty: ignore[unresolved-import]
+from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[import-not-found]
+from harbor.agents.model_connection import ModelConnectionSpec  # ty: ignore[import-not-found]
+from harbor.environments.base import BaseEnvironment  # ty: ignore[import-not-found]
+from harbor.models.agent.context import AgentContext  # ty: ignore[import-not-found]
 
 from ..._version import __version__
 from .records import HarnessPolicy, invocation_usage_dict
@@ -562,7 +562,7 @@ class KediAgent(BaseInstalledAgent):
         if self._codex_auth_file is None:  # pragma: no cover - guarded by caller
             raise RuntimeError("Codex auth source is unavailable")
 
-        from codex_auth_helper import (  # ty: ignore[unresolved-import, unused-ignore-comment]  # Optional TB extra.
+        from codex_auth_helper import (  # ty: ignore[import-not-found, unused-ignore-comment]  # Optional TB extra.
             CodexAuthConfig,
             CodexAuthState,
             CodexAuthStore,

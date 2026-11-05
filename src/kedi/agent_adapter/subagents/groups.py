@@ -6,7 +6,7 @@ from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Generator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .native import NativeSubagentOwner, SubagentTask
@@ -70,7 +70,7 @@ class ProcessingRegion:
         self.owner.runtime._engine.wait(future)
 
     @contextmanager
-    def activate(self) -> Iterator[None]:
+    def activate(self) -> Generator[None, None, None]:
         token = _regions.set((*_regions.get(), self))
         try:
             self.check()

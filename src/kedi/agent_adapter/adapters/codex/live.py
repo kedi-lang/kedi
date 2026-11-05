@@ -19,7 +19,7 @@ from kedi.agent_adapter.subagents.control import (
 T = TypeVar("T")
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from .app_server import CodexTurnResult
 
@@ -34,7 +34,7 @@ class TurnBindings:
         self._tasks: dict[asyncio.Future[Any], bool] = {}
 
     @contextmanager
-    def binding(self) -> Iterator[None]:
+    def binding(self) -> Generator[None, None, None]:
         with self._condition:
             if self._closed:
                 raise asyncio.CancelledError

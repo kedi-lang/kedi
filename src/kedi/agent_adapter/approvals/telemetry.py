@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from time import perf_counter
@@ -53,7 +53,7 @@ def approval_span(
     request: ApprovalRequest,
     *,
     mechanism: ApprovalMechanism,
-) -> Iterator[ApprovalTelemetry]:
+) -> Generator[ApprovalTelemetry, None, None]:
     """Trace one blocking approval decision without recording tool arguments."""
 
     parent = current_span()

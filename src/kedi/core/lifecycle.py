@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Condition
@@ -21,7 +21,7 @@ class RuntimeLifecycle:
         )
 
     @contextmanager
-    def admission(self) -> Iterator[None]:
+    def admission(self) -> Generator[None, None, None]:
         owner = RunCancellation()
         with self._condition:
             nested = self._current.get() in self._owners

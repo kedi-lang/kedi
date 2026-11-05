@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from time import perf_counter
@@ -115,7 +115,7 @@ def compact_history_span(
     adapter_name: str | None = None,
     input_messages: int | None = None,
     input_tokens: int | None = None,
-) -> Iterator[CompactionTelemetry]:
+) -> Generator[CompactionTelemetry, None, None]:
     """Trace one attempted native or Kedi-owned history compaction."""
 
     normalized_trigger = _span_trigger(trigger)

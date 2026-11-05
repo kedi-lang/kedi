@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
@@ -71,7 +71,7 @@ def evaluate_iterable(
 
 
 @contextmanager
-def managed_loop_iterator(values: Iterator[Any]) -> Iterator[Iterator[Any]]:
+def managed_loop_iterator(values: Iterator[Any]) -> Generator[Iterator[Any], None, None]:
     """Close a loop iterator when traversal finishes or its body fails."""
     try:
         yield values
@@ -82,7 +82,9 @@ def managed_loop_iterator(values: Iterator[Any]) -> Iterator[Iterator[Any]]:
 
 
 @contextmanager
-def branch_trace(rt: KediRuntime, stmt: IfStmt, *, alternative: bool) -> Iterator[None]:
+def branch_trace(
+    rt: KediRuntime, stmt: IfStmt, *, alternative: bool
+) -> Generator[None, None, None]:
     """Add the selected branch to Kedi's source-mapped traceback stack."""
     with rt.trace_frame(
         KediTraceFrame(
@@ -95,7 +97,9 @@ def branch_trace(rt: KediRuntime, stmt: IfStmt, *, alternative: bool) -> Iterato
 
 
 @contextmanager
-def loop_trace(rt: KediRuntime, stmt: LoopStmt | ConditionalLoopStmt) -> Iterator[None]:
+def loop_trace(
+    rt: KediRuntime, stmt: LoopStmt | ConditionalLoopStmt
+) -> Generator[None, None, None]:
     """Cover iterable evaluation and traversal with one loop trace frame."""
     with rt.trace_frame(KediTraceFrame(kind="loop", label="loop", span=stmt.loc)):
         yield
@@ -110,7 +114,7 @@ def assert_conditional_loop_capacity(rt: KediRuntime, completed_iterations: int)
 
 
 @contextmanager
-def child_scope(rt: KediRuntime, parent: dict[str, Any]) -> Iterator[ScopeFrame]:
+def child_scope(rt: KediRuntime, parent: dict[str, Any]) -> Generator[ScopeFrame, None, None]:
     """Activate one lexical child frame and restore the previous frame afterward."""
     frame = ScopeFrame(parent=parent)
     token = rt._current_env.set(frame)
@@ -126,7 +130,7 @@ def loop_binding(
     env: dict[str, Any],
     name: str,
     value: Any,
-) -> Iterator[ScopeFrame]:
+) -> Generator[ScopeFrame, None, None]:
     """Create one isolated iteration frame containing its synthetic binder."""
     assert_not_cli_args_identifier(name)
     with child_scope(rt, env) as frame:
@@ -152,7 +156,7 @@ def frame_promise_dependencies(frame: ScopeFrame) -> list[Any]:
 
 
 @contextmanager
-def active_scope(rt: KediRuntime, frame: ScopeFrame) -> Iterator[None]:
+def active_scope(rt: KediRuntime, frame: ScopeFrame) -> Generator[None, None, None]:
     """Reactivate a retained frame for its deferred map continuation."""
     token = rt._current_env.set(frame)
     try:

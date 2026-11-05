@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from copy import copy
 from types import FrameType
@@ -53,7 +53,9 @@ def _transport_profile_model(model: Model) -> Model:
 
 
 @contextmanager
-def transport_model_scope(agent: Agent[Any, Any], model: Model | None) -> Iterator[None]:
+def transport_model_scope(
+    agent: Agent[Any, Any], model: Model | None
+) -> Generator[None, None, None]:
     if model is None:
         yield
         return

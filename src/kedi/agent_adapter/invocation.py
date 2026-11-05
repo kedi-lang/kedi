@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -43,7 +43,7 @@ _INVOCATION_OBSERVER: ContextVar[InvocationObserver | None] = ContextVar(
 
 
 @contextmanager
-def observe_invocations(observer: InvocationObserver) -> Iterator[None]:
+def observe_invocations(observer: InvocationObserver) -> Generator[None, None, None]:
     previous = _INVOCATION_OBSERVER.get()
 
     if previous is None:

@@ -11,7 +11,7 @@ import stat
 import subprocess
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -334,7 +334,7 @@ def _commit_staged_package(root: Path, package_name: str, staging: Path, target:
 
 
 @contextmanager
-def _package_install_lock(root: Path, package_name: str) -> Iterator[None]:
+def _package_install_lock(root: Path, package_name: str) -> Generator[None, None, None]:
     key = (str(root), package_name)
     with _THREAD_LOCKS_GUARD:
         thread_lock = _THREAD_LOCKS.setdefault(key, threading.Lock())

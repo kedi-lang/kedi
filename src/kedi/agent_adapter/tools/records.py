@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
-from typing import Any, Iterator, Literal
+from typing import Any, Generator, Literal
 
 ExecutionState = Literal["not_started", "running", "returned", "raised", "interrupted"]
 ResultState = Literal["not_ready", "ready", "handed_off", "failed", "unknown"]
@@ -122,7 +122,7 @@ _handoff: ContextVar[ToolResultHandoff | None] = ContextVar(
 
 
 @contextmanager
-def defer_tool_handoff(handoff: ToolResultHandoff) -> Iterator[None]:
+def defer_tool_handoff(handoff: ToolResultHandoff) -> Generator[None, None, None]:
     token = _handoff.set(handoff)
     try:
         yield
@@ -147,7 +147,7 @@ _tracker: ContextVar[ToolCallTracker | None] = ContextVar("kedi_tool_call_tracke
 
 
 @contextmanager
-def track_tool_call(tool_call_id: str) -> Iterator[ToolCallTracker]:
+def track_tool_call(tool_call_id: str) -> Generator[ToolCallTracker, None, None]:
     tracker = ToolCallTracker(tool_call_id)
     token = _tracker.set(tracker)
     try:
@@ -161,7 +161,7 @@ def current_tool_call_tracker() -> ToolCallTracker | None:
 
 
 @contextmanager
-def bind_tool_call_tracker(tracker: ToolCallTracker) -> Iterator[None]:
+def bind_tool_call_tracker(tracker: ToolCallTracker) -> Generator[None, None, None]:
     token = _tracker.set(tracker)
     try:
         yield

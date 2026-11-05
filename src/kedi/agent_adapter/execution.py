@@ -16,15 +16,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
 from contextlib import contextmanager, nullcontext
 from threading import Condition, Event, Lock, Thread
-from typing import (
-    Awaitable,
-    Callable,
-    Coroutine,
-    Iterator,
-    ParamSpec,
-    TypeVar,
-    cast,
-)
+from typing import Awaitable, Callable, Coroutine, Generator, ParamSpec, TypeVar, cast
 
 _T = TypeVar("_T")
 _P = ParamSpec("_P")
@@ -43,7 +35,7 @@ def current_async_owner_loop() -> asyncio.AbstractEventLoop | None:
 
 
 @contextmanager
-def use_async_owner_loop() -> Iterator[None]:
+def use_async_owner_loop() -> Generator[None, None, None]:
     """Route worker-thread sync calls to an async host's existing event loop.
 
     Enter this in the host coroutine, then run synchronous Kedi code with
@@ -280,7 +272,7 @@ class _HostLoops:
         ] = {}
 
     @contextmanager
-    def use(self, loop: asyncio.AbstractEventLoop) -> Iterator[None]:
+    def use(self, loop: asyncio.AbstractEventLoop) -> Generator[None, None, None]:
         with self._lock:
             self._users[loop] = self._users.get(loop, 0) + 1
         try:
@@ -364,7 +356,7 @@ def _blocked_loops() -> frozenset[asyncio.AbstractEventLoop]:
 
 
 @contextmanager
-def _blocking() -> Iterator[frozenset[asyncio.AbstractEventLoop]]:
+def _blocking() -> Generator[frozenset[asyncio.AbstractEventLoop], None, None]:
     """Record that this thread's running loop is blocked by the synchronous wait inside."""
     blocked = _blocked_loops()
     token = _BLOCKED_LOOPS.set(blocked)
@@ -375,7 +367,7 @@ def _blocking() -> Iterator[frozenset[asyncio.AbstractEventLoop]]:
 
 
 @contextmanager
-def _operation_event_loop() -> Iterator[None]:
+def _operation_event_loop() -> Generator[None, None, None]:
     """Run one synchronous operation's async work on a single event loop.
 
     A no-op inside an enclosing operation. Under an async host the host's loop is used;
@@ -466,7 +458,7 @@ async def _resolve_deadline(awaitable: Awaitable[_T]) -> _T:
 
 
 @contextmanager
-def use_run_deadline(deadline_monotonic: float | None) -> Iterator[None]:
+def use_run_deadline(deadline_monotonic: float | None) -> Generator[None, None, None]:
     """Apply an absolute deadline to adapter calls, including copied worker contexts."""
     parent = _RUN_DEADLINE.get()
     deadline = (

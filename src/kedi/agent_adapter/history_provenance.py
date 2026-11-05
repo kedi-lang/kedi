@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -21,7 +21,7 @@ _ACTIVE: ContextVar[HistoryProvenance | None] = ContextVar("kedi_history_provena
 
 
 @contextmanager
-def history_source_scope(run_id: str, location: Span | None) -> Iterator[None]:
+def history_source_scope(run_id: str, location: Span | None) -> Generator[None, None, None]:
     token = _SOURCE.set((run_id, location))
     try:
         yield
@@ -69,7 +69,7 @@ class HistoryProvenance:
         self.tools: dict[str, HistoryOrigin] = {}
 
     @contextmanager
-    def bind(self, *, enabled: bool = True) -> Iterator[None]:
+    def bind(self, *, enabled: bool = True) -> Generator[None, None, None]:
         token = _ACTIVE.set(self if enabled else None)
         try:
             yield

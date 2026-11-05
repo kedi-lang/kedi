@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Sequence
+from typing import Any, Generator, Sequence
 
 from .errors import RequiredToolCallError
 from .specs import ToolSpec
@@ -35,7 +35,7 @@ _artifact_admission_context: ContextVar[tuple[Any, Any] | None] = ContextVar(
 
 
 @contextmanager
-def defer_artifact_admission() -> Iterator[None]:
+def defer_artifact_admission() -> Generator[None, None, None]:
     """Keep nested tool results raw until an owning composite tool returns."""
 
     token = _defer_artifact_admission.set(True)
@@ -46,7 +46,7 @@ def defer_artifact_admission() -> Iterator[None]:
 
 
 @contextmanager
-def artifact_admission_scope(*, manager: Any, policy: Any) -> Iterator[None]:
+def artifact_admission_scope(*, manager: Any, policy: Any) -> Generator[None, None, None]:
     """Expose live artifact resources to adapter-native tool middleware."""
 
     token = _artifact_admission_context.set((manager, policy))
@@ -73,7 +73,7 @@ def required_tool_call_scope(
     tools: Sequence[ToolSpec],
     *,
     inherit: bool = False,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Track required tools in an isolated frame, optionally reusing an adapter-owned frame."""
 
     names = frozenset(
@@ -116,7 +116,7 @@ class ToolScope:
         )
 
     @contextmanager
-    def tool_scope(self, tools: Sequence[Any] = ()) -> Iterator[None]:
+    def tool_scope(self, tools: Sequence[Any] = ()) -> Generator[None, None, None]:
         token = self._scoped_tools.set(())
         try:
             for tool in tools:

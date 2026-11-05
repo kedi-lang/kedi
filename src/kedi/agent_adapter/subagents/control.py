@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import json
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -320,7 +320,9 @@ def sender_is_current(control: LiveInput) -> bool:
 
 
 @contextmanager
-def live_input_scope(control: LiveInput | None, *, revision: int | None = None) -> Iterator[None]:
+def live_input_scope(
+    control: LiveInput | None, *, revision: int | None = None
+) -> Generator[None, None, None]:
     pinned_revision = (
         (current_live_revision(control) if revision is None else revision)
         if control is not None

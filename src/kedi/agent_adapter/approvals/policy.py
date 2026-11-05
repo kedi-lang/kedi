@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Iterator, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from typing import Any, Generator, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 from ...errors import KediExecutionError
 
@@ -303,7 +303,7 @@ async def _resolve_awaitable(result: Awaitable[ApprovalDecision]) -> ApprovalDec
 
 
 @contextmanager
-def _approval_handler_agent_scope() -> Iterator[None]:
+def _approval_handler_agent_scope() -> Generator[None, None, None]:
     """Keep backend selection while isolating a nested approval-model call."""
 
     from ...agent_profile.profile import AgentProfile

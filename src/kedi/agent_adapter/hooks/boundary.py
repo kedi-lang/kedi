@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import functools
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Iterator, ParamSpec, TypeVar, cast
+from typing import Any, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 from ..events import (
@@ -82,7 +82,7 @@ def hooked_agent_run(prompt_argument: str) -> Callable[[Callable[P, R]], Callabl
 def prepared_agent_hook_run(
     adapter: HookRegistrationMixin,
     prompt: str,
-) -> Iterator[PreparedAgentPrompt]:
+) -> Generator[PreparedAgentPrompt, None, None]:
     """Resolve prompt mutation before request assembly and suppress nested redispatch."""
 
     dispatcher, identity = _dispatcher_for(adapter)
@@ -112,7 +112,7 @@ def prepared_agent_hook_run(
 async def prepared_agent_hook_run_async(
     adapter: HookRegistrationMixin,
     prompt: str,
-) -> AsyncIterator[PreparedAgentPrompt]:
+) -> AsyncGenerator[PreparedAgentPrompt, None]:
     """Async counterpart of :func:`prepared_agent_hook_run`."""
 
     dispatcher, identity = _dispatcher_for(adapter)
@@ -142,7 +142,7 @@ async def prepared_agent_hook_run_async(
 async def native_agent_hook_run(
     adapter: HookRegistrationMixin,
     prompt: Any,
-) -> AsyncIterator[Any]:
+) -> AsyncGenerator[Any, None]:
     """Bind hooks for a native adapter run that did not enter a decorated Kedi method."""
 
     if current_hook_dispatcher() is not None or not isinstance(prompt, str):

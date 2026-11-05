@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
+from typing import Generator
 
 from .profile import AgentProfile
 
@@ -20,7 +20,7 @@ def current_block_agent_profile() -> AgentProfile:
 
 
 @contextmanager
-def block_agent_profile_scope(profile: AgentProfile) -> Iterator[None]:
+def block_agent_profile_scope(profile: AgentProfile) -> Generator[None, None, None]:
     current = _block_agent_profile.get()
     effective = profile if current is None else current.merge(profile)
     token = _block_agent_profile.set(effective)
@@ -31,7 +31,7 @@ def block_agent_profile_scope(profile: AgentProfile) -> Iterator[None]:
 
 
 @contextmanager
-def replace_block_agent_profile_scope(profile: AgentProfile) -> Iterator[None]:
+def replace_block_agent_profile_scope(profile: AgentProfile) -> Generator[None, None, None]:
     """Temporarily replace, rather than merge, the active lexical agent profile."""
 
     token = _block_agent_profile.set(profile)

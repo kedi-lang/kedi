@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -36,7 +36,7 @@ def current_subagent_execution() -> SubagentExecutionContext | None:
 @contextmanager
 def _subagent_execution_scope(
     context: SubagentExecutionContext,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     token = _current_subagent_execution.set(context)
     try:
         yield

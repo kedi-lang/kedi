@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, Callable, Generator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import Any, Mapping
@@ -75,7 +75,9 @@ def estimate_history_tokens(state: Mapping[str, Any]) -> int:
 
 
 @contextmanager
-def observe_model_admissions(observer: Callable[[Sequence[ModelMessage]], None]) -> Iterator[None]:
+def observe_model_admissions(
+    observer: Callable[[Sequence[ModelMessage]], None],
+) -> Generator[None, None, None]:
     token = _MODEL_ADMISSION.set(observer)
     try:
         yield

@@ -40,3 +40,24 @@ def test_explicit_reflection_model_keeps_separate_configuration(monkeypatch):
     )
     assert reflection("Improve this instruction") == ["candidate instruction"]
     constructor.return_value.assert_called_once_with("Improve this instruction")
+
+
+def test_explicit_reflection_lm_is_a_base_lm_and_forwards_messages(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    base = Mock(return_value=["sync"])
+    base.acall = AsyncMock(return_value=["async"])
+    monkeypatch.setattr(
+        "kedi.optimization.gepa_reflection.ThinkingStrippingLM", Mock(return_value=base)
+    )
+    reporter = BufferReporter()
+    reflection = build_reflection_lm(OptimizerConfig(reflection_model="openai:gpt-6-sol"), reporter)
+    messages = [{"role": "user", "content": "Improve"}]
+
+    assert isinstance(reflection, dspy.BaseLM)
+    assert reflection(messages=messages) == ["sync"]
+    base.assert_called_once_with(None, messages=messages)
+    assert asyncio.run(reflection.acall("Improve", temperature=0.5)) == ["async"]
+    base.acall.assert_awaited_once_with("Improve", temperature=0.5)
+    assert "Reflection LM call #2" in reporter.getvalue()

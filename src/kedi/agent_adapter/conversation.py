@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Generator, Iterable
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 from threading import Condition, RLock, local
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, runtime_checkable
 
 from kedi.artifacts import ArtifactHistory, ArtifactManager
 
@@ -162,7 +162,7 @@ class ConversationState:
         ticket: ConversationTurnTicket | None = None,
         lane_identity: str | None = None,
         retain_failed_turn: bool = False,
-    ) -> Iterator[AdapterConversationContext]:
+    ) -> Generator[AdapterConversationContext, None, None]:
         current_task = _current_async_task()
         if getattr(self._sync_turn_local, "active", False) or (
             current_task is not None and self._async_turn_owner.get() is current_task
@@ -195,7 +195,7 @@ class ConversationState:
         *,
         ticket: ConversationTurnTicket | None = None,
         lane_identity: str | None = None,
-    ) -> AsyncIterator[AdapterConversationContext]:
+    ) -> AsyncGenerator[AdapterConversationContext, None]:
         """Task-safe async form that never blocks the event-loop thread while queued."""
 
         current_task = asyncio.current_task()

@@ -5,7 +5,7 @@ import inspect
 import re
 import warnings
 from collections import defaultdict, deque
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
@@ -182,7 +182,7 @@ class HistoryProcessorRunner(Generic[MessageT]):
         reuse_existing: bool = False,
         processor: HistoryProcessorCallback[MessageT] | None | _UseDefault = _USE_DEFAULT,
         condition: HistoryProcessorCondition | None | _UseDefault = _USE_DEFAULT,
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         current = self._run_state.get()
         if reuse_existing and current is not None and not current.native_scope_active:
             # invoke() enters the native iter() once; tool-driven child runs must

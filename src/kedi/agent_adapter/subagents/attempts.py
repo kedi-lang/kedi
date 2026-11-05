@@ -5,7 +5,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from threading import Lock
-from typing import Iterator, Literal, TypeAlias
+from typing import Generator, Literal, TypeAlias
 from uuid import uuid4
 
 from .runs import SubagentRunStatus, safe_subagent_error_message
@@ -187,7 +187,7 @@ _ACTIVE_ATTEMPT: ContextVar[DelegationAttemptHandle | None] = ContextVar(
 @contextmanager
 def delegation_scope(
     policy: DelegationFailurePolicy,
-) -> Iterator[DelegationAttemptLedger]:
+) -> Generator[DelegationAttemptLedger, None, None]:
     if policy not in {"recover", "fail_closed"}:
         raise ValueError(f"Unknown subagent failure policy: {policy!r}")
     ledger = DelegationAttemptLedger()
@@ -209,7 +209,7 @@ def track_delegation_attempt(
     *,
     requested_profile: str,
     task: str,
-) -> Iterator[DelegationAttemptHandle | None]:
+) -> Generator[DelegationAttemptHandle | None, None, None]:
     ledger = _ACTIVE_LEDGER.get()
     if ledger is None:
         yield None

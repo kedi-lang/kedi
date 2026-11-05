@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from time import perf_counter
 
@@ -12,7 +12,7 @@ def codemode_span(
     name: str,
     operation: str,
     attributes: Mapping[str, bool | str | int | float],
-) -> Iterator[TelemetrySpan]:
+) -> Generator[TelemetrySpan, None, None]:
     """Trace a payload-free CodeMode operation and its operational cost."""
 
     started_at = perf_counter()
