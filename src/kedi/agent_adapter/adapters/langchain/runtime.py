@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
-from typing import Any, Iterator, Literal, Mapping, Sequence
+from typing import Any, Generator, Literal, Mapping, Sequence
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, hook_config
@@ -70,7 +70,7 @@ def record_live_tool_result(result: Any) -> None:
 
 
 @contextmanager
-def langchain_run_scope(limits: UsageLimits | None) -> Iterator[LangChainRunState]:
+def langchain_run_scope(limits: UsageLimits | None) -> Generator[LangChainRunState, None, None]:
     limits = limits if limits is not None else UsageLimits()
     if limits.count_tokens_before_request:
         raise ValueError(

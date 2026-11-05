@@ -18,7 +18,8 @@ def build_reflection_lm(
 ) -> Any:
     """Use the configured main LM unless a separate reflection model is requested."""
     if not config.reflection_model:
-        main_lm = dspy.settings.lm
+        # DSPy 3.4.1 leaves `lm` out of its default settings until one is configured.
+        main_lm = getattr(dspy.settings, "lm", None)
         if main_lm is None:
             raise ValueError("Configure a main DSPy LM or an explicit reflection model for GEPA")
         reporter.emit("\nUsing the configured main DSPy LM for GEPA reflection")
@@ -39,23 +40,40 @@ def build_reflection_lm(
 
     reflection_call_count = {"count": 0}
 
-    class TracedReflectionLM:
-        """Wrapper that traces reflection LM calls while maintaining DSPy compatibility."""
+    class TracedReflectionLM(dspy.BaseLM):
+        """Trace reflection calls and delegate them to the wrapped LM.
+
+        DSPy runs GEPA reflection inside a ``Predict``, which accepts only ``BaseLM``
+        instances; the wrapped LM still owns request execution.
+        """
 
         def __init__(self, base_lm: Any, model_name: str, call_count: dict[str, int]) -> None:
+            super().__init__(model=model_name)
             self.base_lm = base_lm
             self.model_name = model_name
-            self.model = model_name
             self.call_count = call_count
 
-        def __call__(self, prompt: Any) -> Any:
+        def _trace_call(self) -> None:
             self.call_count["count"] += 1
             reporter.emit(
                 f"\n💭 Reflection LM call #{self.call_count['count']}",
                 flush=True,
             )
             reporter.emit(f"   Model: {self.model_name}", flush=True)
-            result = self.base_lm(prompt)
+
+        @staticmethod
+        def _forwarded(messages: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+            return kwargs if messages is None else {**kwargs, "messages": messages}
+
+        def __call__(self, prompt: Any = None, *, messages: Any = None, **kwargs: Any) -> Any:
+            self._trace_call()
+            result = self.base_lm(prompt, **self._forwarded(messages, kwargs))
+            reporter.emit("   ✅ Reflection complete", flush=True)
+            return result
+
+        async def acall(self, prompt: Any = None, *, messages: Any = None, **kwargs: Any) -> Any:
+            self._trace_call()
+            result = await self.base_lm.acall(prompt, **self._forwarded(messages, kwargs))
             reporter.emit("   ✅ Reflection complete", flush=True)
             return result
 

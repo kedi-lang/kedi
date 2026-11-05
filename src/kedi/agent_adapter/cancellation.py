@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Lock
@@ -69,7 +69,7 @@ def check_run_cancelled() -> None:
 
 
 @contextmanager
-def use_run_cancellation(owner: RunCancellation) -> Iterator[None]:
+def use_run_cancellation(owner: RunCancellation) -> Generator[None, None, None]:
     """Nested owners cannot disable cancellation requested by an outer owner."""
     parents = _RUN_CANCELLATIONS.get()
     token = _RUN_CANCELLATIONS.set(parents if owner in parents else (*parents, owner))

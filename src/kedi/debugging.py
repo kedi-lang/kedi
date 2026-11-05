@@ -8,7 +8,7 @@ The optional DAP package owns inspection, transport, and pause policy.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -46,7 +46,7 @@ def execution_observed() -> bool:
 
 
 @contextmanager
-def observe_execution(observer: Callable[[DebugEvent], None]) -> Iterator[None]:
+def observe_execution(observer: Callable[[DebugEvent], None]) -> Generator[None, None, None]:
     """Observe this execution and its context-propagating workers, not unrelated runs."""
     token = _observer.set(observer)
     try:
@@ -56,7 +56,7 @@ def observe_execution(observer: Callable[[DebugEvent], None]) -> Iterator[None]:
 
 
 @contextmanager
-def observation_only() -> Iterator[None]:
+def observation_only() -> Generator[None, None, None]:
     """Keep nested execution observable without parking a transaction owner."""
     if _observer.get() is None:
         yield
@@ -103,7 +103,7 @@ def checkpoint(
 @contextmanager
 def execution_frame(
     runtime: Any, name: str, env: dict[str, Any], span: Any = None
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     if _observer.get() is None:
         yield
         return
@@ -119,7 +119,7 @@ def execution_frame(
 
 
 @contextmanager
-def waiting_for_capture(name: str | None) -> Iterator[None]:
+def waiting_for_capture(name: str | None) -> Generator[None, None, None]:
     """Observe an existing value dependency; do not resolve or pause it here."""
     frames = _frames.get() if _observer.get() is not None else ()
     if not frames:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 
@@ -17,7 +17,7 @@ class SequentialDispatchGate:
         self._waiting_exclusive = 0
 
     @asynccontextmanager
-    async def enter(self, *, sequential: bool) -> AsyncIterator[None]:
+    async def enter(self, *, sequential: bool) -> AsyncGenerator[None, None]:
         if sequential:
             async with self._condition:
                 self._waiting_exclusive += 1

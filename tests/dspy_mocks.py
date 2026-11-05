@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
@@ -234,6 +235,10 @@ class MockLM(BaseLM):
 
         if "reflection" in self.model:
             response = self._reflection_response(prompt_text)
+            if "`new_instruction`" in prompt_text:
+                # DSPy 3.4.1 asks for the instruction through a ProposeInstruction signature,
+                # formatted by the JSONAdapter Kedi configures.
+                response = json.dumps({"new_instruction": response})
         else:
             response = self._optimizer_response(prompt_text)
 
@@ -402,6 +407,9 @@ def install_mock_dspy(monkeypatch: pytest.MonkeyPatch) -> None:
         """Wrapper around real dspy.Predict that records calls."""
 
         def forward(self, **kwargs):
+            if getattr(self.signature, "__module__", "").startswith("dspy.teleprompt."):
+                # GEPA's own reflection predictors (DSPy 3.4.1) are not program spans.
+                return super().forward(**kwargs)
             instructions = ""
             if hasattr(self, "signature"):
                 sig = self.signature

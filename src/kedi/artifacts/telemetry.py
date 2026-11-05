@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from ..telemetry import (
@@ -54,7 +54,7 @@ def _context_attributes(
 
 
 @contextmanager
-def artifact_span(action: str, **attributes: object) -> Iterator[TelemetrySpan]:
+def artifact_span(action: str, **attributes: object) -> Generator[TelemetrySpan, None, None]:
     """Trace meaningful artifact I/O; model lightweight lifecycle work as events."""
 
     safe_attributes = _artifact_attributes(action, attributes)
@@ -89,7 +89,7 @@ def artifact_span(action: str, **attributes: object) -> Iterator[TelemetrySpan]:
 
 
 @contextmanager
-def model_context_preflight_span(**attributes: object) -> Iterator[TelemetrySpan]:
+def model_context_preflight_span(**attributes: object) -> Generator[TelemetrySpan, None, None]:
     """Attach one payload-free request-admission decision to the active agent span."""
 
     active = current_span()

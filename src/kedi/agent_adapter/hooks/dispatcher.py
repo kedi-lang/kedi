@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from threading import Lock
 from time import monotonic
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Iterator, cast
+from typing import Generator, TYPE_CHECKING, cast
 
 from ..execution import run_in_worker, run_sync
 from .models import (
@@ -325,7 +325,7 @@ def _final_result(event: HookEvent, edited: bool) -> HookResult:
 
 
 @contextmanager
-def bind_hook_dispatcher(dispatcher: HookDispatcher) -> Iterator[None]:
+def bind_hook_dispatcher(dispatcher: HookDispatcher) -> Generator[None, None, None]:
     token: Token[HookDispatcher | None] = _ACTIVE_HOOK_DISPATCHER.set(dispatcher)
     try:
         yield

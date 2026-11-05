@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from threading import RLock
-from typing import Any, Iterable, Iterator, Mapping, Protocol, runtime_checkable
+from typing import Any, Generator, Iterable, Mapping, Protocol, runtime_checkable
 
 from .invocation import InvocationUsage
 
@@ -130,7 +130,9 @@ _LIMITS_OVERRIDE = ContextVar("kedi_model_request_budget_limits", default=None)
 
 
 @contextmanager
-def use_model_request_budget_limits(limits: ModelRequestBudgetLimits) -> Iterator[None]:
+def use_model_request_budget_limits(
+    limits: ModelRequestBudgetLimits,
+) -> Generator[None, None, None]:
     """Apply host limits to budgets created in the current execution context."""
 
     token = _LIMITS_OVERRIDE.set(limits)

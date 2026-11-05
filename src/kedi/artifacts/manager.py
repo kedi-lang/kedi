@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterator, Literal
+from typing import Any, Generator, Iterator, Literal
 
 from kedi.artifacts import telemetry
 from kedi.artifacts.cleanup import cleanup_service
@@ -865,7 +865,7 @@ class ArtifactManager:
     def _lease(
         self,
         ref_id: str,
-    ) -> Iterator[tuple[ArtifactStore, ArtifactRecord]]:
+    ) -> Generator[tuple[ArtifactStore, ArtifactRecord], None, None]:
         with self._lock:
             self._maybe_cleanup_locked()
             record = self._record(ref_id, allow_inactive=False)

@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from textwrap import indent
 from time import monotonic
-from typing import Any, Callable, Collection, Iterator, Mapping, Protocol, Sequence
+from typing import Any, Callable, Collection, Generator, Mapping, Protocol, Sequence
 from uuid import uuid4
 
 from pydantic import BaseModel, TypeAdapter
@@ -179,7 +179,7 @@ class WebGPUAdapter(HookRegistrationMixin):
         return stack[-1] if stack else AgentProfile.empty()
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         if profile.model is not None:
             self._validate_model(profile.model)
         token = self._profile_stack.set((*self._profile_stack.get(), profile))

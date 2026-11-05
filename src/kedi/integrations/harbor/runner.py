@@ -506,7 +506,7 @@ def _configure_logfire() -> bool:
     if os.getenv("KEDI_HARBOR_LOGFIRE") != "1":
         return False
     import logfire
-    from opentelemetry.instrumentation.kedi import (  # ty: ignore[unresolved-import]
+    from opentelemetry.instrumentation.kedi import (  # ty: ignore[import-not-found]
         KediInstrumentor,
     )
 

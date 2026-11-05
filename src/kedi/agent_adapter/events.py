@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, replace
@@ -189,7 +189,7 @@ _ACTIVE_RUN_IDENTITY: ContextVar[AgentRunIdentity | None] = ContextVar(
 @contextmanager
 def observe_agent_events(
     sink: AgentEventSink | AgentEventCallback,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     dispatcher = AgentEventDispatcher(sink)
     try:
         with bind_agent_event_dispatcher(dispatcher):
@@ -201,7 +201,7 @@ def observe_agent_events(
 @contextmanager
 def bind_agent_event_dispatcher(
     dispatcher: AgentEventDispatcher,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Bind a caller-owned dispatcher to the current task without closing it."""
 
     if not dispatcher.active:
@@ -231,7 +231,7 @@ def bind_agent_run(
     *,
     parent_run_id: str | None = None,
     agent_name: str | None = None,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     token = _BOUND_RUN_IDENTITY.set(AgentRunIdentity(run_id, parent_run_id, agent_name))
     try:
         yield
@@ -433,7 +433,7 @@ class AgentMessageResolver:
 
 
 @contextmanager
-def agent_event_run(adapter: str) -> Iterator[AgentMessageResolver | None]:
+def agent_event_run(adapter: str) -> Generator[AgentMessageResolver | None, None, None]:
     dispatcher = current_agent_event_dispatcher()
     if dispatcher is None:
         yield None

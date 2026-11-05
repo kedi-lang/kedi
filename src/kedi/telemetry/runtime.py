@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from time import perf_counter
@@ -59,7 +59,7 @@ def runtime_span(
     attributes: Attributes | None = None,
     metric_attributes: Mapping[str, AttributeScalar] | None = None,
     level: SpanLevel = "lifecycle",
-) -> Iterator[TelemetrySpan]:
+) -> Generator[TelemetrySpan, None, None]:
     """Trace and measure one bounded runtime operation."""
 
     metrics = _METRICS[operation]

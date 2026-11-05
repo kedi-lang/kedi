@@ -8,7 +8,7 @@ from contextvars import ContextVar, copy_context
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Callable, Iterator, Mapping, Sequence, cast, get_type_hints
+from typing import Any, Callable, Generator, Mapping, Sequence, cast, get_type_hints
 
 from pydantic import TypeAdapter, create_model
 
@@ -271,7 +271,7 @@ class CodexAdapter(HookRegistrationMixin):
         return self._model
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         token = self._profile_stack_var.set((*self._profile_stack_var.get(), profile))
         try:
             yield
@@ -282,7 +282,7 @@ class CodexAdapter(HookRegistrationMixin):
     def approval_ceiling(
         self,
         policies: Sequence[ApprovalPolicy | None],
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._approval_ceiling_var.set(tuple(policies))
         try:
             yield
@@ -293,7 +293,7 @@ class CodexAdapter(HookRegistrationMixin):
     def conversation_scope(
         self,
         conversation: AdapterConversationContext,
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._conversation_var.set(conversation)
         try:
             yield
@@ -301,7 +301,7 @@ class CodexAdapter(HookRegistrationMixin):
             self._conversation_var.reset(token)
 
     @contextmanager
-    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         token = self._conversation_var.set(request.conversation)
         with (
             self.tool_scope(request.tools),

@@ -80,7 +80,8 @@ def runtime_isinstance(value: object, expected: ResolvedKediType) -> bool:
         return isinstance(value, expected)
     # Validate generic args strictly; fail closed on mistyped/uncoercible values.
     try:
-        TypeAdapter(expected).validate_python(value, strict=True)
+        adapter: TypeAdapter[Any] = TypeAdapter(cast(Any, expected))
+        adapter.validate_python(value, strict=True)
         return True
     except Exception:
         return False

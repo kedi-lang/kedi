@@ -256,7 +256,9 @@ class ScopeFrame(dict[str, Any]):
     def __getitem__(self, name: str) -> Any:
         return self.raw_value(name)
 
-    def get(self, name: str, default: Any = None) -> Any:
+    def get(self, name: object, default: Any = None) -> Any:
+        if not isinstance(name, str):
+            return default
         try:
             return self.raw_value(name)
         except KeyError:
@@ -282,11 +284,12 @@ class ScopeFrame(dict[str, Any]):
         self.declare(name, default)
         return default
 
-    def pop(self, name: str, *default: Any) -> Any:
-        assert_not_cli_args_identifier(name)
+    def pop(self, name: object, *default: Any) -> Any:
+        if isinstance(name, str):
+            assert_not_cli_args_identifier(name)
         if len(default) > 1:
             raise TypeError(f"pop expected at most 2 arguments, got {len(default) + 1}")
-        if not self.owns(name):
+        if not isinstance(name, str) or not self.owns(name):
             if default:
                 return default[0]
             raise KeyError(name)
@@ -417,7 +420,9 @@ class KediEnv(dict[str, Any]):
         self._binding_owners.pop(key, None)
         self._dirty_bindings.discard(key)
 
-    def pop(self, key: str, *default: Any) -> Any:
+    def pop(self, key: object, *default: Any) -> Any:
+        if not isinstance(key, str):
+            return dict.pop(self, key, *default)
         assert_not_cli_args_identifier(key)
         value = dict.pop(self, key, *default)
         self._binding_owners.pop(key, None)

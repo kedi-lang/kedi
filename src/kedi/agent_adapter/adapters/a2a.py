@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Generator,
+    Mapping,
+    Sequence,
+)
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from threading import Lock
@@ -129,7 +137,7 @@ class A2AAdapter(HookRegistrationMixin):
         return None
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         self._validate_profile(profile)
         token = self._profile_stack_var.set((*self._profile_stack_var.get(), profile))
         try:
@@ -138,7 +146,9 @@ class A2AAdapter(HookRegistrationMixin):
             self._profile_stack_var.reset(token)
 
     @contextmanager
-    def conversation_scope(self, conversation: AdapterConversationContext) -> Iterator[None]:
+    def conversation_scope(
+        self, conversation: AdapterConversationContext
+    ) -> Generator[None, None, None]:
         token = self._conversation_var.set(conversation)
         try:
             yield
@@ -146,7 +156,7 @@ class A2AAdapter(HookRegistrationMixin):
             self._conversation_var.reset(token)
 
     @contextmanager
-    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         if request.tools:
             raise AgentProfileOverrideUnsupported(
                 "A2A child profiles cannot forward local Kedi tools to a remote agent"
@@ -515,7 +525,7 @@ class A2AAdapter(HookRegistrationMixin):
         connection: A2AConnection,
         *,
         structured: bool,
-    ) -> AsyncIterator[tuple[Any, Any]]:
+    ) -> AsyncGenerator[tuple[Any, Any], None]:
         try:
             import httpx
             from a2a.client import A2ACardResolver, ClientCallContext, ClientConfig, create_client
@@ -919,5 +929,5 @@ def _missing_a2a_dependency() -> RuntimeError:
 
 
 @contextmanager
-def _empty_scope() -> Iterator[None]:
+def _empty_scope() -> Generator[None, None, None]:
     yield

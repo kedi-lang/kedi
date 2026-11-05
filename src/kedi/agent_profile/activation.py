@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
+from typing import Generator
 
 from kedi.agent_adapter.tools.errors import CapabilityActivationError
 
@@ -15,7 +15,7 @@ _active_capabilities: ContextVar[frozenset[str]] = ContextVar(
 
 
 @contextmanager
-def capability_activation_scope(identities: frozenset[str]) -> Iterator[None]:
+def capability_activation_scope(identities: frozenset[str]) -> Generator[None, None, None]:
     token = _active_capabilities.set(identities)
     try:
         yield

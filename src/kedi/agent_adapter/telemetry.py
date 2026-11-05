@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -295,7 +295,7 @@ def adapter_owns_native_span(adapter: object, operation: str) -> bool:
 
 
 @contextmanager
-def native_agent_span_scope(active: bool) -> Iterator[None]:
+def native_agent_span_scope(active: bool) -> Generator[None, None, None]:
     """Mark the concrete adapter invocation as natively instrumented."""
 
     token = _native_agent_span_active.set(active)
@@ -310,7 +310,7 @@ def native_agent_span_active() -> bool:
 
 
 @contextmanager
-def native_tool_span_scope(tool_name: str) -> Iterator[None]:
+def native_tool_span_scope(tool_name: str) -> Generator[None, None, None]:
     """Identify the provider-owned tool span for one concrete execution."""
 
     token = _native_tool_call_name.set(tool_name)
@@ -363,7 +363,7 @@ def agent_call_span(
     history_count: int = 0,
     cache_epoch: int | None = None,
     turn_sequence: int | None = None,
-) -> Iterator[AgentCallTelemetry]:
+) -> Generator[AgentCallTelemetry, None, None]:
     """Trace one semantic Kedi agent call unless its adapter owns a native span."""
 
     adapter_name = adapter_shortname(adapter)
@@ -638,7 +638,7 @@ def model_call_span(
     *,
     call_kind: AgentCallKind,
     configured_model: str | None,
-) -> Iterator[ModelCallTelemetry]:
+) -> Generator[ModelCallTelemetry, None, None]:
     """Trace one adapter model boundary when no native instrumentor owns it."""
 
     adapter_name = adapter_shortname(adapter)
@@ -737,7 +737,7 @@ def tool_call_span(
     *,
     adapter_shortname: str,
     argument_count: int,
-) -> Iterator[ToolCallTelemetry]:
+) -> Generator[ToolCallTelemetry, None, None]:
     source = tool_source(tool)
     native_owned = (
         owns_native_spans(adapter_shortname, "call_tool")
@@ -848,7 +848,7 @@ def mcp_initialization_span(
     server_name: str,
     transport: str,
     server_count: int = 1,
-) -> Iterator[TelemetrySpan]:
+) -> Generator[TelemetrySpan, None, None]:
     started_at = perf_counter()
     outcome = "success"
     attributes = {

@@ -6,7 +6,7 @@ import base64
 import hashlib
 import json
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from concurrent.futures import Future
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -429,7 +429,7 @@ _decision_captures: ContextVar[tuple[DecisionCapture, ...]] = ContextVar(
 
 
 @contextmanager
-def capture_decisions() -> Iterator[DecisionCapture]:
+def capture_decisions() -> Generator[DecisionCapture, None, None]:
     """Capture newly completed template decisions without changing return values.
 
     Nested scopes also contribute to their enclosing capture. Use a regular
@@ -453,7 +453,7 @@ def publish_decision_record(record: DecisionRecord) -> None:
 
 
 @contextmanager
-def collect_decision_evidence() -> Iterator[list[CapturedDecisionEvidence]]:
+def collect_decision_evidence() -> Generator[list[CapturedDecisionEvidence], None, None]:
     """Collect provider evidence for exactly one adapter call in the current context."""
     collected: list[CapturedDecisionEvidence] = []
     token = _current_evidence_collector.set(collected)
@@ -479,7 +479,7 @@ def capture_decision_evidence(
 
 
 @contextmanager
-def decision_environment(env: dict[str, Any]) -> Iterator[None]:
+def decision_environment(env: dict[str, Any]) -> Generator[None, None, None]:
     token = _current_decision_environment.set(env)
     try:
         yield

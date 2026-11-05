@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
@@ -375,7 +375,7 @@ class DefaultExecutor:
         rt: KediRuntime,
         kind: str,
         code: str,
-    ) -> Iterator[TelemetrySpan]:
+    ) -> Generator[TelemetrySpan, None, None]:
         block_kind = {"block": "return", "side_effects": "statement"}.get(kind, kind)
         executor_name = type(self).__name__
         attributes: dict[str, bool | str | int] = {

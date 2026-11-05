@@ -11,16 +11,7 @@ from contextlib import (
 )
 from contextvars import ContextVar
 from copy import deepcopy
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Iterator,
-    Literal,
-    Mapping,
-    Sequence,
-    cast,
-    overload,
-)
+from typing import Any, Generator, Literal, Mapping, Sequence, TYPE_CHECKING, cast, overload
 
 from pydantic_ai import (
     Agent,
@@ -347,7 +338,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         return _tools._validate_required_tool_calls(output)
 
     @contextmanager
-    def tool_scope(self, tools: Sequence[Any] = ()) -> Iterator[None]:
+    def tool_scope(self, tools: Sequence[Any] = ()) -> Generator[None, None, None]:
         """Register Pydantic tools and their Kedi metadata in one lexical scope."""
         with (
             self._tool_scope.tool_scope(),
@@ -374,7 +365,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         )
 
     @contextmanager
-    def isolated_run(self) -> Iterator[None]:
+    def isolated_run(self) -> Generator[None, None, None]:
         """Run a nested agent with only the tools registered in the current scope."""
         depth = self._isolated_run_depth_for_current_adapter()
         token = depth.set(depth.get() + 1)
@@ -384,7 +375,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             depth.reset(token)
 
     @contextmanager
-    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         token = self._subagent_conversation_var.set(request.conversation)
         output_token = self._subagent_output_state_var.set(request.output_state)
         approval_token = self._approval_resolution_var.set(
@@ -415,7 +406,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def conversation_scope(
         self,
         conversation: AdapterConversationContext,
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._subagent_conversation_var.set(conversation)
         try:
             yield
@@ -480,7 +471,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def approval_ceiling(
         self,
         policies: Sequence[ApprovalPolicy | None],
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         stack_var = self._approval_ceiling_for_current_adapter()
         token = stack_var.set(tuple(policies))
         try:
@@ -537,7 +528,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         self,
         template: str,
         output_schema: dict[str, ResolvedKediType] | None = None,
-        output_type: type[OutputDataT] | None = None,
+        output_type: type[Any] | None = None,
         **kwargs,
     ) -> OutputDataT:
         """
@@ -860,7 +851,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             return result
 
     @contextmanager
-    def _required_tool_call_scope(self) -> Iterator[None]:
+    def _required_tool_call_scope(self) -> Generator[None, None, None]:
         tool_specs = self._run_tool_specs_var.get()
         with required_tool_call_scope(
             self.scoped_tool_specs if tool_specs is None else tool_specs,
@@ -869,7 +860,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             yield
 
     @contextmanager
-    def _run_tool_spec_scope(self, tool_specs: Sequence[ToolSpec]) -> Iterator[None]:
+    def _run_tool_spec_scope(self, tool_specs: Sequence[ToolSpec]) -> Generator[None, None, None]:
         yield from _hooks._run_tool_spec_scope(self, tool_specs)
 
     def _capture_conversation_messages(
@@ -1068,7 +1059,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         self,
         template: str,
         output_schema: dict[str, ResolvedKediType] | None = None,
-        output_type: type[OutputDataT] | None = None,
+        output_type: type[Any] | None = None,
         **kwargs,
     ) -> OutputDataT:
         """
@@ -1112,7 +1103,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         return None
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         override_kwargs = self._profile_override_kwargs(profile)
         stack_var = self._profile_stack_var
         token = stack_var.set((*stack_var.get(), profile))

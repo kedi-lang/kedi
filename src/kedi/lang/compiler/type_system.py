@@ -170,7 +170,7 @@ def _build_type_adapter(resolved: Any) -> TypeAdapter:
         or dataclasses.is_dataclass(resolved)
         or hasattr(resolved, "__required_keys__")
     ):
-        return TypeAdapter(resolved)
+        return TypeAdapter(cast(Any, resolved))
     return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
 
 

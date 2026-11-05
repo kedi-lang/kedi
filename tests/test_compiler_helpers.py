@@ -981,3 +981,18 @@ def test_procedure_kwargs_skip_non_dict_runtime_envs() -> None:
     setattr(rt, "_globals_env", object())
 
     assert rt._get_proc("p")() == "ok"
+
+
+def test_scope_mappings_treat_non_string_keys_as_absent() -> None:
+    frame = ScopeFrame({"name": "value"})
+    assert frame.get(1, "fallback") == "fallback"
+    assert frame.pop(1, "fallback") == "fallback"
+    with pytest.raises(KeyError):
+        frame.pop(1)
+    assert frame.pop("name") == "value"
+
+    env = KediEnv({"name": "value"})
+    assert env.pop(1, "fallback") == "fallback"
+    with pytest.raises(KeyError):
+        env.pop(1)
+    assert env.pop("name") == "value"

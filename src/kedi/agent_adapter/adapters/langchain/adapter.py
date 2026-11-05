@@ -4,16 +4,7 @@ import asyncio
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Callable,
-    Iterator,
-    Mapping,
-    Sequence,
-    cast,
-)
+from typing import Any, AsyncGenerator, Callable, Generator, Mapping, Sequence, TYPE_CHECKING, cast
 
 from pydantic import BaseModel, create_model
 from pydantic_ai import UsageLimits
@@ -226,7 +217,7 @@ class LangChainAdapter(HookRegistrationMixin):
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         @contextmanager
-        def scoped() -> Iterator[None]:
+        def scoped() -> Generator[None, None, None]:
             with self._tool_scope.tool_scope(), self._tool_spec_scope.tool_scope():
                 for tool in tools:
                     if isinstance(tool, ToolSpec):
@@ -406,7 +397,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 )
 
     @asynccontextmanager
-    async def responses_session(self) -> AsyncIterator[None]:
+    async def responses_session(self) -> AsyncGenerator[None, None]:
         """Share a supported model transport across sequential adapter calls."""
         model = self._model_for_run()
         if not callable(getattr(model, "responses_session", None)):
@@ -458,7 +449,7 @@ class LangChainAdapter(HookRegistrationMixin):
         return self.default_model()
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         stack_var = self._profile_stack_var
         token = stack_var.set((*stack_var.get(), profile))
         try:
@@ -470,7 +461,7 @@ class LangChainAdapter(HookRegistrationMixin):
     def conversation_scope(
         self,
         conversation: AdapterConversationContext,
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._conversation_var.set(conversation)
         try:
             yield
@@ -487,7 +478,7 @@ class LangChainAdapter(HookRegistrationMixin):
     def approval_ceiling(
         self,
         policies: Sequence[ApprovalPolicy | None],
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._approval_ceiling_var.set(tuple(policies))
         try:
             yield
@@ -495,7 +486,7 @@ class LangChainAdapter(HookRegistrationMixin):
             self._approval_ceiling_var.reset(token)
 
     @contextmanager
-    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         token = self._conversation_var.set(request.conversation)
         with (
             self.tool_scope(request.tools),
@@ -901,7 +892,7 @@ class LangChainAdapter(HookRegistrationMixin):
         ]
 
     @asynccontextmanager
-    async def _projected_tools_for_run(self) -> AsyncIterator[CodeModeProjection]:
+    async def _projected_tools_for_run(self) -> AsyncGenerator[CodeModeProjection, None]:
         native_tools = await self._tools_for_run()
         admission = current_artifact_admission()
         if admission is not None:

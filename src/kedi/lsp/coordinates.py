@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Callable, Iterator, Optional, ParamSpec, TypeVar
+from typing import Callable, Generator, Optional, ParamSpec, TypeVar
 
 from lsprotocol import types as lsp
 
@@ -97,7 +97,7 @@ def current_source() -> CoordinateSource | None:
 
 
 @contextmanager
-def source_coordinates(source: str, source_path: Optional[str]) -> Iterator[None]:
+def source_coordinates(source: str, source_path: Optional[str]) -> Generator[None, None, None]:
     token = _CURRENT_SOURCE.set(CoordinateSource(source, source_path))
     try:
         yield

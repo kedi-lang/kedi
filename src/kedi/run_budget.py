@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
-from typing import Iterator, Literal
+from typing import Generator, Literal
 
 from kedi.errors import KediExecutionError
 
@@ -108,7 +108,7 @@ def current_run_budget() -> RunBudgetLedger | None:
 
 
 @contextmanager
-def run_budget_scope(budget: RunBudget | None) -> Iterator[RunBudgetLedger | None]:
+def run_budget_scope(budget: RunBudget | None) -> Generator[RunBudgetLedger | None, None, None]:
     parent = _ledger.get()
     if budget is None and parent is not None:
         yield parent

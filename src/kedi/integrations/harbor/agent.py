@@ -14,10 +14,12 @@ from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
-from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[unresolved-import]
-from harbor.agents.model_connection import ModelConnectionSpec  # ty: ignore[unresolved-import]
-from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-import]
-from harbor.models.agent.context import AgentContext  # ty: ignore[unresolved-import]
+from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[import-not-found]
+from harbor.agents.agent_auth_resolution import (  # ty: ignore[import-not-found]
+    ModelConnectionSpec,
+)
+from harbor.environments.base import BaseEnvironment  # ty: ignore[import-not-found]
+from harbor.models.agent.context import AgentContext  # ty: ignore[import-not-found]
 
 from ..._version import __version__
 from .records import HarnessPolicy, invocation_usage_dict
@@ -61,7 +63,9 @@ def _resolve_logfire_token() -> str | None:
 class KediAgent(BaseInstalledAgent):
     """Official Harbor custom-agent bridge for the Kedi coding harness."""
 
-    MODEL_CONNECTION = ModelConnectionSpec(passthrough=True)
+    # With no declared destinations, Harbor forwards the provider's credential and any
+    # user-supplied endpoint under the provider's own variable names.
+    MODEL_CONNECTION = ModelConnectionSpec()
 
     _VENV = PurePosixPath("/installed-agent/kedi")
     _INSTRUCTION = PurePosixPath("/installed-agent/kedi-instruction.txt")
@@ -69,8 +73,8 @@ class KediAgent(BaseInstalledAgent):
     _MODEL_SETTINGS = PurePosixPath("/installed-agent/kedi-model-settings.json")
     _CODEX_AUTH = PurePosixPath("/installed-agent/kedi-codex-auth.json")
     _KEDI_HOME = PurePosixPath("/installed-agent/kedi-home")
-    _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.36.0"
-    _CODEX_RUNTIME = "codex-auth-helper[websocket]==1.8.0"
+    _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.66.0"
+    _CODEX_RUNTIME = "codex-auth-helper[websocket]==1.10.1"
     _LOGFIRE_RUNTIME = "logfire[httpx]==4.41.0"
     _KEDI_OTEL_RUNTIME = "opentelemetry-instrumentation-kedi==0.1.0"
     _UV_RUNTIME = "uv==0.11.21"
@@ -562,7 +566,7 @@ class KediAgent(BaseInstalledAgent):
         if self._codex_auth_file is None:  # pragma: no cover - guarded by caller
             raise RuntimeError("Codex auth source is unavailable")
 
-        from codex_auth_helper import (  # ty: ignore[unresolved-import, unused-ignore-comment]  # Optional TB extra.
+        from codex_auth_helper import (  # ty: ignore[import-not-found, unused-ignore-comment]  # Optional TB extra.
             CodexAuthConfig,
             CodexAuthState,
             CodexAuthStore,

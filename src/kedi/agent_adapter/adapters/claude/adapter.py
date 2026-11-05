@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
+from typing import Any, Generator, Mapping, Sequence, TYPE_CHECKING, cast
 
 from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook
 from kedi.agent_adapter.adapters.claude.messages import (
@@ -328,7 +328,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         return self._model
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         stack_var = self._profile_stack_var
         token = stack_var.set((*stack_var.get(), profile))
         try:
@@ -340,7 +340,7 @@ class ClaudeAdapter(HookRegistrationMixin):
     def approval_ceiling(
         self,
         policies: Sequence[ApprovalPolicy | None],
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._approval_ceiling_var.set(tuple(policies))
         try:
             yield
@@ -348,7 +348,7 @@ class ClaudeAdapter(HookRegistrationMixin):
             self._approval_ceiling_var.reset(token)
 
     @contextmanager
-    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         token = self._conversation_var.set(request.conversation)
         try:
             with (
@@ -364,7 +364,7 @@ class ClaudeAdapter(HookRegistrationMixin):
     def conversation_scope(
         self,
         conversation: AdapterConversationContext,
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         token = self._conversation_var.set(conversation)
         try:
             yield

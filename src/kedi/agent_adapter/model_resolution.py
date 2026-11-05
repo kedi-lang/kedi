@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
@@ -16,7 +16,7 @@ _pydantic_resolver: ContextVar[Callable[[str], Model] | None] = ContextVar(
 
 
 @contextmanager
-def pydantic_model_resolution(resolver: Callable[[str], Model]) -> Iterator[None]:
+def pydantic_model_resolution(resolver: Callable[[str], Model]) -> Generator[None, None, None]:
     token = _pydantic_resolver.set(resolver)
     try:
         yield

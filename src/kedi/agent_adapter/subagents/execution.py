@@ -5,7 +5,7 @@ import json
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import TypeAdapter
 
@@ -121,7 +121,9 @@ async def _execute_run(
             uses_profile_output = final_schema is None and child_profile.output_type is not None
             final_schema = effective_final_schema(child_profile, final_schema)
             if output_state is None and uses_profile_output:
-                output_state = SubagentOutputState(TypeAdapter(child_profile.output_type))
+                output_state = SubagentOutputState(
+                    TypeAdapter(cast(Any, child_profile.output_type))
+                )
             span.set_attribute(
                 "kedi.subagent.structured_output",
                 final_schema is not None,

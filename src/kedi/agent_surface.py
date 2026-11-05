@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Generator, TYPE_CHECKING
 
 from typing_extensions import final
 
@@ -77,7 +77,7 @@ class AgentSurface:
         self._closed = False
 
     @contextmanager
-    def run_scope(self) -> Iterator[None]:
+    def run_scope(self) -> Generator[None, None, None]:
         """Keep all Kedi bindings active for one complete run or stream lifetime."""
 
         with self._lifecycle_lock:

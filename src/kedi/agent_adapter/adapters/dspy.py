@@ -13,7 +13,7 @@ from contextlib import (
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Callable, Iterator, Sequence, cast
+from typing import Any, Callable, Generator, Sequence, cast
 
 import dspy
 from pydantic import TypeAdapter
@@ -106,7 +106,7 @@ class DSPyAdapter:
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         @contextmanager
-        def scoped() -> Iterator[None]:
+        def scoped() -> Generator[None, None, None]:
             with (
                 self._tool_scope.tool_scope(),
                 self._tool_spec_scope_for_current_adapter().tool_scope(),
@@ -410,7 +410,7 @@ class DSPyAdapter:
         return self._lm_model
 
     @contextmanager
-    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         policies = request.approval_ceiling
         if request.profile.approval is not None or not policies:
             policies = (*policies, request.profile.approval)
@@ -423,7 +423,7 @@ class DSPyAdapter:
         return {}
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         needs_model_override = profile.needs_model_override(self.default_model())
         stack_var = self._profile_stack_var
         token = stack_var.set((*stack_var.get(), profile))

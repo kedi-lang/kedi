@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from threading import Event, Lock, RLock, Thread, current_thread
 from time import monotonic
-from typing import Any, Iterator, cast
+from typing import Any, Generator, cast
 
 from ...agent_profile import AgentProfile
 from ...agent_profile.errors import AgentProfileOverrideUnsupported, AgentToolOverrideUnsupported
@@ -538,7 +538,7 @@ class ACPAdapter(HookRegistrationMixin):
         return self._model
 
     @contextmanager
-    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+    def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:
         if profile.model is not None or profile.effort is not None:
             raise AgentProfileOverrideUnsupported(
                 "ACPAdapter does not support model or effort overrides; "
@@ -602,7 +602,7 @@ class ACPAdapter(HookRegistrationMixin):
 
 
 @contextmanager
-def null_tool_scope() -> Iterator[None]:
+def null_tool_scope() -> Generator[None, None, None]:
     yield
 
 
