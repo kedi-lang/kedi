@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from threading import Lock
 from time import monotonic
 from types import MappingProxyType
-from typing import Generator, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Generator, cast
 
 from ..execution import run_in_worker, run_sync
 from .models import (

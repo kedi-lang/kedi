@@ -11,7 +11,7 @@ from contextlib import (
 )
 from contextvars import ContextVar
 from copy import deepcopy
-from typing import Any, Generator, Literal, Mapping, Sequence, TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, Any, Generator, Literal, Mapping, Sequence, cast, overload
 
 from pydantic_ai import (
     Agent,

@@ -14,10 +14,10 @@ from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
-from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[import-not-found]
 from harbor.agents.agent_auth_resolution import (  # ty: ignore[import-not-found]
     ModelConnectionSpec,
 )
+from harbor.agents.installed.base import BaseInstalledAgent  # ty: ignore[import-not-found]
 from harbor.environments.base import BaseEnvironment  # ty: ignore[import-not-found]
 from harbor.models.agent.context import AgentContext  # ty: ignore[import-not-found]
 

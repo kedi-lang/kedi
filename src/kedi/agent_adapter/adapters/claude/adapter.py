@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
 from contextvars import ContextVar
-from typing import Any, Generator, Mapping, Sequence, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Generator, Mapping, Sequence, cast
 
 from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook
 from kedi.agent_adapter.adapters.claude.messages import (
