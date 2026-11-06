@@ -112,6 +112,15 @@ def test_conversation_assets_cover_template_profile_tools_and_schemas() -> None:
         "kedi:schema:tool:weather:return",
     }
     assert all(asset.content is not None for asset in backend.assets)
+    by_kind = {asset.kind: asset for asset in backend.assets if asset.kind != "schema"}
+    assert by_kind["template"].representation == "effective"
+    assert by_kind["template"].definition_locator == "kedi:source:weather.kedi:12"
+    assert by_kind["prompt"].representation == "effective"
+    assert by_kind["prompt"].definition_locator == "kedi:profile:researcher"
+    assert {by_kind[kind].representation for kind in ("agent_profile", "tool")} == {"definition"}
+    order = [asset.kind for asset in backend.assets]
+    assert order.index("source_identity") < order.index("template")
+    assert all(asset.parent_fingerprint is None for asset in backend.assets)
 
 
 def test_conversation_asset_content_is_hashed_when_capture_is_disabled() -> None:
@@ -134,6 +143,7 @@ def test_conversation_asset_content_is_hashed_when_capture_is_disabled() -> None
 
     templates = [asset for asset in backend.assets if asset.kind == "template"]
     assert len(templates) == 2
+    assert templates[0].definition_locator is None
     assert templates[0].content is None
     assert templates[1].content is None
     assert templates[0].content_fingerprint != templates[1].content_fingerprint

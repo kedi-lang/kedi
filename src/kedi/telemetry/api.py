@@ -25,10 +25,20 @@ TelemetryAssetKind = Literal[
     "tool",
 ]
 TelemetryAssetSensitivity = Literal["public", "internal", "sensitive"]
+TelemetryAssetRepresentation = Literal["definition", "effective"]
 
 
 @dataclass(frozen=True, slots=True)
 class TelemetryAsset:
+    """One behavioral asset a Kedi program declared or used.
+
+    A ``definition`` is what the program declares, such as a profile, tool, or source template.
+    An ``effective`` asset is what one call actually used after rendering, and names the
+    definition it came from through ``definition_locator``. ``parent_fingerprint`` is the
+    content fingerprint of the version this content was derived from, when Kedi knows it;
+    backends translate it into their own version identities.
+    """
+
     kind: TelemetryAssetKind
     local_id: str
     name: str
@@ -37,6 +47,9 @@ class TelemetryAsset:
     content: Any | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     sensitivity: TelemetryAssetSensitivity = "internal"
+    representation: TelemetryAssetRepresentation = "definition"
+    definition_locator: str | None = None
+    parent_fingerprint: str | None = None
 
 
 @runtime_checkable

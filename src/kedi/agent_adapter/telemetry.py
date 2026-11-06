@@ -55,6 +55,7 @@ def record_conversation_assets(
         if source_path is not None
         else f"{profile_name}:{call_kind}"
     )
+    profile_locator = f"kedi:profile:{profile_name}"
     profile_content = {
         "name": profile.name,
         "model": profile.model,
@@ -84,10 +85,28 @@ def record_conversation_assets(
         kind="agent_profile",
         local_id=profile_name,
         name=profile_name,
-        source_locator=f"kedi:profile:{profile_name}",
+        source_locator=profile_locator,
         content=profile_content,
         metadata={"call_kind": call_kind},
     )
+    source_locator: str | None = None
+    if source_path is not None:
+        source_locator = f"kedi:source:{source_path}:{source_line or 0}"
+        source_content = {
+            "path": source_path,
+            "line": source_line,
+            "snippet": source_snippet if capture_enabled("source_snippet") else None,
+        }
+        # Definitions go first so the rendered template below can link to its source.
+        _record_behavioral_asset(
+            kind="source_identity",
+            local_id=f"{source_path}:{source_line or 0}",
+            name=source_path,
+            source_locator=source_locator,
+            content=source_content,
+            metadata={"path": source_path, "line": source_line},
+            capture_content=source_snippet is not None and capture_enabled("source_snippet"),
+        )
     _record_behavioral_asset(
         kind="template",
         local_id=template_key,
@@ -101,6 +120,8 @@ def record_conversation_assets(
             "source_line": source_line,
         },
         sensitivity="sensitive",
+        representation="effective",
+        definition_locator=source_locator,
     )
     if instructions is not None:
         _record_behavioral_asset(
@@ -111,6 +132,8 @@ def record_conversation_assets(
             content=instructions,
             metadata={"profile": profile_name},
             sensitivity="sensitive",
+            representation="effective",
+            definition_locator=profile_locator,
         )
     for tool in tools:
         source = tool_source(tool)
@@ -152,21 +175,6 @@ def record_conversation_assets(
             content=dict(output_schema),
             metadata={"owner": template_key, "role": "output"},
         )
-    if source_path is not None:
-        source_content = {
-            "path": source_path,
-            "line": source_line,
-            "snippet": source_snippet if capture_enabled("source_snippet") else None,
-        }
-        _record_behavioral_asset(
-            kind="source_identity",
-            local_id=f"{source_path}:{source_line or 0}",
-            name=source_path,
-            source_locator=f"kedi:source:{source_path}:{source_line or 0}",
-            content=source_content,
-            metadata={"path": source_path, "line": source_line},
-            capture_content=source_snippet is not None and capture_enabled("source_snippet"),
-        )
 
 
 def _record_behavioral_asset(
@@ -186,6 +194,8 @@ def _record_behavioral_asset(
     metadata: Mapping[str, Any],
     sensitivity: Literal["public", "internal", "sensitive"] = "internal",
     capture_content: bool | None = None,
+    representation: Literal["definition", "effective"] = "definition",
+    definition_locator: str | None = None,
 ) -> None:
     retain_content = capture_enabled("content") if capture_content is None else capture_content
     record_asset(
@@ -198,6 +208,8 @@ def _record_behavioral_asset(
             content=content if retain_content else None,
             metadata=dict(metadata),
             sensitivity=sensitivity,
+            representation=representation,
+            definition_locator=definition_locator,
         )
     )
 
