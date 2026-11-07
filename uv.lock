@@ -784,7 +784,7 @@ wheels = [
 
 [[package]]
 name = "codex-auth-helper"
-version = "1.10.1"
+version = "1.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
@@ -793,9 +793,9 @@ dependencies = [
     { name = "pydantic-ai-slim", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
     { name = "typing-extensions", marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or extra == 'extra-4-kedi-codex-model' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/80/47/0edb7a7adafee1f9d419e7b7892887ae8dfc95586721604217baadbeaee1/codex_auth_helper-1.10.1.tar.gz", hash = "sha256:9ee11caab511c7e204bccc8155b2e3d3b0044d729d1a547bc1bb1e31f3056239", size = 33364, upload-time = "2026-10-06T01:07:14.862Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/cd/e0bb38a96f0105a40a3e07c305332579bee302767f3cb0fea560942ccad0/codex_auth_helper-1.13.0.tar.gz", hash = "sha256:c90972a6ab57b1dd08139c0c299cce434976d44463f97d36b88f1f6a0395d9ec", size = 34384, upload-time = "2026-11-07T17:50:36.411Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/2c/cf6dfeca9fd3a46d0a96d3f03637554987f89c92ad5007e2af2276cea28c/codex_auth_helper-1.10.1-py3-none-any.whl", hash = "sha256:b9895aae20552a1cb71f6f337b6979621c96d3a3ae82e85268ba327458fb2a1b", size = 40014, upload-time = "2026-10-06T01:07:13.328Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/a2/73eb3d3271a6fd66986bb2ad79893d7c1b87c1e0530ef24a54a9885ccf4b/codex_auth_helper-1.13.0-py3-none-any.whl", hash = "sha256:7e05be931bf1a86442474f05cb11aa141637aeacf7d5a4528ae96057e4dad620", size = 41246, upload-time = "2026-11-07T17:50:31.586Z" },
 ]
 
 [package.optional-dependencies]
@@ -2311,8 +2311,8 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'claude'", specifier = "==0.2.178" },
     { name = "click", specifier = ">=8.5.0,<9" },
     { name = "cloudpickle", marker = "extra == 'snapshots'", specifier = "==3.1.2" },
-    { name = "codex-auth-helper", marker = "python_full_version >= '3.12' and extra == 'terminal-bench'", specifier = "==1.10.1" },
-    { name = "codex-auth-helper", extras = ["websocket"], marker = "extra == 'codex-model'", specifier = "==1.10.1" },
+    { name = "codex-auth-helper", marker = "python_full_version >= '3.12' and extra == 'terminal-bench'", specifier = "==1.13.0" },
+    { name = "codex-auth-helper", extras = ["websocket"], marker = "extra == 'codex-model'", specifier = "==1.13.0" },
     { name = "docstring-parser", specifier = ">=0.18,<0.19" },
     { name = "dspy", marker = "extra == 'dspy'", specifier = "==3.4.1" },
     { name = "fastapi", marker = "extra == 'playground'", specifier = ">=0.162.0,<0.163" },
@@ -2354,7 +2354,7 @@ dev = [
     { name = "basedpyright", specifier = "==1.40.2" },
     { name = "cassetter", extras = ["httpx"], specifier = "==0.17.0" },
     { name = "claude-agent-sdk", specifier = "==0.2.178" },
-    { name = "codex-auth-helper", extras = ["websocket"], specifier = "==1.10.1" },
+    { name = "codex-auth-helper", extras = ["websocket"], specifier = "==1.13.0" },
     { name = "coverage", specifier = "==7.17.2" },
     { name = "dspy", specifier = "==3.4.1" },
     { name = "groq", specifier = "==1.7.0" },

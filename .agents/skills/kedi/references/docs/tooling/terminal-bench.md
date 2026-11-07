@@ -22,8 +22,8 @@ python3.12 -m pip install 'kedi[terminal-bench]'
 separate from Harbor's host environment. During local development, passing a
 wheel built from the exact Kedi commit is the most reproducible path.
 
-The host extra pins `codex-auth-helper==1.8.0` for credential management.
-Codex task runtimes install `codex-auth-helper[websocket]==1.8.0` separately.
+The host extra pins `codex-auth-helper==1.13.0` for credential management.
+Codex task runtimes install `codex-auth-helper[websocket]==1.13.0` separately.
 Do not combine `terminal-bench` with `codex-model` or Kedi's development group
 in one environment: Harbor's LiteLLM dependency requires OpenAI `<3`, while
 the WebSocket runtime requires OpenAI `>=3.8.0`.
