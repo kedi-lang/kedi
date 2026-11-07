@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Generator, Mapping, Sequence, cast
 
+from jsonschema.validators import validator_for
 from pydantic import BaseModel, create_model
 from pydantic_ai import UsageLimits
 from pydantic_ai.output import OutputDataT
@@ -74,7 +75,12 @@ from kedi.agent_adapter.models import (
 from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.prefix_cache import langchain_cache_settings
 from kedi.agent_adapter.responses_session import model_responses_session, model_responses_turn
-from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
+from kedi.agent_adapter.subagents import (
+    SubagentConversationContext,
+    SubagentExecutionRequest,
+    SubagentOutputState,
+    accept_subagent_output,
+)
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.telemetry import mcp_initialization_span
@@ -162,6 +168,7 @@ class LangChainAdapter(HookRegistrationMixin):
         history_processor: HistoryProcessorCallback[Any] | None = None,
         history_processor_condition: HistoryProcessorCondition | None = None,
         tool_retries: int = 3,
+        output_retries: int = 1,
         **kwargs: Any,
     ) -> None:
         self._init_hook_registration(hook_handler)
@@ -171,8 +178,9 @@ class LangChainAdapter(HookRegistrationMixin):
         if not isinstance(tool_reason, bool):
             raise TypeError("tool_reason must be a boolean")
         self.tool_reason = tool_reason
-        if isinstance(tool_retries, bool) or not isinstance(tool_retries, int) or tool_retries < 0:
-            raise ValueError("tool_retries must be a non-negative integer")
+        for name, retries in (("tool_retries", tool_retries), ("output_retries", output_retries)):
+            if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
         self._default_usage_limits = default_usage_limits
         self._history_archive = history_archive
         from kedi.agent_adapter.adapters.langchain.history_processing import (
@@ -189,6 +197,7 @@ class LangChainAdapter(HookRegistrationMixin):
         if history_processor is not None:
             warn_history_processor_cache()
         self._tool_retries = tool_retries
+        self._output_retries = output_retries
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model_overrides: dict[str, Any] = {}
@@ -212,6 +221,10 @@ class LangChainAdapter(HookRegistrationMixin):
             AdapterConversationContext | SubagentConversationContext | None
         ] = ContextVar(
             f"kedi_langchain_conversation_{id(self)}",
+            default=None,
+        )
+        self._subagent_output_state_var: ContextVar[SubagentOutputState | None] = ContextVar(
+            f"kedi_langchain_subagent_output_state_{id(self)}",
             default=None,
         )
 
@@ -309,6 +322,7 @@ class LangChainAdapter(HookRegistrationMixin):
                     model,
                     tools,
                     codemode_enabled=projection.enabled,
+                    structured=True,
                 ),
             )
             payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
@@ -332,6 +346,8 @@ class LangChainAdapter(HookRegistrationMixin):
         instructions = cast(str | None, kwargs.pop("instructions", None))
         if instructions is None:
             instructions = self.active_profile.system
+        validator = validator_for(output_schema)(output_schema)
+        output_state = self._subagent_output_state_var.get()
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
@@ -354,6 +370,11 @@ class LangChainAdapter(HookRegistrationMixin):
                     model,
                     tools,
                     codemode_enabled=projection.enabled,
+                    structured=True,
+                    # LangChain returns raw JSON Schema output unvalidated.
+                    accept_output=lambda output: accept_subagent_output(
+                        output, validator, output_state
+                    ),
                 ),
             )
             payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
@@ -488,15 +509,17 @@ class LangChainAdapter(HookRegistrationMixin):
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
         token = self._conversation_var.set(request.conversation)
-        with (
-            self.tool_scope(request.tools),
-            self.profile_override(request.profile),
-            self.approval_ceiling(request.approval_ceiling),
-        ):
-            try:
+        output_token = self._subagent_output_state_var.set(request.output_state)
+        try:
+            with (
+                self.tool_scope(request.tools),
+                self.profile_override(request.profile),
+                self.approval_ceiling(request.approval_ceiling),
+            ):
                 yield
-            finally:
-                self._conversation_var.reset(token)
+        finally:
+            self._subagent_output_state_var.reset(output_token)
+            self._conversation_var.reset(token)
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -870,10 +893,26 @@ class LangChainAdapter(HookRegistrationMixin):
         tools: Sequence[Any],
         *,
         codemode_enabled: bool = False,
+        structured: bool = False,
+        accept_output: Callable[[Any], Any] | None = None,
     ) -> list[Any]:
-        from kedi.agent_adapter.adapters.langchain.runtime import LangChainRunMiddleware
+        from kedi.agent_adapter.adapters.langchain.runtime import (
+            LangChainOutputCorrectionMiddleware,
+            LangChainRunMiddleware,
+        )
 
+        # The correction middleware is outermost, so the run middleware admits each correction.
+        correction = (
+            [
+                LangChainOutputCorrectionMiddleware(
+                    retries=self._output_retries, accept=accept_output
+                )
+            ]
+            if structured
+            else []
+        )
         return [
+            *correction,
             LangChainRunMiddleware(
                 archive=self._history_archive,
                 history_processor=self._history_processor_runner,

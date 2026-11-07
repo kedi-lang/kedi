@@ -7,7 +7,6 @@ from typing import (
 )
 
 from jsonschema.validators import validator_for
-from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai.capabilities import (
     AbstractCapability,
     HandleDeferredToolCalls,
@@ -36,7 +35,8 @@ from kedi.agent_adapter.adapters.pydantic.tools import (
     _approval_request_payload,
 )
 from kedi.agent_adapter.events import AgentMessageResolver
-from kedi.agent_adapter.subagents import SubagentOutputState
+from kedi.agent_adapter.output_schema import OutputCorrection
+from kedi.agent_adapter.subagents import SubagentOutputState, accept_subagent_output
 from kedi.agent_adapter.telemetry import (
     native_agent_span_scope,
     native_tool_span_scope,
@@ -74,47 +74,10 @@ class _SubagentOutputValidation(AbstractCapability[Any]):
         output_context: OutputContext,
         output: Any,
     ) -> Any:
-        issues = []
-        for issue in self.validator.iter_errors(output):
-            detail = (
-                f"length {len(issue.instance)} exceeds maxLength {issue.validator_value}"
-                if issue.validator == "maxLength" and isinstance(issue.instance, str)
-                else issue.message[:320]
-            )
-            issues.append(f"{issue.json_path}: {detail}")
-            if len(issues) == 8:
-                break
-        if issues:
-            feedback = "\n".join(issues)
-            raise ModelRetry(
-                "Subagent output does not match its JSON Schema:\n"
-                f"{feedback[:3600]}\n"
-                "Return a corrected object with task_summary and final_result as root siblings."
-            )
-        if self.output_state is not None:
-            try:
-                typed = self.output_state.validate_candidate(output["final_result"])
-            except PydanticValidationError as exc:
-                issues = [
-                    f"final_result.{'.'.join(map(str, error['loc']))}: {error['msg'][:320]}"
-                    for error in exc.errors(include_input=False, include_url=False)[:8]
-                ]
-                raise ModelRetry(
-                    "Subagent final_result failed native validation:\n" + "\n".join(issues)[:3600]
-                ) from exc
-            normalized = {
-                **output,
-                "final_result": self.output_state.adapter.dump_python(typed, mode="json"),
-            }
-            normalized_errors = list(self.validator.iter_errors(normalized))
-            if normalized_errors:
-                raise ModelRetry(
-                    "Subagent final_result serialization violates its JSON Schema at "
-                    f"{normalized_errors[0].json_path}: {normalized_errors[0].message[:320]}"
-                )
-            self.output_state.typed_output = typed
-            return normalized
-        return output
+        try:
+            return accept_subagent_output(output, self.validator, self.output_state)
+        except OutputCorrection as exc:
+            raise ModelRetry(str(exc)) from exc
 
 
 class _KediTelemetryCapability(AbstractCapability[Any]):

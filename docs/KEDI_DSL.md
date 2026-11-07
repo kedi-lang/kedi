@@ -3532,6 +3532,15 @@ messages and permits three corrections per tool per run by default
 (`tool_retries=3`); it does not automatically repeat a side-effecting operation.
 Unclassified application exceptions and cancellation remain failures.
 
+Structured output gets a bounded correction on both adapters. When native output
+fails parsing or validation, including Kedi's JSON Schema check of a subagent
+result, the failed response and the validation feedback go back to the model for
+another turn: Pydantic AI through its output retries (one by default,
+`retries={"output": n}`), LangChain through `output_retries` (default `1`). Each
+correction is an actual model request, counted by `request_limit` and usage limits.
+A truncated response is reported as incomplete, not corrected; when corrections run
+out, the original validation error ends the run.
+
 Exact history archival is opt-in and requires an active artifact manager/policy:
 
 ```python

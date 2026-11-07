@@ -8,6 +8,10 @@ from ..dynamic_models import build_dynamic_model
 from ..resolved_types import ResolvedKediType, annotated_field_metadata
 
 
+class OutputCorrection(ValueError):
+    """Structured output the model can correct; the message is the feedback it receives."""
+
+
 def make_repr(cls: type) -> str:
     _type_repr = repr(cls)
     return _type_repr if not _type_repr.startswith("<class") else cls.__name__

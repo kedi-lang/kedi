@@ -9,9 +9,11 @@ from uuid import uuid4
 
 from jsonschema.validators import validator_for
 from pydantic import TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 from typing_extensions import runtime_checkable
 
 from ...errors import KediExecutionError
+from ..output_schema import OutputCorrection
 from ..tools.specs import ToolSpec
 from .budget import DelegationBudget
 from .limits import SubagentUsageLimits
@@ -209,6 +211,55 @@ def validate_structured_result(
         )
     validator_for(schema)(schema).validate(result)
     return result
+
+
+def accept_subagent_output(
+    output: Any,
+    validator: Any,
+    output_state: SubagentOutputState | None = None,
+) -> Any:
+    """Return the child result to accept, or raise OutputCorrection with feedback for the model.
+
+    Framework adapters run this inside their structured-output correction loop.
+    """
+    issues = []
+    for issue in validator.iter_errors(output):
+        detail = (
+            f"length {len(issue.instance)} exceeds maxLength {issue.validator_value}"
+            if issue.validator == "maxLength" and isinstance(issue.instance, str)
+            else issue.message[:320]
+        )
+        issues.append(f"{issue.json_path}: {detail}")
+        if len(issues) == 8:
+            break
+    if issues:
+        feedback = "\n".join(issues)
+        raise OutputCorrection(
+            "Subagent output does not match its JSON Schema:\n"
+            f"{feedback[:3600]}\n"
+            "Return a corrected object with task_summary and final_result as root siblings."
+        )
+    if output_state is None:
+        return output
+    try:
+        typed = output_state.validate_candidate(output["final_result"])
+    except PydanticValidationError as exc:
+        issues = [
+            f"final_result.{'.'.join(map(str, error['loc']))}: {error['msg'][:320]}"
+            for error in exc.errors(include_input=False, include_url=False)[:8]
+        ]
+        raise OutputCorrection(
+            "Subagent final_result failed native validation:\n" + "\n".join(issues)[:3600]
+        ) from exc
+    normalized = {**output, "final_result": output_state.adapter.dump_python(typed, mode="json")}
+    normalized_errors = list(validator.iter_errors(normalized))
+    if normalized_errors:
+        raise OutputCorrection(
+            "Subagent final_result serialization violates its JSON Schema at "
+            f"{normalized_errors[0].json_path}: {normalized_errors[0].message[:320]}"
+        )
+    output_state.typed_output = typed
+    return normalized
 
 
 def new_subagent_run_id() -> str:

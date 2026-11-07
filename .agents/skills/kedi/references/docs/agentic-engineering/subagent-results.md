@@ -114,17 +114,18 @@ itself a schema reference.
   `final_result`. Adapter repair may occur within its configured limits, but
   exhausted validation fails the child run.
 
-Pydantic children validate the complete JSON Schema inside the model's output
-retry loop, including required fields, extra-property restrictions, and the
-1,000-character `task_summary` limit. An invalid result is returned to the model
-as validation feedback. Repairs consume the same child's request/token budget
-and configured output retries; they do not restart the workflow or completed
-siblings. When a native `> task` capture or the child profile's `> output:` uses
-a Python type, its Pydantic validators run in that same retry loop. A result is
-recorded as completed only after both checks pass. The native `> await` value
-retains its type; delegation tools and persisted child history use JSON values.
-Other adapters still reject invalid results before completion, but do not gain
-Pydantic's native output retry mechanism.
+Pydantic AI and LangChain children validate the complete JSON Schema inside the
+model's output correction loop, including required fields, extra-property
+restrictions, and the 1,000-character `task_summary` limit. An invalid result is
+returned to the model as validation feedback. Repairs consume the same child's
+request/token budget and configured output retries (Pydantic AI's output retries,
+LangChain's `output_retries`; one by default); they do not restart the workflow
+or completed siblings. When a native `> task` capture or the child profile's
+`> output:` uses a Python type, its Pydantic validators run in that same loop. A
+result is recorded as completed only after both checks pass. The native
+`> await` value retains its type; delegation tools and persisted child history
+use JSON values. Other adapters still reject invalid results before completion,
+without a correction turn.
 
 Native conversion uses strict JSON validation. A date's JSON string, a UUID's
 string, an enum's declared JSON value, or a tuple's JSON array becomes the

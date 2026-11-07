@@ -200,7 +200,13 @@ Filesystem, terminal, dynamic-workflow, subagent and artifact errors use the sam
 Kedi correction messages as Pydantic AI. The model may correct a failed tool call
 up to `tool_retries=3` times per tool per run by default. The adapter does not
 automatically execute the same command again. Unclassified application exceptions
-and cancellation still propagate. Output-validation retries remain framework-native.
+and cancellation still propagate.
+
+Structured output that fails parsing or validation, including a subagent result's
+JSON Schema, gets a correction turn like Pydantic AI's output retry: the failed
+response and its validation feedback go back to the model, `output_retries=1` times
+by default. Each correction is a counted model request. A truncated response is
+reported as incomplete rather than corrected.
 
 ## Exact History Archives
 

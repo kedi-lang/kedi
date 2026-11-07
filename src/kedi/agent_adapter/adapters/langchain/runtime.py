@@ -1,4 +1,4 @@
-"""Per-run LangChain lifecycle: exact archival, usage and bounded tool correction."""
+"""Per-run LangChain lifecycle: exact archival, usage and bounded tool and output correction."""
 
 from __future__ import annotations
 
@@ -8,13 +8,15 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
-from typing import Any, Generator, Literal, Mapping, Sequence
+from typing import Any, Callable, Generator, Literal, Mapping, Sequence
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, hook_config
+from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Overwrite
+from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai import UsageLimits
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.usage import RunUsage
@@ -28,6 +30,7 @@ from kedi.agent_adapter.history_processing import (
     rebase_history_cache_key,
 )
 from kedi.agent_adapter.invocation import InvocationUsage
+from kedi.agent_adapter.output_schema import OutputCorrection
 from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.tools.dispatch import SequentialDispatchGate
 from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries
@@ -151,7 +154,6 @@ class LangChainRunMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         from langchain_core.messages import HumanMessage
 
-        from kedi.agent_adapter.adapters.langchain import _langchain_invocation_usage
         from kedi.agent_adapter.subagents.control import current_live_input
 
         state = _RUN.get()
@@ -231,17 +233,13 @@ class LangChainRunMiddleware(AgentMiddleware):
                     if isinstance(message, HumanMessage) and isinstance(message.content, str)
                 )
             )
-        response = await handler(request)
-        if state is not None:
-            usage = _langchain_invocation_usage({"messages": response.result})
-            state.usage += usage
-            state.native_usage.input_tokens += usage.input_tokens
-            state.native_usage.output_tokens += usage.output_tokens
-            state.native_usage.cache_read_tokens += usage.cache_read_tokens
-            state.native_usage.cache_write_tokens += usage.cache_write_tokens
-            state.limits.check_tokens(state.native_usage)
-            state.limits.check_per_request_input_tokens(usage.input_tokens)
-        _check_model_completion(getattr(response, "result", ()))
+        try:
+            response = await handler(request)
+        except StructuredOutputValidationError as exc:
+            # An unparsable response still used tokens, and may be truncated rather than wrong.
+            _record_model_response(state, [exc.ai_message])
+            raise
+        _record_model_response(state, getattr(response, "result", ()))
         if state is not None and fingerprint is not None:
             state.instruction_digest = fingerprint
             state.instructions_changed = state.instructions_changed or instructions_changed
@@ -281,6 +279,86 @@ class LangChainRunMiddleware(AgentMiddleware):
         else:
             state.native_usage.tool_calls += 1
         return result
+
+
+class LangChainOutputCorrectionMiddleware(AgentMiddleware):
+    """Bounded structured-output corrections, like Pydantic AI's output retries.
+
+    LangChain raises on native output that fails parsing and returns raw JSON Schema output
+    unvalidated. Placed outside the run middleware, so each correction is an admitted and
+    accounted request; failed responses and their feedback stay in the run's messages.
+    """
+
+    def __init__(self, *, retries: int, accept: Callable[[Any], Any] | None = None) -> None:
+        self.retries = retries
+        self.accept = accept
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        from langchain_core.messages import HumanMessage
+
+        corrections: list[Any] = []
+        attempt = 0
+        while True:
+            try:
+                response = await handler(request)
+            except StructuredOutputValidationError as exc:
+                if attempt >= self.retries:
+                    raise
+                failed, feedback = [exc.ai_message], _structured_output_feedback(exc.source)
+            else:
+                structured = response.structured_response
+                if structured is None or self.accept is None:
+                    return _with_corrections(response, corrections)
+                try:
+                    accepted = self.accept(structured)
+                except OutputCorrection as exc:
+                    if attempt >= self.retries:
+                        # The caller's final validation reports it, as without corrections.
+                        return _with_corrections(response, corrections)
+                    failed, feedback = list(response.result), str(exc)
+                else:
+                    return _with_corrections(
+                        replace(response, structured_response=accepted), corrections
+                    )
+            attempt += 1
+            correction = HumanMessage(content=feedback)
+            corrections += [*failed, correction]
+            request = request.override(messages=[*request.messages, *failed, correction])
+
+
+def _with_corrections(response: Any, corrections: list[Any]) -> Any:
+    return replace(response, result=[*corrections, *response.result]) if corrections else response
+
+
+def _structured_output_feedback(error: Exception) -> str:
+    cause = error.__cause__
+    if isinstance(cause, PydanticValidationError):
+        detail = "\n".join(
+            f"{'.'.join(map(str, item['loc']))}: {item['msg'][:320]}"
+            for item in cause.errors(include_input=False, include_url=False)[:8]
+        )
+    else:
+        detail = str(error)
+    return (
+        "The structured output does not match the required schema:\n"
+        f"{detail[:3600]}\n"
+        "Return a corrected response that matches the schema."
+    )
+
+
+def _record_model_response(state: LangChainRunState | None, messages: Sequence[Any]) -> None:
+    from kedi.agent_adapter.adapters.langchain import _langchain_invocation_usage
+
+    if state is not None:
+        usage = _langchain_invocation_usage({"messages": messages})
+        state.usage += usage
+        state.native_usage.input_tokens += usage.input_tokens
+        state.native_usage.output_tokens += usage.output_tokens
+        state.native_usage.cache_read_tokens += usage.cache_read_tokens
+        state.native_usage.cache_write_tokens += usage.cache_write_tokens
+        state.limits.check_tokens(state.native_usage)
+        state.limits.check_per_request_input_tokens(usage.input_tokens)
+    _check_model_completion(messages)
 
 
 def _check_model_completion(messages: Sequence[Any]) -> None:
