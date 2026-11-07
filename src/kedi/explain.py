@@ -19,6 +19,7 @@ from kedi.lang.ast import (
     BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
+    GroupStmt,
     IfStmt,
     LoopStmt,
     McpDirectiveStmt,
@@ -328,6 +329,9 @@ class _Analyzer:
                 )
             elif isinstance(item, (TemplateBlock, TemplateLine, RawInvokeStmt)):
                 self._call(item, state, scope)
+            elif isinstance(item, GroupStmt):
+                # Transparent: the group's statements belong to the enclosing scope.
+                state = self._walk_scope(item.body, state, f"{scope} (group {item.name})")
             elif isinstance(item, IfStmt):
                 self._walk(item.body, state, f"{scope} (conditional)")
                 if item.else_body:

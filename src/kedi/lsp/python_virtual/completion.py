@@ -6,7 +6,8 @@ import ast
 from copy import deepcopy
 from typing import Any
 
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lsp.coordinates import utf16_to_index
 from kedi.lsp.features.python_regions import compute_python_ranges
 

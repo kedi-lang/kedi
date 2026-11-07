@@ -17,7 +17,7 @@ from ..lang.ast import (
     VariableInitBlockStmt,
     VariableInitStmt,
 )
-from ..lang.parser import parse_program
+from .parsing import parse_program
 from ..module_registry import find_module_path, resolve_module_path
 from ..package_registry import CorruptInstalledPackageError
 from ..source_loading import load_kedi_source_bundle

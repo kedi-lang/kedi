@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from kedi.lang.ast import Program
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 
 
 def parse_completion_source(source: str, source_path: str | None, line: int | None) -> Program:

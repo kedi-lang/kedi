@@ -25,6 +25,7 @@ from ..telemetry import (
     record_histogram,
     span,
 )
+from ..groups import GroupMember
 from ..telemetry.naming import qualified_type_name
 from .invocation import InvocationUsage
 from .meta import AgentAdapterKind
@@ -48,10 +49,13 @@ def record_conversation_assets(
     source_path: str | None,
     source_line: int | None,
     source_snippet: str | None,
+    group_member: GroupMember | None = None,
 ) -> None:
     profile_name = profile.name or "kedi"
     template_key = (
-        f"{source_path}:{source_line or 0}:{call_kind}"
+        group_member.template_locator.removeprefix("kedi:template:")
+        if group_member is not None
+        else f"{source_path}:{source_line or 0}:{call_kind}"
         if source_path is not None
         else f"{profile_name}:{call_kind}"
     )
@@ -90,7 +94,22 @@ def record_conversation_assets(
         metadata={"call_kind": call_kind},
     )
     source_locator: str | None = None
-    if source_path is not None:
+    template_metadata: dict[str, Any] = {
+        "call_kind": call_kind,
+        "profile": profile_name,
+        "source_path": source_path,
+        "source_line": source_line,
+    }
+    if group_member is not None:
+        # A group's model call belongs to its form, not to a source line.
+        source_locator = group_member.group
+        template_metadata = {
+            "call_kind": call_kind,
+            "profile": profile_name,
+            "group": group_member.group,
+            "ordinal": group_member.ordinal,
+        }
+    elif source_path is not None:
         source_locator = f"kedi:source:{source_path}:{source_line or 0}"
         source_content = {
             "path": source_path,
@@ -113,12 +132,7 @@ def record_conversation_assets(
         name=f"{profile_name} {call_kind} template",
         source_locator=f"kedi:template:{template_key}",
         content=prompt,
-        metadata={
-            "call_kind": call_kind,
-            "profile": profile_name,
-            "source_path": source_path,
-            "source_line": source_line,
-        },
+        metadata=template_metadata,
         sensitivity="sensitive",
         representation="effective",
         definition_locator=source_locator,

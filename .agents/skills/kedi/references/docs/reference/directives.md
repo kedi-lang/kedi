@@ -185,6 +185,11 @@ An optimize body must start its template with `>>`. Its continuation lines form
 one prompt, not separate calls. A bare optimize prompt is a parse error.
 The `> auto:` body remains an indented code-generation specification.
 
+`> evolve: name:` names a scope-transparent region of a procedure or of the top level
+whose body a validated form can replace without editing the source. Its body cannot
+return, define procedures or types, contain directives, or contain another group. See
+[Evolve Groups and Forms](../evals-and-optimization/evolve-groups.md).
+
 ## Placement and Capture
 
 Agent directives at top level are captured by procedures defined afterward.

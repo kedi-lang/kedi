@@ -23,6 +23,7 @@ from kedi.agent_adapter.tools.scope import (
 )
 from kedi.core.expressions import _type_display_name
 from kedi.debugging import execution_observed
+from kedi.groups import current_group_member
 from kedi.telemetry import capture_enabled
 
 if TYPE_CHECKING:
@@ -105,6 +106,7 @@ def execute_request(
         source_path=source_path,
         source_line=source_line,
         source_snippet=source_snippet,
+        group_member=current_group_member(),
     )
     with agent_call_span(
         adapter,

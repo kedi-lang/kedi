@@ -16,6 +16,7 @@ from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
+    GroupStmt,
     InputSegment,
     OutputSegment,
     RawInvokeStmt,
@@ -82,8 +83,11 @@ def test_optimize_span_executes_its_lines_as_one_template_block() -> None:
 
     assert len(proc.optimize_spans) == 1
     assert len(proc.optimize_spans[0].template_lines) == 2
-    assert isinstance(proc.body[0], TemplateBlock)
-    assert proc.body[0].lines is proc.optimize_spans[0].template_lines
+    group = proc.body[0]
+    assert isinstance(group, GroupStmt)
+    assert (group.kind, group.name) == ("optimize", "prompt")
+    assert isinstance(group.body[0], TemplateBlock)
+    assert group.body[0].lines is proc.optimize_spans[0].template_lines
 
     runtime = compile_program(program, adapter=adapter)
     assert runtime.run_main() == "summary-value"
@@ -106,8 +110,11 @@ def test_optimize_span_accepts_explicit_template_block_syntax() -> None:
 
     assert len(proc.optimize_spans) == 1
     assert len(proc.optimize_spans[0].template_lines) == 2
-    assert isinstance(proc.body[0], TemplateBlock)
-    assert proc.body[0].lines is proc.optimize_spans[0].template_lines
+    group = proc.body[0]
+    assert isinstance(group, GroupStmt)
+    assert (group.kind, group.name) == ("optimize", "prompt")
+    assert isinstance(group.body[0], TemplateBlock)
+    assert group.body[0].lines is proc.optimize_spans[0].template_lines
 
     runtime = compile_program(program, adapter=adapter)
     assert runtime.run_main() == "summary-value"

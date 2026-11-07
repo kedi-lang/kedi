@@ -130,6 +130,10 @@ class KediRuntime:
         self._python_origins: Dict[str, KediPythonOrigin] = {}
         self._python_origin_keys: Dict[tuple[Any, ...], str] = {}
         self._program: Any | None = None
+        # The module's import name as the root program sees it; it scopes group identities.
+        self.module_name = "main"
+        # Every module of the program by name, shared by the runtimes of one compilation.
+        self._module_runtimes: dict[str, KediRuntime] = {}
         self._source_map: Any | None = None
         self._source_text: str | None = None
         self._root_type_env_stack: list[dict[str, Any]] = []
@@ -325,6 +329,20 @@ class KediRuntime:
         from kedi.lang.compiler.environment import native_value
 
         return native_value(force(result))
+
+    def propose_form(
+        self, group: str, text: str, *, parent: str | None = None, note: str | None = None
+    ) -> str:
+        """Gate a form for a group and run it from the group's next execution in this process.
+
+        ``group`` is named as in a forms file, and ``parent`` is the fingerprint of the form
+        this one derives from. Returns the form's fingerprint. A rejected form raises
+        :class:`kedi.forms.FormError` naming the broken rule, and the active form keeps
+        running. Keeping an accepted form beyond this process is the caller's job.
+        """
+        from kedi.forms import Form, propose_form
+
+        return propose_form(self, group, Form(text, parent, note, f"<proposed {group}>"))
 
     def set_initial_globals(self, values: ValueEnv) -> None:
         self._initial_globals_env = dict(values)

@@ -75,6 +75,7 @@ behavior.
 | `--test` | Run all `@test:` cases and stop |
 | `--eval` | Run all `@eval:` suites and stop |
 | `--optimize` | Optimize every eligible `> optimize:` span before continuing |
+| `--forms PATH` | Run validated forms in place of group bodies; works with runs, `--test`, `--eval`, and `-c` |
 | `--no-cache` | Disable/remove `> auto:` codegen cache for this command |
 | `--quiet` | Suppress codegen and GEPA progress |
 | `-p`, `--parse` | Parse source without compiling or executing |

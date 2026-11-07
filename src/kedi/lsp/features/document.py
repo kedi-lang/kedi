@@ -22,7 +22,8 @@ from kedi.lang.ast import (
     TypeDefStmt,
     UseDirectiveStmt,
 )
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.coordinates import with_source_coordinates
 from kedi.lsp.features.directive_help import (

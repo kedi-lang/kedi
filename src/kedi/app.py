@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Tuple
 
@@ -13,6 +14,7 @@ from .agent_adapter.meta import AgentAdapter
 from .agent_adapter.registry import adapter_capabilities, adapter_factory, build_adapter
 from .agent_profile import AgentProfile
 from .codegen.runner import run_codegen
+from .forms import Form
 from .lang import compile_program, parse_program
 from .lang.compiler import environment as compiler_environment
 from .lang.parser.diagnostics import KediParseError
@@ -90,11 +92,15 @@ def run_tests_cli(
     model: str | None = None,
     use_cache: bool = True,
     runtime_args: CliArgs | None = None,
+    forms: Mapping[str, Form] | None = None,
 ) -> Tuple[int, str]:
     ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
     if not ok:
         return 1, (err or "Code generation failed")
-    kwargs: dict[str, Any] = {"adapter": _build_lazy_runtime_adapter(adapter, model)}
+    kwargs: dict[str, Any] = {
+        "adapter": _build_lazy_runtime_adapter(adapter, model),
+        "forms": forms,
+    }
     if runtime_args is not None:
         kwargs["runtime_globals"] = _runtime_globals(runtime_args)
     results = run_tests(source, **kwargs)
@@ -353,6 +359,7 @@ def run_evals_cli(
     use_cache: bool = True,
     runtime_args: CliArgs | None = None,
     quiet: bool = False,
+    forms: Mapping[str, Form] | None = None,
 ) -> Tuple[int, str]:
     """Run eval suites. Set ``optimize=True`` only when not calling ``run_optimization_cli`` first
     (e.g. programmatic API). The CLI runs optimization in ``run_optimization_cli`` and passes
@@ -382,7 +389,10 @@ def run_evals_cli(
     if not ok:
         return 1, (err or "Code generation failed")
 
-    kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, adapter_model)}
+    kwargs: dict[str, Any] = {
+        "adapter": _build_runtime_adapter(adapter, adapter_model),
+        "forms": forms,
+    }
     if runtime_args is not None:
         kwargs["runtime_globals"] = _runtime_globals(runtime_args)
     results = run_evals(str(source_path), **kwargs)
@@ -445,6 +455,7 @@ def run_program_cli(
     adapter: str,
     model: str | None,
     runtime_args: CliArgs | None = None,
+    forms: Mapping[str, Form] | None = None,
 ) -> Tuple[int, str]:
     from pathlib import Path
 
@@ -484,6 +495,7 @@ def run_program_cli(
                 adapter=lazy_adapter,
                 runtime_globals=_runtime_globals(runtime_args),
                 default_agent_profile=_cli_default_profile(),
+                forms=forms,
             )
             _set_runtime_args(rt, runtime_args)
             out = rt.run_main()
@@ -501,6 +513,7 @@ def run_source_cli(
     model: str | None,
     runtime_args: CliArgs | None = None,
     source_path: str = "<command>",
+    forms: Mapping[str, Form] | None = None,
 ) -> Tuple[int, str]:
     display_name = program_name(source_path, fallback="<command>")
     attributes: dict[str, str] = {
@@ -528,6 +541,7 @@ def run_source_cli(
                 adapter=lazy_adapter,
                 runtime_globals=_runtime_globals(runtime_args),
                 default_agent_profile=_cli_default_profile(),
+                forms=forms,
             )
             _set_runtime_args(rt, runtime_args)
             out = rt.run_main()

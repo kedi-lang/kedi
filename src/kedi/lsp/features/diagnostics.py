@@ -25,7 +25,8 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler.environment import CLI_ARGS_IDENTIFIER
 from kedi.lang.compiler.type_system import UNSUPPORTED_KEDI_TYPE_NAMES
-from kedi.lang.parser import KediDiagnostic, KediParseError, parse_program
+from kedi.lang.parser import KediDiagnostic, KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lsp.ast_helpers import binding_name_span
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.coordinates import with_source_coordinates

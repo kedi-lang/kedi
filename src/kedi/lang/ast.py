@@ -338,6 +338,42 @@ class ConditionalLoopStmt(Stmt):
     condition_loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
+GroupKind = Literal["evolve", "optimize"]
+FormProducer = Literal["source", "supplied", "optimizer", "codegen", "runtime"]
+
+
+@dataclass(frozen=True)
+class ActiveForm:
+    """A group's body as it runs: its statements, canonical text, and provenance.
+
+    ``parent`` is the fingerprint of the form this one derives from; ``note`` is its
+    producer's reason for it. Neither is part of the form's identity.
+    """
+
+    body: List[Stmt]
+    canonical: str
+    producer: FormProducer
+    parent: Optional[str] = None
+    note: Optional[str] = None
+
+
+@dataclass
+class GroupStmt(Stmt):
+    """A named, scope-transparent region: ``> evolve: name:`` or an ``> optimize:`` span.
+
+    Names bound in the body stay visible after it. ``body`` and ``canonical`` are the
+    source form; ``form`` is a validated form that runs in its place, replaced as one
+    value so that an execution sees one form from start to end.
+    """
+
+    kind: GroupKind = "evolve"
+    name: str = ""
+    body: List[Stmt] = field(default_factory=list)
+    canonical: str = field(default="", repr=False, compare=False)
+    name_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    form: Optional[ActiveForm] = field(default=None, repr=False, compare=False)
+
+
 @dataclass
 class ModelDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
@@ -732,6 +768,8 @@ class ProcedureDef:
     # Legacy AI-prompt-only spec (superseded by `auto_spec`).
     ai_prompt: Optional[str] = None
     auto_spec: Optional[AutoSpec] = None
+    # Canonical body text when this procedure implements an earlier `> auto:` spec.
+    auto_form: Optional[str] = field(default=None, repr=False, compare=False)
     tool: Optional[ToolDeclaration] = None
     optimize_spans: List[OptimizeSpan] = field(default_factory=list)
     captured_agent_profile: Any = field(default=None, repr=False, compare=False)
@@ -795,6 +833,8 @@ class Program:
     source_text: Optional[str] = field(default=None, repr=False, compare=False)
     source_map: Any = field(default=None, repr=False, compare=False)
     parser_warnings: List[KediDiagnostic] = field(default_factory=list, repr=False, compare=False)
+    # Every group by qualified name: `<procedure>.<name>` or a top-level `<name>`.
+    groups: dict[str, GroupStmt] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

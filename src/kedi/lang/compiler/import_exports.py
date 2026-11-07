@@ -11,6 +11,7 @@ from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.definitions import ProfileDefinition, iter_profile_members
 from kedi.core import KediRuntime
 from kedi.lang.ast import (
+    GroupStmt,
     ModuleImport,
     OutputSegment,
     Program,
@@ -118,8 +119,13 @@ def _static_local_runtime_names(self: ProgramCompiler, prog: Program) -> tuple[s
         names.update(prelude_names)
         complete = prelude_complete
 
-    for stmt in prog.toplevel_body:
-        if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt, RawInvokeStmt)):
+    # Groups are transparent, so the names their bodies bind are top-level names.
+    statements = list(prog.toplevel_body)
+    while statements:
+        stmt = statements.pop(0)
+        if isinstance(stmt, GroupStmt):
+            statements[:0] = stmt.body
+        elif isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt, RawInvokeStmt)):
             names.add(stmt.name)
         elif isinstance(stmt, TemplateBlock):
             names.update(self._template_output_names(stmt.lines))
