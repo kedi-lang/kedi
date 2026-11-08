@@ -23,7 +23,6 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler.environment import KEDI_RUNTIME_TYPE_ORIGINS, KEDI_TYPING_TYPE_NAMES
 from kedi.lang.parser import KediParseError
-from kedi.lsp.parsing import parse_program
 from kedi.lsp.completion_source import parse_completion_source
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import utf16_length, utf16_to_index, with_source_coordinates
@@ -41,6 +40,7 @@ from kedi.lsp.features.scope import (
 )
 from kedi.lsp.features.symbols import _merged_profile_defs
 from kedi.lsp.module_surface import imported_surface_for_program
+from kedi.lsp.parsing import parse_program
 
 _DIRECTIVE_COMPLETIONS = {
     "adapter": "Select the model integration for this scope",

@@ -84,7 +84,6 @@ from kedi.lang.ast import (
 )
 from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lang.parser import KediParseError
-from kedi.lsp.parsing import parse_program
 from kedi.lang.parser.parser import parse as _ts_parse
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import span_to_range as _span_to_range
@@ -147,6 +146,7 @@ from kedi.lsp.features.scope import (
 from kedi.lsp.features.symbols import _merged_profile_defs
 from kedi.lsp.features.type_support import _known_lsp_type_origin
 from kedi.lsp.module_surface import ImportedSurface, ImportedValueInfo, imported_surface_for_program
+from kedi.lsp.parsing import parse_program
 
 
 @with_source_coordinates(1)
