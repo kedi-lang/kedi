@@ -46,7 +46,7 @@ kedi-terminal-bench manifest \
   --harbor-revision 389bd4f8ce796ef4a97de4b62675021e262c8e76 \
   --model openrouter/openai/gpt-5.6-luna \
   --effort high \
-  --kedi-wheel dist/kedi-0.4.0-py3-none-any.whl \
+  --kedi-wheel dist/kedi-0.1.1-py3-none-any.whl \
   --timeout-multiplier 1 \
   --agent-timeout-multiplier 1 \
   --verifier-timeout-multiplier 1 \
@@ -89,7 +89,7 @@ Run the manifest with the recorded wheel:
 
 ```bash
 kedi-terminal-bench run runs/pilot.json \
-  --kedi-wheel dist/kedi-0.4.0-py3-none-any.whl \
+  --kedi-wheel dist/kedi-0.1.1-py3-none-any.whl \
   --jobs-dir runs/jobs \
   --job-name pilot-1
 ```
@@ -131,7 +131,7 @@ kedi-terminal-bench manifest \
   --concurrency 2 \
   --attempts 1 \
   --max-retries 0 \
-  --kedi-wheel dist/kedi-0.4.0-py3-none-any.whl \
+  --kedi-wheel dist/kedi-0.1.1-py3-none-any.whl \
   --task task-a \
   --task task-b
 
@@ -144,7 +144,7 @@ kedi-terminal-bench manifest \
   --concurrency 2 \
   --attempts 1 \
   --max-retries 0 \
-  --kedi-wheel dist/kedi-0.4.0-py3-none-any.whl \
+  --kedi-wheel dist/kedi-0.1.1-py3-none-any.whl \
   --task task-a \
   --task task-b
 ```
@@ -340,7 +340,7 @@ kedi-autobench-terminal-bench run \
   --job-dir runs/jobs/pilot-1 \
   --record-dir runs/records/pilot-1 \
   -- kedi-terminal-bench run runs/pilot.json \
-       --kedi-wheel dist/kedi-0.4.0-py3-none-any.whl \
+       --kedi-wheel dist/kedi-0.1.1-py3-none-any.whl \
        --jobs-dir runs/jobs \
        --job-name pilot-1
 ```
