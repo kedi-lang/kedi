@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread, current_thread
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 
+from kedi._version import __version__
 from kedi.agent_adapter.events import AgentMessagePhase, AgentMessageResolver
 from kedi.agent_adapter.execution import (
     _SHARED_LOOP,
@@ -581,7 +582,7 @@ class CodexAppServerClient:
             self._request_raw(
                 "initialize",
                 {
-                    "clientInfo": {"name": "kedi", "title": "Kedi", "version": "0.4.0"},
+                    "clientInfo": {"name": "kedi", "title": "Kedi", "version": __version__},
                     "capabilities": {"experimentalApi": True},
                 },
             )
