@@ -64,7 +64,14 @@ Type validation checks structure, not the factual truth of a model's answer.
 
 ## Try It
 
-The examples below target the current source checkout, including its parser:
+Install the released package:
+
+```bash
+pip install kedi
+```
+
+The examples below live in the repository. Clone it to run them against the
+current source, including its parser:
 
 ```bash
 git clone --recurse-submodules https://github.com/kedi-lang/kedi.git
