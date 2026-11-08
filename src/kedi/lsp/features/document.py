@@ -23,7 +23,6 @@ from kedi.lang.ast import (
     UseDirectiveStmt,
 )
 from kedi.lang.parser import KediParseError
-from kedi.lsp.parsing import parse_program
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.coordinates import with_source_coordinates
 from kedi.lsp.features.directive_help import (
@@ -32,6 +31,7 @@ from kedi.lsp.features.directive_help import (
     _type_field_annotation,
 )
 from kedi.lsp.features.scope import _proc_name_span
+from kedi.lsp.parsing import parse_program
 
 
 def compute_formatting(source: str) -> List[lsp.TextEdit]:

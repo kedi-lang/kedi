@@ -17,7 +17,6 @@ from ..lang.ast import (
     VariableInitBlockStmt,
     VariableInitStmt,
 )
-from .parsing import parse_program
 from ..module_registry import find_module_path, resolve_module_path
 from ..package_registry import CorruptInstalledPackageError
 from ..source_loading import load_kedi_source_bundle
@@ -26,6 +25,7 @@ from .ast_helpers import (
     extract_module_docstring,
     is_public_export_name,
 )
+from .parsing import parse_program
 
 _SurfaceValue = TypeVar("_SurfaceValue")
 

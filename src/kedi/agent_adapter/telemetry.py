@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from typing_extensions import runtime_checkable
 
 from ..agent_profile.telemetry import capability_attributes, capability_trace_id
+from ..groups import GroupMember
 from ..telemetry import (
     TelemetryAsset,
     TelemetrySpan,
@@ -25,7 +26,6 @@ from ..telemetry import (
     record_histogram,
     span,
 )
-from ..groups import GroupMember
 from ..telemetry.naming import qualified_type_name
 from .invocation import InvocationUsage
 from .meta import AgentAdapterKind
