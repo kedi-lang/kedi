@@ -12,6 +12,7 @@ have the same purpose or lifecycle.
 | `@test:` | Assert concrete behavior and regressions | Determined by case code and called procedures |
 | `@eval:` | Score behavior over a dataset | Determined by metric code and called procedures |
 | `> optimize:` | Mark prompt spans that an optimizer may rewrite | Many candidate and metric calls |
+| `> evolve:` | Name a region whose body a validated form can replace | Same as the active form |
 | `> auto:` | Generate tests and an implementation for a procedure | Test-generation and implementation attempts |
 
 Use tests for invariants that must always pass. Use evals for graded qualities

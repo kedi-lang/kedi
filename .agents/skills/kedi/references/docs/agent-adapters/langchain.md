@@ -67,7 +67,7 @@ finally:
 ```
 
 Install `kedi[codex-model,langchain]` on Python 3.11 or newer. This selects
-`codex-auth-helper[websocket]==1.8.0`. Authentication uses the existing Codex
+`codex-auth-helper[websocket]==1.13.0`. Authentication uses the existing Codex
 login. See [Codex Models](codex-models.md) for factory parameters and the
 distinction from the Codex App Server harness.
 

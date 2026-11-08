@@ -151,7 +151,7 @@ def codex_responses_model(
         if exc.name != "codex_auth_helper":
             raise
         raise ModuleNotFoundError(
-            "Codex-backed models require Python 3.11+ and codex-auth-helper[websocket]==1.8.0. "
+            "Codex-backed models require Python 3.11+ and codex-auth-helper[websocket]==1.13.0. "
             "Install Kedi with: uv add 'kedi[codex-model]'"
         ) from exc
 

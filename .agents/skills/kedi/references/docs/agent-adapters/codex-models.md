@@ -14,7 +14,7 @@ auth file. Do not include that file in source, logs, or published examples.
 
 `codex_responses_model()` builds a Codex-authenticated Pydantic model. HTTP is
 the default. Install `kedi[codex-model]` on Python 3.11 or newer for the pinned
-`codex-auth-helper[websocket]==1.8.0`. Select WebSocket explicitly; it is not
+`codex-auth-helper[websocket]==1.13.0`. Select WebSocket explicitly; it is not
 enabled just by installing the extra.
 
 ```python

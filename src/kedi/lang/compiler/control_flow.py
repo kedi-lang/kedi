@@ -9,7 +9,16 @@ from typing import Any
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame, LoopIterationLimitError
-from ..ast import ConditionalLoopStmt, IfStmt, LoopStmt
+from ...groups import form_fingerprint, group_member, group_scope
+from ..ast import (
+    ActiveForm,
+    ConditionalLoopStmt,
+    GroupStmt,
+    IfStmt,
+    LoopStmt,
+    Stmt,
+    TemplateBlock,
+)
 from .environment import ScopeFrame, assert_not_cli_args_identifier
 from .evaluation import evaluate_python_inline, render_expression
 
@@ -30,7 +39,8 @@ def evaluate_condition(
     ):
         if stmt.condition_segments is not None:
             claim = render_expression(rt, stmt.condition_segments, env, context="condition")
-            return rt._evaluate_claim(claim)
+            with group_member(stmt):
+                return rt._evaluate_claim(claim)
         result = evaluate_python_inline(
             rt,
             stmt.condition_code,
@@ -79,6 +89,49 @@ def managed_loop_iterator(values: Iterator[Any]) -> Generator[Iterator[Any], Non
         close = getattr(values, "close", None)
         if callable(close):
             close()
+
+
+@contextmanager
+def group_trace(
+    rt: KediRuntime, stmt: GroupStmt, procedure: str | None
+) -> Generator[list[Stmt], None, None]:
+    """Run a group's active form under its trace frame and its source-independent identity.
+
+    Yields the body to execute. Without a supplied form, an optimizer result runs as the
+    optimizer's form: its prompt prefix ahead of the span it was derived from.
+    """
+    qualified = stmt.name if procedure is None else f"{procedure}.{stmt.name}"
+    form = stmt.form or _source_form(stmt)
+    with (
+        rt.trace_frame(
+            KediTraceFrame(kind="group", label=f"{stmt.kind} {qualified}", span=stmt.loc)
+        ),
+        group_scope(
+            module=rt.module_name,
+            qualified_name=qualified,
+            kind=stmt.kind,
+            body=form.body,
+            canonical=form.canonical,
+            producer=form.producer,
+            parent=form.parent,
+            note=form.note,
+        ),
+    ):
+        yield form.body
+
+
+def _source_form(stmt: GroupStmt) -> ActiveForm:
+    # An optimize span's body is one template block, which the optimizer prefixes.
+    block = stmt.body[0] if stmt.kind == "optimize" else None
+    prefix = block.lines[0].optimized_prompt_prefix if isinstance(block, TemplateBlock) else None
+    if prefix is None:
+        return ActiveForm(stmt.body, stmt.canonical, "source")
+    return ActiveForm(
+        stmt.body,
+        f"{prefix}\n\n{stmt.canonical}",
+        "optimizer",
+        parent=form_fingerprint(stmt.canonical),
+    )
 
 
 @contextmanager

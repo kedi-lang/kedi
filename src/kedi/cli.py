@@ -20,6 +20,7 @@ from kedi.error_rendering import render_execution_error, render_parse_error
 from kedi.errors import KediExecutionError
 from kedi.idle import run_idle
 from kedi.lang import parse_program
+from kedi.forms import FormError, load_forms
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.package_audit import PackageAuditResult, audit_installed_packages
 from kedi.package_registry import add_package, install_package
@@ -285,6 +286,13 @@ def _run_notebook_command(arguments: list[str]) -> int:
 )
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
 @click.option(
+    "--forms",
+    "forms_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Run validated forms in place of group bodies (a JSON file keyed by group name)",
+)
+@click.option(
     "--idle",
     "idle_mode",
     is_flag=True,
@@ -354,6 +362,7 @@ def main(
     optimize: bool = False,
     optimizer_fresh: bool = False,
     no_cache: bool = False,
+    forms_path: Path | None = None,
     idle_mode: bool = False,
     record_idle: bool = False,
     load_session_path: Path | None = None,
@@ -401,7 +410,7 @@ def main(
     if idle_mode:
         if source is not None or command_source is not None:
             raise click.UsageError("--idle does not accept SOURCE or -c/--command.")
-        if test or do_eval or optimize or parse_only:
+        if test or do_eval or optimize or parse_only or forms_path is not None:
             raise click.UsageError("--idle cannot be combined with execution modes.")
         try:
             return run_idle(
@@ -493,8 +502,11 @@ def main(
             ctx.exit(1)
     elif optimize or test or do_eval:
         raise click.UsageError("-c/--command only supports direct run or --parse.")
+    if forms_path is not None and (optimize or parse_only):
+        raise click.UsageError("--forms cannot be combined with --optimize or --parse.")
     runtime_args = parse_args(ctx.args)
     try:
+        forms = None if forms_path is None else load_forms(forms_path)
         if parse_only:
             if command_source is not None:
                 parse_program(command_source, source_path="<command>")
@@ -516,6 +528,7 @@ def main(
                 adapter=adapter,
                 model=adapter_model,
                 runtime_args=runtime_args,
+                forms=forms,
             )
             if out:
                 click.echo(out)
@@ -562,6 +575,7 @@ def main(
                         model=adapter_model,
                         use_cache=not no_cache,
                         runtime_args=runtime_args,
+                        forms=forms,
                     )
                 finally:
                     if no_cache and source is not None:
@@ -589,6 +603,7 @@ def main(
                         use_cache=not no_cache,
                         runtime_args=runtime_args,
                         quiet=quiet,
+                        forms=forms,
                     )
                 finally:
                     if no_cache and source is not None:
@@ -623,6 +638,7 @@ def main(
                 adapter=adapter,
                 model=adapter_model,
                 runtime_args=runtime_args,
+                forms=forms,
             )
             if out:
                 click.echo(out)
@@ -639,6 +655,9 @@ def main(
         raise
     except KediParseError as e:
         click.echo(render_parse_error(e, use_color=sys.stderr.isatty()), err=True, nl=False)
+        ctx.exit(1)
+    except FormError as e:
+        click.echo(f"Error: {e}", err=True)
         ctx.exit(1)
     except KediExecutionError as e:
         click.echo(render_execution_error(e, use_color=sys.stderr.isatty()), err=True, nl=False)

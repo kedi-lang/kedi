@@ -3968,7 +3968,7 @@ def test_harbor_agent_installs_pinned_codex_helper_distribution(
     ]
     install_command = environment.root_calls[-1]["command"]
     assert "/installed-agent/codex_auth_helper-1.8.0-py3-none-any.whl" in install_command
-    assert "codex-auth-helper[websocket]==1.10.1" not in install_command
+    assert "codex-auth-helper[websocket]==1.13.0" not in install_command
 
     with pytest.raises(ValueError, match="requires a codex/ model"):
         KediAgent(
@@ -4372,7 +4372,7 @@ def test_harbor_agent_transfers_codex_auth_privately(
 
     asyncio.run(agent.install(environment))
     install_command = environment.root_calls[-1]["command"]
-    assert "codex-auth-helper[websocket]==1.10.1" in install_command
+    assert "codex-auth-helper[websocket]==1.13.0" in install_command
     assert source_secret not in install_command
 
     asyncio.run(agent.run("solve", environment, SimpleNamespace(metadata=None)))

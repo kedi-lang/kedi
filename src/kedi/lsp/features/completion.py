@@ -22,7 +22,8 @@ from kedi.lang.ast import (
     VariableInitStmt,
 )
 from kedi.lang.compiler.environment import KEDI_RUNTIME_TYPE_ORIGINS, KEDI_TYPING_TYPE_NAMES
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lsp.completion_source import parse_completion_source
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import utf16_length, utf16_to_index, with_source_coordinates
@@ -58,6 +59,7 @@ _DIRECTIVE_COMPLETIONS = {
     "defer": "Load this capability on demand; defaults to false",
     "effort": "Set the model reasoning effort",
     "else": "Run the alternative branch of a condition",
+    "evolve": "Name a region whose body a validated form can replace at run time",
     "export": "Expose module definitions to importers",
     "history": "Configure conversation history and processing",
     "hooks": "Attach callbacks to agent lifecycle events",

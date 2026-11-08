@@ -35,7 +35,7 @@ def test_run_evals_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
         seen["model"] = model
         return sentinel
 
-    def fake_run_evals(src_main: str, *, adapter=None):
+    def fake_run_evals(src_main: str, *, adapter=None, forms=None):
         seen["run_adapter"] = adapter
         return [
             EvalRunResult(
@@ -80,7 +80,7 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
         seen["model"] = model
         return sentinel
 
-    def fake_run_tests(src_main: str, *, adapter=None):
+    def fake_run_tests(src_main: str, *, adapter=None, forms=None):
         seen["run_adapter"] = adapter
         adapter.produce_sync()
         return [RunResult(procedure="solve", cases=[CaseResult(name="basic", success=True)])]

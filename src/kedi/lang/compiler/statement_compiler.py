@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -30,6 +31,7 @@ from ...core import KediRuntime
 from ...core.expressions import ValueEnv
 from ...debugging import checkpoint
 from ...errors import KediTraceFrame
+from ...groups import group_member, group_scope
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
@@ -45,6 +47,7 @@ from ..ast import (
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
+    GroupStmt,
     IfStmt,
     LoopStmt,
     McpDirectiveStmt,
@@ -78,6 +81,7 @@ from .control_flow import (
     child_scope,
     evaluate_condition,
     evaluate_iterable,
+    group_trace,
     loop_binding,
     loop_trace,
     managed_loop_iterator,
@@ -105,7 +109,11 @@ class StatementCompiler:
         self.rt = rt
 
     def compile_template_line(
-        self, stmt: TemplateLine, *, trace_label: str | None = None
+        self,
+        stmt: TemplateLine,
+        *,
+        trace_label: str | None = None,
+        source: Stmt | None = None,
     ) -> Callable:
         """Compile a template line to a function.
 
@@ -115,9 +123,13 @@ class StatementCompiler:
         while preserving the original prompt's type annotations for proper resolution.
         """
         label = trace_label or "template line"
+        member = stmt if source is None else source
 
         def _fn(**kwargs: Any) -> Any:
-            with self.rt.trace_frame(KediTraceFrame(kind="template", label=label, span=stmt.loc)):
+            with (
+                self.rt.trace_frame(KediTraceFrame(kind="template", label=label, span=stmt.loc)),
+                group_member(member),
+            ):
                 # If an override is provided, short-circuit LLM invocation and inject values.
                 if stmt.optimized_output_override is not None:
                     env = self.rt._current_env.get()
@@ -166,14 +178,17 @@ class StatementCompiler:
         merged = merge_template_block_lines(stmt.lines, loc=stmt.loc)
         n = len(stmt.lines)
         label = f"template block ({n} line{'s' if n != 1 else ''})"
-        return self.compile_template_line(merged, trace_label=label)
+        return self.compile_template_line(merged, trace_label=label, source=stmt)
 
     def compile_raw_invoke(self, stmt: RawInvokeStmt) -> Callable:
         """Compile ``[name] << prompt``; a non-``str`` capture type requests typed output."""
 
         def _fn(**kwargs: Any) -> Any:
-            with self.rt.trace_frame(
-                KediTraceFrame(kind="template", label=f"raw invoke {stmt.name}", span=stmt.loc)
+            with (
+                self.rt.trace_frame(
+                    KediTraceFrame(kind="template", label=f"raw invoke {stmt.name}", span=stmt.loc)
+                ),
+                group_member(stmt),
             ):
                 expr, _ = prepare_segments(self.rt, stmt.segments, kwargs)
                 kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
@@ -493,18 +508,31 @@ class StatementExecutor:
             type_scope.update(parent_stack[-2])
 
         profile_registry = self.rt._profile_registry
+        form = (
+            nullcontext()
+            if proc.auto_form is None
+            else group_scope(
+                module=self.rt.module_name,
+                qualified_name=proc.name,
+                kind="auto",
+                body=proc.body,
+                canonical=proc.auto_form,
+                producer="codegen",
+            )
+        )
 
         try:
-            block_result, _ = self._execute_block(
-                proc.body,
-                proc,
-                closure_env,
-                type_scope,
-                saved_procs,
-                new_proc_names,
-                active,
-                profile_registry,
-            )
+            with form:
+                block_result, _ = self._execute_block(
+                    proc.body,
+                    proc,
+                    closure_env,
+                    type_scope,
+                    saved_procs,
+                    new_proc_names,
+                    active,
+                    profile_registry,
+                )
             if block_result is not _NO_RETURN:
                 last_return = block_result
 
@@ -650,6 +678,21 @@ class StatementExecutor:
 
         if profile_registry is None:
             profile_registry = self.rt._profile_registry
+
+        if isinstance(stmt, GroupStmt):
+            # Transparent: the form runs in this scope, so its bindings stay visible.
+            with group_trace(self.rt, stmt, proc.name) as body:
+                result, _ = self._execute_block(
+                    body,
+                    proc,
+                    closure_env,
+                    type_scope,
+                    saved_procs,
+                    new_proc_names,
+                    active,
+                    profile_registry,
+                )
+            return result
 
         if isinstance(stmt, IfStmt):
             condition = evaluate_condition(self.rt, stmt, closure_env)

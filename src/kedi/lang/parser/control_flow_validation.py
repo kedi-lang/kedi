@@ -8,6 +8,7 @@ from typing import Any
 from ..ast import (
     CallSegment,
     ConditionalLoopStmt,
+    GroupStmt,
     IfStmt,
     LoopStmt,
     OutputSegment,
@@ -95,6 +96,9 @@ def validate_control_flow(program: Program, *, interactive: bool = False) -> Non
                 block(statement.body, root=False)
             elif isinstance(statement, ProcDefStmt) and statement.proc is not None:
                 block(statement.proc.body, root=False)
+            elif isinstance(statement, GroupStmt):
+                # A group body cannot return, but its statements follow the same rules.
+                block(statement.body, root=root, process=process)
             elif isinstance(statement, IfStmt):
                 body_returns = block(statement.body, root=root, process=process)
                 else_returns = block(statement.else_body or [], root=root, process=process)

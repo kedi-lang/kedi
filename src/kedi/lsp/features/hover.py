@@ -83,7 +83,8 @@ from kedi.lang.ast import (
     VariableInitStmt,
 )
 from kedi.lang.call_arg_access import iter_call_arg_nested
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lang.parser.parser import parse as _ts_parse
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import span_to_range as _span_to_range
@@ -321,6 +322,23 @@ def _generic_hover(prog, pos: lsp.Position) -> Optional[lsp.Hover]:
     with ``\\`` are handled naturally because the parser already
     records their ``loc.end_line`` past the first physical line.
     """
+    for qualified, group in getattr(prog, "groups", {}).items():
+        if (
+            group.kind == "evolve"
+            and group.name_loc is not None
+            and _position_inside(pos, group.name_loc)
+        ):
+            return lsp.Hover(
+                contents=lsp.MarkupContent(
+                    kind=lsp.MarkupKind.Markdown,
+                    value=(
+                        f"**`> evolve: {group.name}:`** group `{qualified}`\n\n"
+                        f"Identity `kedi:group:<module>:{qualified}`. Without a supplied form, "
+                        "the body below runs as written."
+                    ),
+                ),
+                range=_span_to_range(group.name_loc),
+            )
     target = _smallest_enclosing(prog, pos)
     if target is None or target.loc is None:
         return None

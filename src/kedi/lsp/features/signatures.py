@@ -6,7 +6,8 @@ from lsprotocol import types as lsp
 
 from kedi.lang.ast import CallSegment, OutputSegment, ProcedureDef, Span
 from kedi.lang.call_arg_access import iter_call_arg_nested
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.coordinates import with_source_coordinates

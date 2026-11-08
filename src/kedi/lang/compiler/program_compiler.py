@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable
 
 from kedi.agent_profile import AgentProfile
@@ -17,6 +18,8 @@ from kedi.agent_profile.definitions import ProfileDefinition
 from kedi.core import KediRuntime
 from kedi.errors import KediTraceFrame
 from kedi.executors.base import SupportsIncrementalPrelude
+from kedi.forms import Form, FormActivation, provided_names
+from kedi.groups import module_name
 from kedi.lang.ast import ModuleImport, Program, ProgramWithValidation, TemplateLine
 from kedi.lang.compiler.procedure_compiler import ProcedureCompiler
 from kedi.lang.compiler.statement_compiler import StatementCompiler, StatementExecutor
@@ -71,10 +74,12 @@ def compile_program(
     conversation_state: ConversationState | None = None,
     loop_iteration_limit: int = 10_000,
     run_budget: RunBudget | None = None,
+    forms: Mapping[str, Form] | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
-    This is the main entry point for the compiler.
+    This is the main entry point for the compiler. ``forms`` replace group bodies by group
+    name, each after it passes the form gate; see :mod:`kedi.forms`.
     """
     source_path = _program_source_path(prog)
     display_name = program_name(str(source_path) if source_path is not None else None)
@@ -112,6 +117,7 @@ def compile_program(
         conversation_state=conversation_state,
         loop_iteration_limit=loop_iteration_limit,
         run_budget=run_budget,
+        forms=None if forms is None else FormActivation(forms),
     )
     with runtime_span(
         f"compile {display_name}",
@@ -120,7 +126,10 @@ def compile_program(
         metric_attributes={"cache_hit": False},
     ) as active:
         try:
-            return compiler.compile(prog)
+            runtime = compiler.compile(prog)
+            if compiler.forms is not None:
+                compiler.forms.finish()
+            return runtime
         except BaseException as exc:
             active.set_attribute("error.type", type(exc).__name__)
             raise
@@ -147,9 +156,17 @@ class ProgramCompiler:
         conversation_state: ConversationState | None = None,
         loop_iteration_limit: int = 10_000,
         run_budget: RunBudget | None = None,
+        module_spec: str | None = None,
+        forms: FormActivation | None = None,
+        module_runtimes: dict[str, KediRuntime] | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
+        self.module_spec = module_spec
+        self.forms = forms
+        self.module_runtimes: dict[str, KediRuntime] = (
+            {} if module_runtimes is None else module_runtimes
+        )
         self.module_loader = module_loader or _ModuleLoader()
         self.engine = engine
         self.default_agent_profile = default_agent_profile
@@ -208,6 +225,11 @@ class ProgramCompiler:
                 cycle = " -> ".join(str(path) for path in (*active_stack, current_path))
                 raise RuntimeError(f"Cyclic Kedi import detected: {cycle}")
             active_stack = (*active_stack, current_path)
+        self.rt.module_name = module_name(
+            current_path, root=active_stack[0] if active_stack else None, spec=self.module_spec
+        )
+        self.module_runtimes.setdefault(self.rt.module_name, self.rt)
+        self.rt._module_runtimes = self.module_runtimes
 
         self.rt._profile_registry = {}
 
@@ -304,6 +326,13 @@ class ProgramCompiler:
                 prog.prelude,
                 prog.prelude_loc,
                 incremental=incremental,
+            )
+        if self.forms is not None and not incremental:
+            self.forms.apply(
+                prog,
+                module=self.rt.module_name,
+                root=not self.module_stack,
+                module_names=provided_names(self.rt),
             )
 
         local_profiles = build_profile_registry(prog)
@@ -406,6 +435,9 @@ class ProgramCompiler:
                         subagent_state_path=self.subagent_state_path,
                         conversation_state=self.conversation_state,
                         loop_iteration_limit=self.loop_iteration_limit,
+                        module_spec=module_import.module,
+                        forms=self.forms,
+                        module_runtimes=self.module_runtimes,
                     ).compile(program)
 
                 loaded = self.module_loader.load(module_path, imported_prog, compile_module)

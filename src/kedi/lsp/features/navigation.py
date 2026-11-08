@@ -35,7 +35,8 @@ from kedi.lang.ast import (
     iter_profile_bodies,
 )
 from kedi.lang.call_arg_access import iter_call_arg_nested
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.parsing import parse_program
 from kedi.lsp.ast_helpers import binding_name_span
 from kedi.lsp.ast_spans import name_token_span
 from kedi.lsp.coordinates import current_source, with_source_coordinates

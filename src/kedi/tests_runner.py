@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
 
+from .forms import Form
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
 from .source_loading import load_kedi_source_bundle
@@ -40,6 +42,7 @@ def _load_program_with_validations(
     *,
     adapter: Optional[Any],
     runtime_globals: dict[str, Any] | None = None,
+    forms: Mapping[str, Form] | None = None,
 ) -> Any:
     # src_main may be the full source content or a filesystem path
     text: str
@@ -54,7 +57,7 @@ def _load_program_with_validations(
         source_path = str(p.resolve())
         source_map = loaded.source_map
     prog = parse_program(text, source_path=source_path, source_map=source_map)
-    rt = compile_program(prog, adapter=adapter, runtime_globals=runtime_globals)
+    rt = compile_program(prog, adapter=adapter, runtime_globals=runtime_globals, forms=forms)
     return rt
 
 
@@ -63,6 +66,7 @@ def run_tests(
     *,
     adapter: Optional[Any] = None,
     runtime_globals: dict[str, Any] | None = None,
+    forms: Mapping[str, Form] | None = None,
 ) -> List[TestRunResult]:
     from pathlib import Path
 
@@ -89,12 +93,13 @@ def run_tests(
     # rather than silently falling back to an unoptimized run.
     if source_path:
         program = load_program_with_optimized_prompts(source_path)
-        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
+        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals, forms=forms)
     else:
         rt = _load_program_with_validations(
             src_main,
             adapter=adapter,
             runtime_globals=runtime_globals,
+            forms=forms,
         )
     suites: List[TestSuite] = rt._validation_tests
     results: List[TestRunResult] = []
@@ -123,6 +128,7 @@ def run_evals(
     *,
     adapter: Optional[Any] = None,
     runtime_globals: dict[str, Any] | None = None,
+    forms: Mapping[str, Form] | None = None,
 ) -> List[EvalRunResult]:
     from pathlib import Path
 
@@ -156,12 +162,13 @@ def run_evals(
         # Load with optimized prompts
         program = load_program_with_optimized_prompts(source_path)
         # Compile with optimized prompts (fail loud — no silent base-program fallback)
-        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
+        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals, forms=forms)
     else:
         rt = _load_program_with_validations(
             src_main,
             adapter=adapter,
             runtime_globals=runtime_globals,
+            forms=forms,
         )
     suites: List[EvalSuite] = rt._validation_evals
     results: List[EvalRunResult] = []

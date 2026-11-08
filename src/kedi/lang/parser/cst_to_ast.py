@@ -51,6 +51,7 @@ from kedi.lang.ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    GroupStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
     IfStmt,
@@ -115,6 +116,7 @@ class _Walker:
         self.source_path = source_path
         self.source_map = source_map
         self.diagnostics: List[KediDiagnostic] = []
+        self.groups: dict[str, GroupStmt] = {}
 
     # ----- entry point -----
     def walk_program(self) -> Union[Program, ProgramWithValidation]:

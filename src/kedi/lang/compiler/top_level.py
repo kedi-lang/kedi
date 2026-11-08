@@ -38,6 +38,7 @@ from kedi.lang.ast import (
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
+    GroupStmt,
     IfStmt,
     LoopStmt,
     McpDirectiveStmt,
@@ -66,6 +67,7 @@ from kedi.lang.compiler.control_flow import (
     branch_trace,
     child_scope,
     evaluate_condition,
+    group_trace,
     evaluate_iterable,
     loop_binding,
     loop_trace,
@@ -108,6 +110,12 @@ def _execute_top_level_sequence(
             ledger = current_run_budget()
             if ledger is not None and patch.run_budget is not None:
                 ledger.set_budget(patch.run_budget)
+            continue
+        if isinstance(item, GroupStmt):
+            # Transparent: the form runs in this scope, so its bindings stay visible. A group
+            # cannot return, so its form never produces the program's result.
+            with group_trace(self.rt, item, None) as body:
+                self._execute_top_level_sequence(prepared, env, state, body)
             continue
         if isinstance(item, IfStmt):
             with block_agent_profile_scope(state.active_profile):

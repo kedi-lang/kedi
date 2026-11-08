@@ -54,6 +54,11 @@ from kedi.lang.parser.cst_helpers import (
     _src_text,
 )
 from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
+from kedi.lang.parser.group_conversion import (
+    canonical_block_text,
+    optimize_group,
+    walk_evolve_directive,
+)
 
 if TYPE_CHECKING:
     from kedi.lang.parser.cst_to_ast import _Walker
@@ -101,6 +106,7 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
     prog.loc = self._span(root)
 
     prelude_consumed = False
+    auto_specs: set[str] = set()
     pending_else_owner: Optional[IfStmt] = None
     for child in children:
         t = child.type
@@ -138,6 +144,13 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
                 prog.ordered_toplevel.append(stmt)
         elif t == "procedure_def":
             proc = self._walk_procedure_def(child)
+            if proc.auto_spec is not None or proc.ai_prompt:
+                auto_specs.add(proc.name)
+            elif proc.name in auto_specs:
+                # The implementation an `> auto:` spec's cache supplies is that group's form.
+                body = _field(child, "body")
+                assert body is not None
+                proc.auto_form = canonical_block_text(self.source, body)
             prog.procedures.append(proc)
             prog.ordered_toplevel.append(proc)
         elif t == "model_directive":
@@ -250,6 +263,11 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
                 prog.tests.append(suite)
             elif isinstance(suite, EvalSuite):
                 prog.evals.append(suite)
+        elif t == "evolve_directive":
+            group = walk_evolve_directive(self, child, None)
+            if group is not None:
+                prog.toplevel_body.append(group)
+                prog.ordered_toplevel.append(group)
         elif t == "variable_init_stmt":
             stmt = self._walk_variable_init_stmt(child)
             prog.toplevel_body.append(stmt)
@@ -332,6 +350,7 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
         raise KediParseError(self.diagnostics)
 
     prog.parser_warnings = [d for d in self.diagnostics if d.severity == "warning"]
+    prog.groups = dict(self.groups)
     return prog
 
 
@@ -541,7 +560,9 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
             return None
         span, block = self._walk_optimize_directive(node)
         proc.optimize_spans.append(span)
-        return block
+        return optimize_group(self, node, span.name, block, proc)
+    if t == "evolve_directive":
+        return walk_evolve_directive(self, node, proc)
     if t == "model_directive":
         return self._walk_model_directive(node)
     if t == "agent_directive":

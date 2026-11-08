@@ -17,6 +17,7 @@ SpanLevel = Literal["lifecycle", "detailed"]
 TelemetryScope = Literal["runtime", "agent", "artifacts"]
 TelemetryAssetKind = Literal[
     "agent_profile",
+    "form",
     "prompt",
     "schema",
     "skill",
