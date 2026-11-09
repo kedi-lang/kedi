@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel
 
 from kedi.core import KediRuntime
+from kedi.executors.playground import _call_procedure
 from kedi.executors.pyodide import (
     PyodideExecutor,
     PyodideReference,
@@ -303,6 +304,116 @@ seed = 7
 def package_is_installed(package_name: str) -> bool:
     return importlib.util.find_spec(package_name) is not None
 """) == ["importlib", "ItemSequence", "seed", "package_is_installed"]
+
+
+class WorkerBridge:
+    """A scripted worker that answers each message from the message itself."""
+
+    def __init__(self, answer: Any) -> None:
+        self.answer = answer
+        self.requests: list[dict[str, Any]] = []
+
+    def request(self, payload: Mapping[str, Any], *, timeout: float) -> Mapping[str, Any]:
+        self.requests.append(dict(payload))
+        if payload.get("action") == "evaluate_type_expression":
+            return {"ok": True, "type": {"kind": "builtin", "name": payload["code"]}, "env": {}}
+        return self.answer(dict(payload))
+
+    def exchanges(self) -> list[tuple[Any, ...]]:
+        return [
+            ("python", request["code"])
+            if request["operation"] == "python"
+            else ("procedure_result", request["ok"], request.get("result"))
+            for request in self.requests
+            if request.get("action") != "evaluate_type_expression"
+        ]
+
+
+def test_worker_python_calls_kedi_procedures_through_the_bridge() -> None:
+    def answer(payload: dict[str, Any]) -> dict[str, Any]:
+        if payload["operation"] == "procedure_result":
+            return {"ok": True, "result": payload["result"], "env": {}, "stdout": "after"}
+        code = payload["code"]
+        if code == "add_two()":
+            assert payload["env"]["add_two"] == {"__kedi_playground_procedure__": "add_two"}
+            call = {"procedure": "add_two", "args": [], "kwargs": {}}
+            return {"ok": True, "call": call, "stdout": "before "}
+        if code == "base + 2":
+            return {"ok": True, "result": payload["env"]["base"] + 2, "env": {}}
+        return {"ok": True, "result": int(code), "env": {}}
+
+    bridge = WorkerBridge(answer)
+    executor = PyodideExecutor(bridge)
+    source = "[base: int] = `40`\n\n@add_two() -> int:\n  = `base + 2`\n\n[total: int] = `add_two()`\n= <total>\n"
+    runtime = compile_program(parse_program(source), adapter=None, executor=executor)
+
+    assert runtime.run_main() == "42"
+    # The procedure's own inline Python is a nested request, answered before the result.
+    assert bridge.exchanges() == [
+        ("python", "40"),
+        ("python", "add_two()"),
+        ("python", "base + 2"),
+        ("procedure_result", True, 42),
+    ]
+    assert executor.drain_stdout() == "before after"
+
+
+@pytest.mark.parametrize("handled", [False, True])
+def test_failed_procedure_call_raises_the_kedi_error_unless_python_handles_it(
+    handled: bool,
+) -> None:
+    forwarded: list[dict[str, Any]] = []
+
+    def answer(payload: dict[str, Any]) -> dict[str, Any]:
+        if payload["operation"] == "procedure_result":
+            forwarded.append(payload)
+            if handled:
+                return {"ok": True, "result": -1, "env": {}}
+            error = f"{payload['errorType']}: {payload['error']}"
+            return {"ok": False, "errorType": "KediProcedureError", "error": error}
+        if payload["code"] == "boom()":
+            return {"ok": True, "call": {"procedure": "boom", "args": [], "kwargs": {}}}
+        return {"ok": False, "errorType": "ZeroDivisionError", "error": "division by zero"}
+
+    source = "@boom() -> int:\n  = `1 // 0`\n\n[total: int] = `boom()`\n= <total>\n"
+    runtime = compile_program(
+        parse_program(source), adapter=None, executor=PyodideExecutor(WorkerBridge(answer))
+    )
+
+    if handled:
+        assert runtime.run_main() == "-1"
+    else:
+        with pytest.raises(Exception, match="ZeroDivisionError: division by zero") as raised:
+            runtime.run_main()
+        assert type(raised.value).__name__ == forwarded[0]["errorType"]
+    assert forwarded[0]["ok"] is False
+    assert "ZeroDivisionError: division by zero" in forwarded[0]["error"]
+
+
+def test_procedure_calls_are_validated_and_bindings_shadow_procedures() -> None:
+    assert _call_procedure(
+        {"add": lambda a, b=0: a + b}, {"procedure": "add", "args": [1], "kwargs": {"b": 2}}
+    ) == ({"ok": True, "result": 3}, None)
+    reply, error = _call_procedure({}, {"procedure": "missing"})
+    assert reply == {
+        "ok": False,
+        "errorType": "NameError",
+        "error": "Kedi procedure 'missing' is not available here",
+    }
+    assert isinstance(error, NameError)
+    reply, _ = _call_procedure({"opaque": object}, {"procedure": "opaque"})
+    assert reply["errorType"] == "TypeError"
+    for call in ([], {"procedure": 1}, {"procedure": "add", "args": {}}):
+        with pytest.raises(TypeError, match="procedure call"):
+            _call_procedure({}, call)
+
+    bridge = WorkerBridge(lambda payload: {"ok": True, "result": 2, "env": {}})
+    source = "@value() -> int:\n  = `1`\n\n[value: int] = `2`\n[other: int] = `value + 1`\n"
+    compile_program(
+        parse_program(source), adapter=None, executor=PyodideExecutor(bridge)
+    ).run_main()
+    shadowed = next(request for request in bridge.requests if request["code"] == "value + 1")
+    assert shadowed["env"]["value"] == 2
 
 
 def test_pyodide_dynamic_function_preserves_signature_and_defaults() -> None:
