@@ -2419,7 +2419,7 @@ pydantic = [
 
 [[package]]
 name = "kedi-notebook"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "notebook" }
 dependencies = [
     { name = "basedpyright" },

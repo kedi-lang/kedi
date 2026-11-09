@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/kedi-logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/brand/kedi-logo-light.svg">
-    <img src="docs/assets/brand/kedi-logo-light.svg" alt="kedi" width="144" height="94">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/kedi-lang/kedi/stable/docs/assets/brand/kedi-logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/kedi-lang/kedi/stable/docs/assets/brand/kedi-logo-light.svg">
+    <img src="https://raw.githubusercontent.com/kedi-lang/kedi/stable/docs/assets/brand/kedi-logo-light.svg" alt="kedi" width="144" height="94">
   </picture>
 </p>
 
@@ -14,13 +14,13 @@ A typed orchestration language for LLM programs.</p>
   <a href="https://pypi.org/project/kedi/"><img src="https://img.shields.io/pypi/v/kedi?color=168577" alt="PyPI version"></a>
   <a href="https://github.com/kedi-lang/kedi/blob/stable/pyproject.toml"><img src="https://img.shields.io/badge/python-3.11%2B-3776ab" alt="Python 3.11 or newer"></a>
   <a href="https://github.com/kedi-lang/kedi/actions/workflows/tests.yml"><img src="https://github.com/kedi-lang/kedi/actions/workflows/tests.yml/badge.svg?branch=stable" alt="Tests"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-555" alt="Apache 2.0 license"></a>
+  <a href="https://github.com/kedi-lang/kedi/blob/stable/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-555" alt="Apache 2.0 license"></a>
 </p>
 
 <p align="center">
   <a href="https://kedi-lang.org">Website</a> &middot;
   <a href="https://docs.kedi-lang.org/">Documentation</a> &middot;
-  <a href="examples/README.md">Examples</a> &middot;
+  <a href="https://github.com/kedi-lang/kedi/blob/stable/examples/README.md">Examples</a> &middot;
   <a href="https://discord.gg/cuSbZd5he">Discord</a>
 </p>
 
@@ -87,7 +87,7 @@ Set `OPENAI_API_KEY` in your environment or the checkout's `.env` before running
 the final command. Never commit credentials. To try Kedi **without a model or
 API key**, run `kedi examples/module_imports/main.kedi` instead.
 
-Already using Codex? See [subscription authentication](examples/README.md#setup).
+Already using Codex? See [subscription authentication](https://github.com/kedi-lang/kedi/blob/stable/examples/README.md#setup).
 On Windows, use `.venv\Scripts\Activate.ps1` and PowerShell environment syntax.
 The [installation guide](https://docs.kedi-lang.org/getting-started/installation/)
 covers package installs; the PyPI badge reports the published release, which may
@@ -100,7 +100,7 @@ on by default.** Write templates, inspect typed captures, call procedures, and
 mix in Python without creating a file. Bindings stay available between inputs.
 
 <p align="center">
-  <img src="docs/assets/repl/terminal-session.png" alt="A highlighted Kedi REPL session captures Istanbul and prints Cats love Istanbul" width="960">
+  <img src="https://raw.githubusercontent.com/kedi-lang/kedi/stable/docs/assets/repl/terminal-session.png" alt="A highlighted Kedi REPL session captures Istanbul and prints Cats love Istanbul" width="960">
 </p>
 
 <details>
@@ -159,7 +159,7 @@ concurrently by default; dependent calls wait for their inputs. Calls sharing
 a conversation retain their turn order.
 
 [Control flow](https://docs.kedi-lang.org/core-language/control-flow/) &middot;
-[Runnable release-notes workflow](examples/release_notes/README.md)
+[Runnable release-notes workflow](https://github.com/kedi-lang/kedi/blob/stable/examples/release_notes/README.md)
 
 ## Give Agents a Scope, Then Compose Them
 
@@ -199,7 +199,7 @@ to start and collect child work explicitly, without a coordinator model call.
 
 [Profiles](https://docs.kedi-lang.org/agentic-engineering/profiles/) &middot;
 [Task and await](https://docs.kedi-lang.org/agentic-engineering/subagent-tasks/) &middot;
-[A real procedure exposed as a tool](examples/support_reply/README.md)
+[A real procedure exposed as a tool](https://github.com/kedi-lang/kedi/blob/stable/examples/support_reply/README.md)
 
 ## Let Jev Make the Decision
 
@@ -285,7 +285,7 @@ including applicable probabilities and thresholds, without another inference.
 The shared primitives also support local Laya models through
 [kedi-decisions](https://github.com/kedi-lang/kedi-decisions).
 
-[Jev setup](examples/jev_routing/README.md) &middot;
+[Jev setup](https://github.com/kedi-lang/kedi/blob/stable/examples/jev_routing/README.md) &middot;
 [Decision types](https://docs.kedi-lang.org/agent-adapters/jev-criteria/) &middot;
 [Inspecting evidence](https://docs.kedi-lang.org/agent-adapters/jev-evidence/)
 
@@ -314,7 +314,7 @@ notice = draft_notice("Checkout is timing out; recovery has not been confirmed."
 `@kedi.bind` connects a `.kedi` file to a Python function; `@kedi.type` exposes
 Python types. `kedi.context(...)` provides scoped configuration overrides.
 
-[Complete Python workflow](examples/python_api/README.md) &middot;
+[Complete Python workflow](https://github.com/kedi-lang/kedi/blob/stable/examples/python_api/README.md) &middot;
 [Python API](https://docs.kedi-lang.org/python-api/)
 
 ## Keep Heavy Work Remote
@@ -349,7 +349,7 @@ needs a real endpoint, its credentials, and the `a2a` extra.
 | Surface | What you can do |
 | --- | --- |
 | [Tools and MCP](https://docs.kedi-lang.org/agentic-engineering/tools-and-use/) | Expose typed procedures, Python functions, or MCP tools to a scoped agent |
-| [Artifacts](examples/artifact_investigation/README.md) | Keep large tool results outside model history; read, search, or process the relevant parts |
+| [Artifacts](https://github.com/kedi-lang/kedi/blob/stable/examples/artifact_investigation/README.md) | Keep large tool results outside model history; read, search, or process the relevant parts |
 | [Approvals and budgets](https://docs.kedi-lang.org/agentic-engineering/approvals/) | Control tool execution and bound model requests, tool attempts, and subagent work |
 | [Test, eval, optimize](https://docs.kedi-lang.org/tooling/test-eval-and-optimize/) | Keep tests, datasets, scoring, and prompt optimization beside the procedure |
 | [Notebook and REPL](https://docs.kedi-lang.org/tooling/notebook/) | Explore a program incrementally with `kedi notebook` or `kedi --idle` |
@@ -367,26 +367,26 @@ Each example has a guide, inputs, and a runnable entrypoint.
 
 | Start here | Then explore |
 | --- | --- |
-| [Meeting actions](examples/meeting_actions/README.md): nested typed extraction | [Support reply](examples/support_reply/README.md): a policy-reading tool and scoped agent |
-| [Module imports](examples/module_imports/README.md): no-model, deterministic code | [Parallel review](examples/parallel_review/README.md): typed subagent results |
-| [Jev routing](examples/jev_routing/README.md): criteria-driven decisions | [Flappy Kedi](examples/flappy_kedi/README.md): a decision-model-controlled pixel game |
-| [Release notes](examples/release_notes/README.md): conditions and loops | [Knapsack](examples/knapsack/README.md): executable scoring and prompt optimization |
+| [Meeting actions](https://github.com/kedi-lang/kedi/blob/stable/examples/meeting_actions/README.md): nested typed extraction | [Support reply](https://github.com/kedi-lang/kedi/blob/stable/examples/support_reply/README.md): a policy-reading tool and scoped agent |
+| [Module imports](https://github.com/kedi-lang/kedi/blob/stable/examples/module_imports/README.md): no-model, deterministic code | [Parallel review](https://github.com/kedi-lang/kedi/blob/stable/examples/parallel_review/README.md): typed subagent results |
+| [Jev routing](https://github.com/kedi-lang/kedi/blob/stable/examples/jev_routing/README.md): criteria-driven decisions | [Flappy Kedi](https://github.com/kedi-lang/kedi/blob/stable/examples/flappy_kedi/README.md): a decision-model-controlled pixel game |
+| [Release notes](https://github.com/kedi-lang/kedi/blob/stable/examples/release_notes/README.md): conditions and loops | [Knapsack](https://github.com/kedi-lang/kedi/blob/stable/examples/knapsack/README.md): executable scoring and prompt optimization |
 
 <details>
 <summary><strong>A decision loop you can watch: Flappy Kedi</strong></summary>
 
 <p align="center">
-  <img src="examples/flappy_kedi/flappy_kedi/assets/preview.png" alt="Flappy Kedi: a pixel cat flying through obstacles above the Bosphorus" width="640">
+  <img src="https://raw.githubusercontent.com/kedi-lang/kedi/stable/examples/flappy_kedi/flappy_kedi/assets/preview.png" alt="Flappy Kedi: a pixel cat flying through obstacles above the Bosphorus" width="640">
 </p>
 
 The pilot is a Kedi program; Python and Pygame handle physics and rendering.
 Try the decision loop with Jev or local Laya, or take over with manual controls.
-[Source and guide](examples/flappy_kedi/README.md).
+[Source and guide](https://github.com/kedi-lang/kedi/blob/stable/examples/flappy_kedi/README.md).
 
 </details>
 
-[All examples](examples/README.md) &middot;
-[What was actually tested](examples/VALIDATION.md) &middot;
+[All examples](https://github.com/kedi-lang/kedi/blob/stable/examples/README.md) &middot;
+[What was actually tested](https://github.com/kedi-lang/kedi/blob/stable/examples/VALIDATION.md) &middot;
 [Terminal-Bench results and methodology](https://docs.kedi-lang.org/tooling/terminal-bench-results/)
 
 ## Develop With Kedi
@@ -400,10 +400,10 @@ kedi notebook                # Local notebook; requires the notebook extra
 ```
 
 Use `> show:` to display values; `=` returns. The
-[language specification](docs/KEDI_DSL.md) describes the semantics in detail.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and quality gates,
+[language specification](https://github.com/kedi-lang/kedi/blob/stable/docs/KEDI_DSL.md) describes the semantics in detail.
+See [CONTRIBUTING.md](https://github.com/kedi-lang/kedi/blob/stable/CONTRIBUTING.md) for development setup and quality gates,
 or [join the conversation](https://discord.gg/cuSbZd5he) to share a program or
-discuss the language. Kedi is licensed under [Apache 2.0](LICENSE).
+discuss the language. Kedi is licensed under [Apache 2.0](https://github.com/kedi-lang/kedi/blob/stable/LICENSE).
 
 <sub>Kedi snippets use Python coloring in this README because GitHub's
 <a href="https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks">built-in syntax highlighting</a>
