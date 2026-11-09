@@ -21,19 +21,18 @@ dependencies = [
     "pydantic-monty==1.4.0",
     "jsonschema>=4.26,<5",
     "tree-sitter==0.26.0",
-    "tree-sitter-kedi==0.4.6",
+    "tree-sitter-kedi==0.4.7",
     "tree-sitter-python==0.25.0",
     "pygls==2.1.1",
     "rich>=15,<16",
 ]
+# PyPI shows the Author field in full but only the first address of Author-email, so names and
+# addresses are separate entries.
 authors = [
-    {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
-    {name = "Doğukan Yiğit Polat", email = "yigit@neurograph.net"}
-]
-# PyPI shows only the first author and the first maintainer, so the two lists differ in order.
-maintainers = [
-    {name = "Doğukan Yiğit Polat", email = "yigit@neurograph.net"},
-    {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
+    {name = "Mert Sırakaya"},
+    {name = "Doğukan Yiğit Polat"},
+    {email = "mert@kedi-lang.org"},
+    {email = "yigit@neurograph.net"},
 ]
 license = {text = "Apache-2.0"}
 keywords = ["kedi", "llm", "orchestration", "dsl", "workflow"]
