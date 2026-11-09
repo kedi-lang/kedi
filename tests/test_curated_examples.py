@@ -101,6 +101,23 @@ def test_guides_do_not_link_to_deleted_example_files():
             assert (document.parent / target.split("#")[0]).exists(), (document, target)
 
 
+def test_readme_links_and_images_resolve_on_pypi():
+    # PyPI renders the README without the repository, so every target must be absolute.
+    readme = (EXAMPLES.parent / "README.md").read_text()
+    relative = re.findall(
+        r'(?:src|srcset|href)="(?!https?://|#)[^"]+"|\]\((?!https?://|#)[^)]+\)', readme
+    )
+    assert relative == []
+    repository_files = re.findall(
+        r"https://(?:github\.com/kedi-lang/kedi/blob|raw\.githubusercontent\.com/kedi-lang/kedi)"
+        r"/stable/([^)#\"\s]+)",
+        readme,
+    )
+    assert repository_files
+    for path in repository_files:
+        assert (EXAMPLES.parent / path).exists(), path
+
+
 def test_meeting_actions_preserve_nested_types_and_missing_values(example_runtime):
     actions = [
         {
