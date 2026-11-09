@@ -67,7 +67,10 @@ class KediLexer(Lexer):
     """Render Kedi and embedded Python using the canonical tree-sitter token pipeline."""
 
     def __init__(self, *, max_chars: int = MAX_HIGHLIGHT_CHARS) -> None:
+        from .lsp.coordinates import utf16_to_index
         from .lsp.features import SEMANTIC_TOKEN_TYPES, compute_semantic_tokens_full
+
+        self._utf16_to_index = utf16_to_index
 
         self._max_chars = max_chars
         self._semantic_token_types = SEMANTIC_TOKEN_TYPES
@@ -107,8 +110,9 @@ class KediLexer(Lexer):
             token_name = self._semantic_token_types[token_index]
             style = _TOKEN_STYLES.get(token_name, "")
             line = lines[line_number]
-            start = _byte_column_to_character(line, column)
-            end = _byte_column_to_character(line, column + length)
+            # Semantic token columns count UTF-16 code units.
+            start = self._utf16_to_index(line, column)
+            end = self._utf16_to_index(line, column + length)
             if end > start:
                 spans.setdefault(line_number, []).append((start, end, style))
 
@@ -252,11 +256,6 @@ def _should_submit_multiline(
         return False
     source = document.text.rstrip("\n")
     return not source.strip() or not requires_continuation(source)
-
-
-def _byte_column_to_character(line: str, column: int) -> int:
-    encoded = line.encode("utf-8")
-    return len(encoded[:column].decode("utf-8", errors="ignore"))
 
 
 def _line_fragments(

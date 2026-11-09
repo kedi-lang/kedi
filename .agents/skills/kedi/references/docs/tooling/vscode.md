@@ -52,6 +52,23 @@ Kedi completion, hover, definitions, references, rename, outline, signature
 help, inlay hints, formatting, and diagnostics come from `kedi-lsp`. Embedded
 Python hover/definition/references come from Pylance/Pyright forwarding.
 
+## Run, Test and Debug
+
+The editor title's run menu has **Run Kedi File** and **Debug Kedi File** for a
+saved `.kedi` file. Each `@test:` and `@eval:` block shows a **Run tests** or
+**Run evals** code lens. The Command Palette has the same commands:
+
+| Command | Runs |
+| --- | --- |
+| **Kedi: Run Kedi File** | `kedi <file>` |
+| **Kedi: Run Tests in File** | `kedi <file> --test` |
+| **Kedi: Run Evals in File** | `kedi <file> --eval` |
+| **Kedi: Debug Kedi File** | the [Kedi debugger](debugger.md), without stopping on entry |
+
+`--test` and `--eval` run every block in the file. Runs use the language
+server's Python, start in the workspace folder, save the file first and require
+a trusted workspace. A new run replaces the previous run's terminal.
+
 ## Diagnostics
 
 Open **Output → Kedi Language Server** for client/server failures. Set

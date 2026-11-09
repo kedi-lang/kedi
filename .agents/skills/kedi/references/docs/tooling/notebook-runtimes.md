@@ -54,6 +54,10 @@ requirements. Pip output streams in the dialog. These packages persist in the
 managed environment and are available to both Kedi cells and host terminal
 cells. The selected base interpreter remains unchanged.
 
+Host Python has no standard input. `input()` raises `EOFError` at once and the
+session keeps running, and child processes read end-of-file. Browser mode
+answers `input()` prompts in the page.
+
 The selector locks once a runtime session is created, including by a terminal
 cell. Reset the runtime before choosing another interpreter.
 
