@@ -861,3 +861,36 @@ def test_profile_output_symbol_skips_synthetic_entry_without_location() -> None:
     )
 
     assert lsp_document_module._profile_def_symbol(profile).children == []
+
+
+def test_profile_names_and_fixed_directive_values_share_the_constant_role() -> None:
+    # The REPL, editors and docs color enumMember as a constant. A profile name looks the same
+    # wherever it appears, and fixed values look like adapter names, not like bindings.
+    src = (
+        "> profile: reviewer:\n"
+        "    > adapter: pydantic\n"
+        "    > requires: stream_events\n"
+        "    > workflow: blocking\n"
+        "> profile: coordinator:\n"
+        "    > subagent: reviewer\n"
+        "> use: coordinator\n"
+        "> task [job]: reviewer:\n"
+        "    >> Review the change.\n"
+    )
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/roles.kedi")
+    lines = src.split("\n")
+    roles = {
+        (line, lines[line][column : column + length]): token_type
+        for line, column, length, token_type, _ in decode_semantic_tokens(tokens.data)
+    }
+    constant = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("enumMember")
+    for name in [
+        (0, "reviewer"),
+        (1, "pydantic"),
+        (2, "stream_events"),
+        (3, "blocking"),
+        (5, "reviewer"),
+        (6, "coordinator"),
+        (7, "reviewer"),
+    ]:
+        assert roles[name] == constant, name

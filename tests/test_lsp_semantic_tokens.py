@@ -465,13 +465,13 @@ def test_lsp_semantic_tokens_cover_workflow_and_compaction_settings() -> None:
         lsp_semantic_tokens_module.compute_semantic_tokens_full(source, "/tmp/directives.kedi").data
     )
     keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
-    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
+    constant_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("enumMember")
     property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
     string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
 
     expected = {
         (1, 4, len("workflow"), keyword_type),
-        (1, 14, len("dynamic"), variable_type),
+        (1, 14, len("dynamic"), constant_type),
         (2, 4, len("history"), keyword_type),
         (3, 4, len("enabled"), property_type),
         (4, 4, len("compaction_mode"), property_type),

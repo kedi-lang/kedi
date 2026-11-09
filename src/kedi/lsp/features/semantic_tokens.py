@@ -77,7 +77,8 @@ _CAPTURE_TO_LSP: dict = {
     # Numbers / literals
     "number": ("number", 0),
     "boolean": ("keyword", 0),
-    "constant": ("variable", 0),
+    # Fixed names (`> workflow: blocking`, adapter requirements, Python ALL_CAPS) are constants.
+    "constant": ("enumMember", 0),
     "constant.builtin": ("keyword", 0),
     # Operators / punctuation
     "operator": ("operator", 0),
