@@ -80,8 +80,20 @@ server.
 
 ## Tasks and Commands
 
-Kedi execution remains a normal terminal/task command such as
-`kedi program.kedi`; the extension focuses on language services and snippets.
+A run button appears beside the first item of a `.kedi` file and beside each
+`@test:` and `@eval:` block. The same tasks are in **task: spawn**:
+
+| Task | Command |
+| --- | --- |
+| `kedi: run <file>` | `kedi <file>` |
+| `kedi: test <file>` | `kedi <file> --test` |
+| `kedi: eval <file>` | `kedi <file> --eval` |
+
+`--test` and `--eval` run every block in the file. The tasks run in Zed's
+terminal from the worktree root. They use `kedi` from the terminal's `PATH`,
+such as an activated project environment, and fall back to the shared managed
+environment. To change a command, add a task with the same tag (`kedi-file`,
+`kedi-test` or `kedi-eval`) to `.zed/tasks.json`.
 
 ## Extension Updates
 

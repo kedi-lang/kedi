@@ -254,6 +254,19 @@ def test_idle_lexer_preserves_source_and_styles_kedi_and_python() -> None:
     )
 
 
+def test_idle_lexer_places_styles_on_non_ascii_lines() -> None:
+    # Semantic token columns count UTF-16 code units, not UTF-8 bytes.
+    source = ">> Çok güzel bir gün <ad> için [ozet: str] 🐈 <ad>"
+    line = idle_input_module.KediLexer().lex_document(Document(source))(0)
+    styled = [(style.removeprefix("class:kedi."), text) for style, text in line if style]
+
+    assert ("variable", "ad") in styled
+    assert ("variable", "ozet") in styled
+    assert ("type", "str") in styled
+    assert styled.count(("operator", "<")) == 2
+    assert styled[-2:] == [("variable", "ad"), ("operator", ">")]
+
+
 def test_idle_lexer_falls_back_to_plain_text_for_large_fragments() -> None:
     source = "> if: `True`:\n"
     lexer = idle_input_module.KediLexer(max_chars=len(source) - 1)

@@ -13,6 +13,7 @@ from kedi.lang.ast import (
     EvalMetric,
     EvalSuite,
     IfStmt,
+    InputSegment,
     LiteralArg,
     LoopStmt,
     OutputSegment,
@@ -35,9 +36,11 @@ from kedi.lang.ast import (
     TemplateLine,
     TestCase,
     TypeDefStmt,
+    VarArg,
     VariableInitBlockStmt,
     VariableInitStmt,
 )
+from kedi.lang.call_arg_access import call_arg_call_segment, call_arg_render_segments
 from kedi.lsp.python_virtual.builder import (
     PythonRegion,
     RegionCursor,
@@ -595,11 +598,47 @@ def _emit_segments(
             region = cursor.next("inline", segment.loc)
             if region is not None:
                 _emit_inline_expression_stub(builder, region, indent)
+        elif isinstance(segment, InputSegment):
+            _emit_template_reads(builder, [segment.name], scope, indent)
         elif isinstance(segment, CallSegment):
             for nested_loc in _call_inline_python_locations(segment):
                 region = cursor.next("inline", nested_loc)
                 if region is not None:
                     _emit_inline_expression_stub(builder, region, indent)
+            _emit_template_reads(builder, _call_variable_names(segment), scope, indent)
+
+
+def _emit_template_reads(
+    builder: VirtualBuilder,
+    names: Iterable[str],
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    """Record that a template reads Kedi bindings, as `<name>` does.
+
+    Without the read, Python tooling reports a binding that only templates use as
+    "not accessed". The synthetic local starts with an underscore, so it is not
+    reported as unused itself.
+    """
+    for name in names:
+        base = name.split(".", 1)[0].split("[", 1)[0]
+        if base in scope:
+            builder.add(f"{indent}__kedi_template_read_{builder.line}: Any = {base}")
+
+
+def _call_variable_names(segment: CallSegment) -> Iterable[str]:
+    for arg in segment.args:
+        if isinstance(arg, VarArg):
+            yield arg.name
+            continue
+        nested = call_arg_call_segment(arg)
+        if nested is not None:
+            yield from _call_variable_names(nested)
+        for child in call_arg_render_segments(arg):
+            if isinstance(child, InputSegment):
+                yield child.name
+            elif isinstance(child, CallSegment):
+                yield from _call_variable_names(child)
 
 
 def _call_inline_python_locations(segment: CallSegment) -> Iterable[Optional[Span]]:

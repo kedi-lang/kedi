@@ -1871,3 +1871,26 @@ def test_virtual_document_module_entry_point(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(sys, "stdout", output)
     runpy.run_module("kedi.lsp.python_virtual", run_name="__main__")
     assert json.loads(output.getvalue())["focusKey"] is None
+
+
+def test_python_virtual_document_reads_bindings_that_templates_use():
+    # Without the reads, Python tooling reports `count` and `who` as "not accessed".
+    src = (
+        "@greet(name: str) -> str:\n"
+        "  = Hello <name>\n"
+        "\n"
+        "[count: int] = `3`\n"
+        ">> There are <count> items.\n"
+        "[who: str] = `'Kedi'`\n"
+        "[literal: str] = `'unused'`\n"
+        "= <greet(<who>)> <greet(literal)> <missing>\n"
+    )
+    text = compute_python_virtual_document(src, source_path=None)["text"]
+    reads = [
+        line.split(" = ", 1)[1]
+        for line in text.splitlines()
+        if line.strip().startswith("__kedi_template_read_")
+    ]
+
+    assert sorted(reads) == ["count", "name", "who"]
+    ast.parse(text)
