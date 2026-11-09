@@ -6,6 +6,12 @@ The Kedi compiler, interactive session and model adapters run in the local
 server. The runtime menu selects where embedded Python executes, not a place
 to move all Kedi execution or inference. Browser mode still needs that server.
 
+Embedded Python calls Kedi procedures as it does in a `.kedi` file, in both
+runtimes. The procedure runs in the server while the calling Python waits, so
+its arguments and result must cross the bridge as JSON values. A failed call
+raises an exception that Python can catch; if it is not handled, the cell
+reports the procedure's Kedi error.
+
 ## Browser Python
 
 Browser execution through Pyodide 3.14 is selected by default. Embedded Python
@@ -35,8 +41,9 @@ kedi notebook --python ~/.pyenv/versions/3.12.4/bin/python --port 8899
 `--python` is repeatable. The selected executable is a base interpreter, not an
 environment that Kedi modifies directly. On first use, the notebook creates a
 project-specific virtual environment under `~/.kedi/notebook/venvs`, installs
-the active Kedi checkout and its dependencies, and starts the persistent worker
-from that environment. Its stable `kedi-notebook-py...` name is derived from the
+Kedi and its dependencies (the active Kedi checkout when the server runs from
+one, otherwise the server's Kedi version from PyPI), and starts the persistent
+worker from that environment. Its stable `kedi-notebook-py...` name is derived from the
 base interpreter and working directory, so later server runs reuse it. Set
 `KEDI_NOTEBOOK_ENV_HOME` to choose another environment root. Host execution is
 not sandboxed and has the notebook server process's filesystem permissions.

@@ -21,10 +21,21 @@ if TYPE_CHECKING:
 
 _REFERENCE_KEY = "__kedi_playground_ref__"
 _LEGACY_REFERENCE_KEY = "__kedi_pyodide_ref__"
+_PROCEDURE_KEY = "__kedi_playground_procedure__"
+# The worker raises this type when a procedure call it made failed on the host.
+_PROCEDURE_ERROR = "KediProcedureError"
 
 
 class PlaygroundBridge(Protocol):
-    """Synchronous transport for a playground-owned Python worker."""
+    """Synchronous transport for a playground-owned Python worker.
+
+    ``request`` sends one message and returns the worker's next message. Kedi procedures
+    reach the worker as ``{"__kedi_playground_procedure__": name}``. When worker code calls
+    one, the worker answers with ``{"call": {"procedure", "args", "kwargs"}}`` instead of a
+    result and waits. The executor runs the procedure and replies with a
+    ``procedure_result`` request. Python that the procedure runs meanwhile arrives at the
+    worker as nested requests, which it answers before the procedure result.
+    """
 
     def request(self, payload: Mapping[str, Any], *, timeout: float) -> Mapping[str, Any]: ...
 
@@ -96,6 +107,7 @@ class PlaygroundExecutor:
 
         execution_env = build_python_env(rt, {})
         response = self._request(
+            rt,
             "execute_prelude",
             code,
             execution_env,
@@ -115,6 +127,7 @@ class PlaygroundExecutor:
         execution_env = build_python_env(rt, {})
         sync_names: list[str] = list(dict.fromkeys([*(env or {}), *_prelude_names(code)]))
         response = self._request(
+            rt,
             "execute_prelude",
             code,
             execution_env,
@@ -158,7 +171,7 @@ class PlaygroundExecutor:
         code: str,
         env: dict[str, Any],
     ) -> Any:
-        response = self._request("evaluate_type_expression", code, env)
+        response = self._request(rt, "evaluate_type_expression", code, env)
         if "result" in response:
             return _decode_bridge_value(response["result"])
         descriptor = response.get("type")
@@ -186,6 +199,7 @@ class PlaygroundExecutor:
             execution_env = build_python_env(rt, target)
             owners = execution_env.binding_owners()
             response = self._request(
+                rt,
                 action,
                 code,
                 execution_env,
@@ -226,6 +240,7 @@ class PlaygroundExecutor:
 
     def _request(
         self,
+        rt: KediRuntime,
         action: str,
         code: str,
         env: dict[str, Any],
@@ -234,14 +249,32 @@ class PlaygroundExecutor:
         sync_names: list[str] | None = None,
     ) -> Mapping[str, Any]:
         referenced = _referenced_names(code, action)
-        payload = {
-            "operation": "python",
-            "action": action,
-            "code": code,
-            "env": _serialize_env(env, referenced),
-            "syncNames": list(env) if sync_names is None else sync_names,
-            "kediLineOffset": kedi_line_offset,
-        }
+        procedures = _visible_procedures(rt, env)
+        response = self._exchange(
+            {
+                "operation": "python",
+                "action": action,
+                "code": code,
+                "env": _serialize_env(env, referenced, procedures),
+                "syncNames": list(env) if sync_names is None else sync_names,
+                "kediLineOffset": kedi_line_offset,
+            }
+        )
+        failure: Exception | None = None
+        while "call" in response:
+            reply, error = _call_procedure(procedures, response["call"])
+            failure = error or failure
+            response = self._exchange({"operation": "procedure_result", **reply})
+        if response.get("ok") is not True:
+            error_type = response.get("errorType") or "PythonError"
+            if failure is not None and error_type == _PROCEDURE_ERROR:
+                # The worker did not handle the failed call: surface the Kedi error itself.
+                raise failure
+            message = response.get("error") or "Playground execution failed"
+            raise RuntimeError(f"{error_type}: {message}")
+        return response
+
+    def _exchange(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         response = self._bridge.request(payload, timeout=self._timeout)
         if not isinstance(response, Mapping):
             raise TypeError("Playground bridge response must be an object")
@@ -250,10 +283,6 @@ class PlaygroundExecutor:
             raise TypeError("Playground bridge stdout must be a string")
         if stdout:
             self._stdout.append(stdout)
-        if response.get("ok") is not True:
-            error_type = response.get("errorType") or "PythonError"
-            message = response.get("error") or "Playground execution failed"
-            raise RuntimeError(f"{error_type}: {message}")
         return response
 
     def _emit_debug(self, event: str, step: str, **payload: Any) -> None:
@@ -287,10 +316,56 @@ def _prelude_names(code: str) -> list[str]:
     ]
 
 
-def _serialize_env(env: Mapping[str, Any], referenced: set[str]) -> dict[str, Any]:
+def _visible_procedures(rt: KediRuntime, env: Mapping[str, Any]) -> dict[str, Callable[..., Any]]:
+    """Return the Python-facing wrappers of the procedures that ``env`` exposes.
+
+    ``build_python_env`` installs one wrapper per procedure in scope unless a Kedi binding
+    of the same name shadows it.
+    """
+    from ..lang.compiler.environment import KediEnv
+
+    if not isinstance(env, KediEnv):
+        return {}
+    bound = env.binding_owners()
+    return {
+        name: dict.__getitem__(env, name)
+        for name in rt._procedures
+        if name not in bound and dict.__contains__(env, name)
+    }
+
+
+def _call_procedure(
+    procedures: Mapping[str, Callable[..., Any]],
+    call: Any,
+) -> tuple[dict[str, Any], Exception | None]:
+    """Run a procedure call made by worker code and encode its result for the worker."""
+    if not isinstance(call, Mapping):
+        raise TypeError("Playground procedure call must be an object")
+    name = call.get("procedure")
+    args = call.get("args", [])
+    kwargs = call.get("kwargs", {})
+    if not isinstance(name, str) or not isinstance(args, list) or not isinstance(kwargs, dict):
+        raise TypeError("Playground procedure call needs a name, an args list and a kwargs object")
+    try:
+        if name not in procedures:
+            raise NameError(f"Kedi procedure {name!r} is not available here")
+        value = procedures[name](*_decode_bridge_value(args), **_decode_bridge_value(kwargs))
+        return {"ok": True, "result": _json_value(force(value))}, None
+    except Exception as exc:
+        return {"ok": False, "errorType": type(exc).__name__, "error": str(exc)}, exc
+
+
+def _serialize_env(
+    env: Mapping[str, Any],
+    referenced: set[str],
+    procedures: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for name, value in env.items():
         if name == "__builtins__":
+            continue
+        if procedures is not None and name in procedures:
+            result[name] = {_PROCEDURE_KEY: name}
             continue
         if _is_worker_builtin(name, value):
             continue
