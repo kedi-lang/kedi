@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast as py_ast
+import keyword
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -400,6 +401,8 @@ def _walk_procedure_def(self: _Walker, node: Node) -> ProcedureDef:
     name_node = _field(node, "name")
     assert name_node is not None
     name = _identifier_name(self.source, name_node)
+    if keyword.iskeyword(name):
+        self._error(name_node, f"procedure name {name!r} is a Python keyword", code="K-PROC-NAME")
 
     params: List[str] = []
     param_type_annos: dict[str, Optional[str]] = {}
@@ -416,6 +419,12 @@ def _walk_procedure_def(self: _Walker, node: Node) -> ProcedureDef:
             pname_node = _field(param, "name")
             assert pname_node is not None
             pname = _identifier_name(self.source, pname_node)
+            if keyword.iskeyword(pname):
+                self._error(
+                    pname_node,
+                    f"parameter {pname!r} is a Python keyword",
+                    code="K-PARAM-NAME",
+                )
             if pname in seen_params:
                 self._error(
                     param,

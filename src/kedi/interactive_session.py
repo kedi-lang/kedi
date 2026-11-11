@@ -93,10 +93,9 @@ class InteractiveSession:
                 raise RuntimeError("InteractiveSession is closed")
             if not self._execute_lock.acquire(blocking=False):
                 raise RuntimeError("InteractiveSession is already executing")
+        try:
             self._cell_number += 1
             cell_number = self._cell_number
-
-        try:
             resolved_name = source_name or f"<interactive:{cell_number}>"
             if resolved_name in self._source_names:
                 raise ValueError(f"Interactive source name {resolved_name!r} was already used")

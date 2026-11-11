@@ -149,7 +149,13 @@ def unescape_call_arg_text(text: str) -> str:
     return unescaped
 
 
-def preserve_escaped_whitespace(text: str, escaped_positions: set[int] | None = None) -> str:
+def preserve_escaped_whitespace(
+    text: str,
+    escaped_positions: set[int] | None = None,
+    *,
+    trim_left: bool = True,
+    trim_right: bool = True,
+) -> str:
     """Trim leading/trailing whitespace, but keep `\\s`-escaped chars in place.
 
     Mirrors the pre-refactor parser's ``preprocessing.preserve_escaped_whitespace``
@@ -157,17 +163,16 @@ def preserve_escaped_whitespace(text: str, escaped_positions: set[int] | None = 
     """
     if not text:
         return text
-    if escaped_positions is None or not escaped_positions:
-        return text.strip()
+    escaped_positions = escaped_positions or set()
     start = 0
-    while start < len(text):
-        if text[start] == " " and start not in escaped_positions:
+    while trim_left and start < len(text):
+        if text[start].isspace() and start not in escaped_positions:
             start += 1
         else:
             break
     end = len(text)
-    while end > start:
-        if text[end - 1] == " " and (end - 1) not in escaped_positions:
+    while trim_right and end > start:
+        if text[end - 1].isspace() and (end - 1) not in escaped_positions:
             end -= 1
         else:
             break

@@ -927,7 +927,9 @@ def _make_proc_wrapper(
     definition_rt = getattr(proc_fn, "__kedi_definition_runtime__", rt)
     namespace = build_type_env(definition_rt, local_env if definition_rt is rt else None)
     namespace.update(metadata.default_namespace())
-    namespace["__kedi_call__"] = lambda *args: rt._invoke_procedure(rt._get_proc(proc_name), args)
+    namespace[metadata.call_name] = lambda *args: rt._invoke_procedure(
+        rt._get_proc(proc_name), args
+    )
     try:
         exec(
             compile(executable_source, filename, "exec", dont_inherit=True),

@@ -155,10 +155,16 @@ def prepare_segments(
     expr: list[Any] = []
     parts: list[str] = []
 
-    for seg in segments:
+    for index, seg in enumerate(segments):
         if isinstance(seg, TextSegment):
-            expr.append(seg.text)
-            parts.append(seg.text)
+            text = preserve_escaped_whitespace(
+                seg.text,
+                seg.escaped_whitespace,
+                trim_left=index == 0,
+                trim_right=index == len(segments) - 1,
+            )
+            expr.append(text)
+            parts.append(text)
         elif isinstance(seg, InputSegment):
             if context == "template":
                 expr.append(rt.i(seg.name))
@@ -214,7 +220,11 @@ def evaluate_binding_rhs(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> tuple[Any, str]:
     """Return a native value (including None), or NO_NATIVE_VALUE with rendered text."""
-    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
+    non_ws = [
+        s
+        for s in segments
+        if not (isinstance(s, TextSegment) and not s.escaped_whitespace and s.text.strip() == "")
+    ]
 
     # Single native expression or call
     if len(non_ws) == 1:
@@ -274,26 +284,14 @@ def _stringify_segments(
 
     for i, seg in enumerate(segments):
         if isinstance(seg, TextSegment):
-            # Apply preserve_escaped_whitespace to boundary TextSegments or those with escaped whitespace
-            is_first = i == 0
-            is_last = i == len(segments) - 1
-
-            if seg.escaped_whitespace:
-                # Has escaped whitespace, always apply preserve_escaped_whitespace
-                processed_text = preserve_escaped_whitespace(seg.text, seg.escaped_whitespace)
-                parts.append(processed_text)
-            elif is_first and is_last:
-                # Only TextSegment, trim leading and trailing spaces
-                parts.append(seg.text.strip())
-            elif is_first:
-                # First segment, trim leading spaces only
-                parts.append(seg.text.lstrip())
-            elif is_last:
-                # Last segment, trim trailing spaces only
-                parts.append(seg.text.rstrip())
-            else:
-                # Internal TextSegment, keep as-is
-                parts.append(seg.text)
+            parts.append(
+                preserve_escaped_whitespace(
+                    seg.text,
+                    seg.escaped_whitespace,
+                    trim_left=i == 0,
+                    trim_right=i == len(segments) - 1,
+                )
+            )
         elif isinstance(seg, InputSegment):
             value = (
                 model_lookup_value(rt, seg.name, kwargs)
