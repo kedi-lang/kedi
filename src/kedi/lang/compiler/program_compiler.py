@@ -609,6 +609,12 @@ class ProgramCompiler:
                 raise TypeError(
                     f"Executor {type(executor).__name__!r} does not support incremental preludes"
                 )
+            from kedi.lang.compiler.environment import PreludeNamespace
+
+            if self.rt._prelude_env is None:
+                # The session owns its namespace before the first fragment runs, so a failed
+                # fragment keeps what it completed, like every later one.
+                self.rt._prelude_env = PreludeNamespace()
             self.rt._prelude_env = executor.execute_prelude_incremental(
                 self.rt,
                 prelude_code,

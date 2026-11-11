@@ -107,6 +107,32 @@ Bare `limit` and `globals()["limit"]` both read the value. `locals()` does not
 contain Kedi bindings because the block is not modeled as a Python function
 closure.
 
+Prelude functions run when they are called and see the Kedi variables of the
+Python that calls them, so a helper reads the current value rather than the
+value at startup:
+
+````kedi
+```
+def doubled():
+    return scale * 2
+
+def bump():
+    global scale
+    scale = scale + 1
+```
+
+[scale: int] = `2`
+[scale] := `10`
+`bump()`
+= `(scale, doubled())`
+````
+
+The result is `(11, 22)`. Called from inside a procedure, a prelude function
+sees that procedure's variables too. A `global` write is checked against the
+variable's type contract when the calling Python finishes. A name the prelude
+defines itself wins over a Kedi variable of the same name inside prelude
+functions.
+
 ## Reflection and Promises
 
 In parallel mode, bare reads and `globals()["name"]` resolve a pending Kedi
