@@ -18,7 +18,7 @@ import json
 import shlex
 from typing import Annotated, Any, ForwardRef, Optional, Union, cast
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
@@ -121,20 +121,16 @@ def _resolve_expr(
             return None
 
     if isinstance(expr, TypePython):
-        # Explicit `\`code\`` escape hatch — the user opted into
-        # running arbitrary Python here. A failing eval (undefined
-        # name, syntax error, or a value that isn't a real type)
-        # raises a structured ``TypeError`` so the caller's
-        # try/except in ``initialize_value_from_native`` produces the
-        # language-level "Native initialization value does not match annotated
-        # type" diagnostic.
+        # Explicit `\`code\`` escape hatch: the user opted into running Python here. A failing
+        # eval (undefined name, syntax error) is an invalid annotation, not a mismatched value.
         try:
             result = rt.executor.evaluate_type_expression(rt, expr.code, type_env)
         except Exception as exc:
-            raise TypeError(f"Invalid type expression {expr.code!r}: {exc}") from exc
+            detail = exc.msg if isinstance(exc, SyntaxError) else str(exc)
+            raise TypeError(f"Invalid type expression {expr.code!r}: {detail}") from exc
         # Annotated's trailing arguments are values (FieldInfo, Jev criteria,
         # and other validation metadata), not types.
-        if not metadata and not _is_valid_type(result):
+        if not metadata and not is_resolved_kedi_type(result):
             raise TypeError(f"Expression {expr.code!r} does not evaluate to a valid type")
         return result
 
@@ -142,18 +138,6 @@ def _resolve_expr(
         return expr.value
 
     return None
-
-
-def _is_valid_type(obj: Any) -> bool:
-    """Best-effort check that ``obj`` is a usable type for validation."""
-    import types as _types
-
-    return (
-        isinstance(obj, type)
-        or isinstance(obj, _types.GenericAlias)
-        or hasattr(obj, "__origin__")
-        or str(type(obj)).startswith("<class 'typing.")
-    )
 
 
 def _build_type_adapter(resolved: Any) -> TypeAdapter:
@@ -547,20 +531,13 @@ def initialize_value_from_native(
             raise KediTypeExecutionError(
                 "Native non-string initialization requires explicit type annotation"
             )
-        # Resolve up front so a bare unknown type name raises "Unknown type annotation X"
-        # rather than silently bypassing validation (backtick type exprs keep the
-        # generic mismatch diagnostic via the except below).
-        try:
-            resolved = kedi_type.resolve(rt, env)
-        except Exception:
-            resolved = None
-        else:
-            if resolved is None:
-                raise KediTypeExecutionError(f"Unknown type annotation {kedi_type!s}")
+        # Resolve up front: an unknown name or an invalid type expression is reported as
+        # such, never as a mismatched value.
+        kedi_type.resolve_required(rt, env)
         try:
             return kedi_type.validate(rt, env, native)
-        except Exception:
-            if isinstance(native, str) and resolved is not None:
+        except ValidationError:
+            if isinstance(native, str):
                 raise KediTypeExecutionError("Annotation type mismatch: got str value")
             raise KediTypeExecutionError(
                 "Native initialization value does not match annotated type"

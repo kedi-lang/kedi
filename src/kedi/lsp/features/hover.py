@@ -85,6 +85,7 @@ from kedi.lang.ast import (
 from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lang.parser import KediParseError
 from kedi.lang.parser.parser import parse as _ts_parse
+from kedi.lsp.ast_helpers import is_public_export_name
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.coordinates import with_source_coordinates
@@ -180,7 +181,11 @@ def compute_hover(
     type_by_name = {t.name: t for t in prog.type_defs}
     type_by_name.update(imported_surface.types)
 
-    if sym.kind == "module":
+    declaring = _smallest_enclosing(prog, pos) if sym.cursor_span == sym.declaration_span else None
+    if isinstance(declaring, RawInvokeStmt):
+        # A capture keeps the raw invoke description: its type and how the reply arrives.
+        text = _describe_ast_node(declaring) or ""
+    elif sym.kind == "module":
         module_info = imported_surface.modules.get(sym.name)
         if module_info is None:
             text = (
@@ -251,7 +256,13 @@ def compute_hover(
             "a bare flag resolves to `True`, and missing names resolve to `None`."
         )
     elif sym.kind == "module_value":
-        text = f"**Module value** `{sym.name}`\n\nTop-level value exported by this module."
+        exported = any(
+            sym.name in export.names or (export.export_all and is_public_export_name(sym.name))
+            for export in prog.exports
+        )
+        text = f"**Module value** `{sym.name}`\n\nTop-level value " + (
+            "exported by this module." if exported else "of this module; not exported."
+        )
     elif sym.kind == "imported_value":
         imported_value = imported_surface.values.get(sym.name)
         text = _imported_value_markdown(sym.name, imported_value)

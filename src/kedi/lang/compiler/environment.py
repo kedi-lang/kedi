@@ -18,10 +18,11 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import typing_extensions
-from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl, ValidationError
 
 from ...agent_adapter.approvals.policy import ApprovalDecision, ApprovalRequest
 from ...core import KediRuntime
+from ...resolved_types import is_resolved_kedi_type
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
 
 KEDI_TYPING_TYPE_NAMES = frozenset(
@@ -646,7 +647,7 @@ def validate_owned_value(
         return value
     try:
         return contract.validate(rt, local_env, value)
-    except Exception as exc:
+    except ValidationError as exc:
         raise TypeError(
             f"Python write-back for {name!r} does not match its annotated type"
         ) from exc
@@ -875,19 +876,28 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
     # Add runtime environments
     for source in (rt._import_env, rt._prelude_env, rt._globals_env):
         if source is not None:
-            env.update((name, value) for name, (_, value) in visible_bindings(source).items())
+            _add_value_bindings(env, source)
 
     try:
         current = rt._current_env.get()
         if isinstance(current, dict):
-            env.update((name, value) for name, (_, value) in visible_bindings(current).items())
+            _add_value_bindings(env, current)
     except Exception:
         pass
 
     if local_env:
-        env.update((name, value) for name, (_, value) in visible_bindings(local_env).items())
+        _add_value_bindings(env, local_env)
 
     return env
+
+
+def _add_value_bindings(env: dict[str, Any], source: dict[str, Any]) -> None:
+    """Layer value bindings; a value named like a type (``[str] = hello``) does not hide it."""
+    for name, (_, value) in visible_bindings(source).items():
+        shadowed = env[name] if name in env else getattr(builtins, name, None)
+        if is_resolved_kedi_type(shadowed) and not is_resolved_kedi_type(value):
+            continue
+        env[name] = value
 
 
 def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]) -> None:

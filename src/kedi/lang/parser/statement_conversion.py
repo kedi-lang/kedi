@@ -363,6 +363,8 @@ def _walk_module_import(self: _Walker, node: Node) -> ModuleImport:
     body = _field(node, "body")
     if body is not None:
         for child in _named_children(body):
+            if child.type != "module_import_name":
+                continue
             name_node = _field(child, "name")
             assert name_node is not None
             name = _identifier_name(self.source, name_node)

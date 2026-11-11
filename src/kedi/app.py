@@ -75,11 +75,6 @@ def _runtime_globals(runtime_args: CliArgs | None) -> dict[str, Any]:
     }
 
 
-def _set_runtime_args(rt: Any, runtime_args: CliArgs | None) -> None:
-    if runtime_args is not None:
-        rt.set_initial_globals(_runtime_globals(runtime_args))
-
-
 def _cli_default_profile() -> AgentProfile:
     """Provide interactive approval only for direct CLI program execution."""
     return AgentProfile(approval=ApprovalPolicy.dynamic(CliApprovalHandler()))
@@ -242,7 +237,6 @@ def run_optimization_cli(
         adapter=adapter_for_runtime,
         runtime_globals=_runtime_globals(runtime_args),
     )
-    _set_runtime_args(rt, runtime_args)
 
     # Initialize services
     data_loader = OptimizationDataLoader(rt)
@@ -497,7 +491,6 @@ def run_program_cli(
                 default_agent_profile=_cli_default_profile(),
                 forms=forms,
             )
-            _set_runtime_args(rt, runtime_args)
             out = rt.run_main()
         except BaseException as exc:
             active.set_attribute("error.type", type(exc).__name__)
@@ -543,7 +536,6 @@ def run_source_cli(
                 default_agent_profile=_cli_default_profile(),
                 forms=forms,
             )
-            _set_runtime_args(rt, runtime_args)
             out = rt.run_main()
         except BaseException as exc:
             active.set_attribute("error.type", type(exc).__name__)

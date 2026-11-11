@@ -99,5 +99,5 @@ def _coerce_tool_arguments(
                 kwargs[param_name] = coerce_model_value(resolved, provided)
             else:
                 kwargs[param_name] = kedi_type.validate(rt, None, provided)
-        except Exception as exc:
+        except ValueError as exc:
             raise TypeError(f"Parameter '{param_name}' does not match annotated type") from exc

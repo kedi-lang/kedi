@@ -5,10 +5,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from ...agent_adapter.tools.retry import ToolRetryPolicy, resolve_retry_on
 from ...core import KediRuntime
 from ...debugging import execution_frame
-from ...errors import KediTypeExecutionError
+from ...errors import KediTraceFrame, KediTypeExecutionError
 from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import BindingMetadata, ScopeFrame, build_python_env
@@ -83,10 +85,17 @@ class ProcedureCompiler:
         if not proc.param_defaults:
             return {}
         env = build_python_env(self.rt, parent_env or {})
-        return {
-            name: self.rt.executor.evaluate_type_expression(self.rt, code, env)
-            for name, code in proc.param_defaults.items()
-        }
+        defaults: dict[str, Any] = {}
+        for name, code in proc.param_defaults.items():
+            frame = KediTraceFrame(
+                kind="parameter default",
+                label=f"default of {name}",
+                span=proc.loc,
+                procedure_name=proc.name,
+            )
+            with self.rt.trace_frame(frame):
+                defaults[name] = self.rt.executor.evaluate_type_expression(self.rt, code, env)
+        return defaults
 
     def _enforce_param_types(self, proc: ProcedureDef, kwargs: dict[str, Any]) -> None:
         """Enforce parameter type annotations."""
@@ -110,7 +119,9 @@ class ProcedureCompiler:
 
             try:
                 validated = kedi_type.validate(self.rt, None, provided)
-            except Exception as exc:
+            except (ValidationError, OSError) as exc:
+                # Only a value that fails validation is a mismatch; a media path that cannot be
+                # read (OSError) is one too. Other errors, such as the recursion limit, propagate.
                 from ...media import media_error_detail
 
                 detail = media_error_detail(exc)
@@ -158,7 +169,7 @@ class ProcedureCompiler:
         kedi_type.resolve_required(self.rt, env)
         try:
             return kedi_type.validate(self.rt, env, last_return)
-        except Exception:
+        except ValidationError:
             raise KediTypeExecutionError("Return value does not match annotated type")
 
     @contextmanager

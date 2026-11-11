@@ -101,6 +101,16 @@ def test_str_raw_invoke_capture_keeps_the_text_path() -> None:
     assert adapter.typed_calls == []
 
 
+@pytest.mark.parametrize("annotation", ["str", "`str`"])
+def test_str_raw_invoke_capture_keeps_its_type_contract(annotation: str) -> None:
+    adapter = TypedAdapter("unused")
+
+    assert _run(f"[a: {annotation}] << Say hi.\n[a] := `'hello'`\n= <a>\n", adapter) == "hello"
+    with pytest.raises(KediExecutionError, match="annotated type"):
+        _run(f"[a: {annotation}] << Say hi.\n[a] := `5`\n= `repr(a)`\n", adapter)
+    assert adapter.typed_calls == []
+
+
 def test_typed_raw_invoke_runs_on_the_parallel_engine() -> None:
     adapter = TypedAdapter(["a", "b"])
     rt = compile_program(

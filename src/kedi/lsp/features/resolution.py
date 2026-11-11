@@ -16,6 +16,7 @@ from kedi.lang.ast import (
     ProcedureDef,
     Program,
     ProgramWithValidation,
+    RawInvokeStmt,
     SendStmt,
     TaskGroupStmt,
     TaskStmt,
@@ -487,16 +488,13 @@ def _resolve_in_stmt(
             )
     if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
         return _resolve_in_type_def(stmt.typedef, pos, type_by_name, imported_values)
-    # VariableInitStmt / VariableInitBlockStmt target name
-    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)) and stmt.loc is not None:
+    # Initialization and raw invoke capture names. Top-level bindings are module values even
+    # inside a top-level block, matching how their uses resolve.
+    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt, RawInvokeStmt)):
         name_span = binding_name_span(stmt)
         if name_span is not None and _position_inside(pos, name_span):
             return SymbolRef(
-                kind=(
-                    "module_value"
-                    if proc is None and any(stmt is item for item in prog.toplevel_body)
-                    else "local"
-                ),
+                kind="local" if proc is not None else "module_value",
                 name=stmt.name,
                 declaration_span=name_span,
                 scope_proc=proc,

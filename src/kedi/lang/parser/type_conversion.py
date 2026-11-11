@@ -72,7 +72,16 @@ def _walk_type_arg(self: _Walker, node: Node) -> Optional[TypeExpr]:
         return TypePython(code=code, loc=self._span(target))
     if target.type == "type_string":
         source = _src_text(self.source, target).strip()
-        value = py_ast.literal_eval(source)
+        try:
+            value = py_ast.literal_eval(source)
+        except SyntaxError as exc:
+            # The grammar accepts strings Python rejects, such as one holding a raw carriage return.
+            self._error(target, f"invalid string in type: {exc.msg}", code="K-TYPE-STRING")
+            return None
+        return TypeLiteral(value=value, source=source, loc=self._span(target))
+    if target.type in ("type_number", "type_ellipsis"):
+        source = _src_text(self.source, target)
+        value = Ellipsis if source == "..." else py_ast.literal_eval(source)
         return TypeLiteral(value=value, source=source, loc=self._span(target))
     return self._walk_type_term(target)
 
