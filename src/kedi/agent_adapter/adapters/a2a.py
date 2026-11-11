@@ -88,6 +88,7 @@ class A2AAdapter(HookRegistrationMixin):
         supports_history_replay=False,
         supports_native_compaction=False,
         supports_stream_events=True,
+        supports_media_input=False,
         hooks=HookCapabilities.prompt_only(),
     )
     supports_native_subagent_resume = True

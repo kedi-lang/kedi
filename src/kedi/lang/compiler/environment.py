@@ -564,6 +564,20 @@ def model_text(value: Any) -> str:
     return text
 
 
+def prompt_part(value: Any, binding: str | None = None) -> Any:
+    """Render one prompt substitution: media become a mention, other values model text.
+
+    ``binding`` names the substituted value (``<cat_image>``); media without an explicit
+    name are shown to the model under it.
+    """
+    from ...media import MediaMention, prompt_media
+
+    items = prompt_media(value)
+    if items is None:
+        return model_text(value)
+    return MediaMention(items=items, binding=binding, is_list=isinstance(value, (list, tuple)))
+
+
 def model_value_and_text(value: Any) -> tuple[Any, str]:
     """Resolve and render once so request text and decision identity share a snapshot."""
     contains_artifact = _contains_artifact_ref(value)

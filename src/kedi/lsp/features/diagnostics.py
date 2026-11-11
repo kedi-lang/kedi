@@ -50,6 +50,7 @@ from kedi.lsp.parsing import parse_program
 from kedi.module_registry import describe_module_search_paths, module_search_paths
 
 from .capability_state import _AdapterDiagnosticState, _profile_adapter_state
+from .media import media_names, media_text_diagnostics
 
 
 @with_source_coordinates(1)
@@ -72,6 +73,7 @@ def compute_diagnostics(
         out.extend(_adapter_capability_diagnostics(prog))
         out.extend(_annotated_type_diagnostics(prog))
         out.extend(_assignment_diagnostics(prog))
+        out.extend(media_text_diagnostics(prog))
         out.extend(
             _codemode_preload_diagnostics(
                 prog,
@@ -496,6 +498,7 @@ def _adapter_capability_diagnostics(
             proc_names,
             type_defs,
             warned_approval_spans,
+            media_names=media_names(prog),
         )
     )
     return diagnostics

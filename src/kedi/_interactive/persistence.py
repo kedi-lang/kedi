@@ -31,6 +31,7 @@ from ..agent_profile.mcp import McpServerSpec
 from ..agent_profile.skills import SkillsSettings
 from ..artifacts import ArtifactPolicy
 from ..decisions import DecisionInfo, DecisionRecord
+from ..media import Audio, Document, Image, Media, Video
 
 SNAPSHOT_FORMAT = "kedi.interactive-session"
 SNAPSHOT_FORMAT_VERSION = 1
@@ -125,6 +126,19 @@ class SessionValueEncoder:
             }
         if isinstance(value, Path):
             return {_TAG: "path", "value": str(value)}
+        if isinstance(value, Media):
+            # The existing bytes encoding carries the content; MAX_SNAPSHOT_BYTES bounds it.
+            return {
+                _TAG: "media",
+                "kind": value.kind,
+                "media_type": value.media_type,
+                "data": None if value.data is None else self.encode(value.data, path=path),
+                "url": value.url,
+                "file_id": value.file_id,
+                "provider": value.provider,
+                "name": value.name,
+                "filename": value.filename,
+            }
         if isinstance(value, _PATTERN_TYPE):
             return {
                 _TAG: "regex",
@@ -250,6 +264,23 @@ class SessionValueDecoder:
                 return float(encoded["value"])
             if tag == "bytes":
                 return base64.b64decode(encoded["data"], validate=True)
+            if tag == "media":
+                media_class = {
+                    "image": Image,
+                    "audio": Audio,
+                    "video": Video,
+                    "document": Document,
+                }[encoded["kind"]]
+                data = encoded["data"]
+                return media_class(
+                    media_type=encoded["media_type"],
+                    data=None if data is None else self.decode(data, path=path, depth=next_depth),
+                    url=encoded["url"],
+                    file_id=encoded["file_id"],
+                    provider=encoded["provider"],
+                    name=encoded["name"],
+                    filename=encoded["filename"],
+                )
             if tag == "surrogate_str":
                 return base64.b64decode(encoded["data"], validate=True).decode(
                     "utf-8", "surrogatepass"

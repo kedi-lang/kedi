@@ -20,7 +20,7 @@ from ..ast import (
     TemplateBlock,
 )
 from .environment import ScopeFrame, assert_not_cli_args_identifier
-from .evaluation import evaluate_python_inline, render_expression
+from .evaluation import evaluate_python_inline, render_prompt_parts
 
 
 def evaluate_condition(
@@ -38,7 +38,7 @@ def evaluate_condition(
         )
     ):
         if stmt.condition_segments is not None:
-            claim = render_expression(rt, stmt.condition_segments, env, context="condition")
+            claim = render_prompt_parts(rt, stmt.condition_segments, env)
             with group_member(stmt):
                 return rt._evaluate_claim(claim)
         result = evaluate_python_inline(

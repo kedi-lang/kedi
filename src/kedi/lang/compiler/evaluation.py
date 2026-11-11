@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from ...core import KediRuntime
-from ...core.expressions import ComputedExpr
+from ...core.expressions import ComputedExpr, MediaExpr, computed_prompt_part
 from ...errors import KediTraceFrame
+from ...media import MediaMention, contains_media, text_embedding_error
 from ...promise import force
 from ..ast import (
     CallArg,
@@ -33,6 +34,12 @@ from .environment import lookup_value, model_lookup_value, model_text
 from .type_system import KediType
 
 NO_NATIVE_VALUE = object()
+
+_MEDIA_TEXT_HINTS = {
+    "system": "instructions are text only; mention the media in a >> prompt instead",
+    "task": "subagent tasks do not take media yet",
+    "send": "agent input does not take media yet",
+}
 
 
 def evaluate_call(
@@ -175,11 +182,12 @@ def prepare_segments(
                     if context == "system"
                     else lookup_value(rt, seg.name, kwargs)
                 )
-                parts.append(model_text(value) if context == "system" else str(value))
+                parts.append(
+                    _text_value(value, context=context, name=seg.name, model=context == "system")
+                )
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            expr.append(ComputedExpr(str(value)) if context == "template" else str(value))
-            parts.append(str(value))
+            _append_computed(expr, parts, value, context=context)
         elif isinstance(seg, OutputSegment):
             kedi_type = KediType.from_node(seg.type_expr, seg.type_annotation)
             # None (no annotation) still defaults to str downstream; a written
@@ -188,10 +196,48 @@ def prepare_segments(
             expr.append(rt.o(seg.name, pytype, binding_contract=kedi_type))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            expr.append(ComputedExpr(str(value)) if context == "template" else str(value))
-            parts.append(str(value))
+            _append_computed(expr, parts, value, context=context)
 
     return expr, "".join(parts)
+
+
+def _append_computed(expr: list[Any], parts: list[str], value: Any, *, context: str) -> None:
+    """Add an evaluated call or inline Python result to a prompt being prepared."""
+    if context == "template":
+        part = computed_prompt_part(value)
+        if isinstance(part, MediaMention):
+            expr.append(MediaExpr(part))
+            parts.append("")
+            return
+        expr.append(ComputedExpr(part))
+        parts.append(part)
+        return
+    text = _text_value(value, context=context)
+    expr.append(text)
+    parts.append(text)
+
+
+def _text_value(
+    value: Any,
+    *,
+    context: str,
+    name: str | None = None,
+    model: bool = False,
+) -> str:
+    """Render a value into text; media there would silently become its label."""
+    if context != "show" and contains_media(value):
+        hint = _MEDIA_TEXT_HINTS.get(context)
+        if hint is None and name is not None:
+            hint = f"to pass it as a value use backticks: `{name}`"
+        raise text_embedding_error(value, hint=hint)
+    return model_text(value) if model else str(value)
+
+
+def render_prompt_parts(
+    rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
+) -> list[Any]:
+    """Render a template condition's claim: text parts and media mentions."""
+    return _segment_parts(rt, segments, kwargs, context="condition", prompt=True)
 
 
 def render_expression(
@@ -280,7 +326,20 @@ def _stringify_segments(
     call_cache: dict[int, Any] | None = None,
 ) -> str:
     """Convert segments to string, resolving all values."""
-    parts: list[str] = []
+    return "".join(_segment_parts(rt, segments, kwargs, context=context, call_cache=call_cache))
+
+
+def _segment_parts(
+    rt: KediRuntime,
+    segments: list[Segment],
+    kwargs: dict[str, Any],
+    *,
+    context: str,
+    call_cache: dict[int, Any] | None = None,
+    prompt: bool = False,
+) -> list[Any]:
+    """Render segments to text parts; in a model prompt media stay mentions."""
+    parts: list[Any] = []
 
     for i, seg in enumerate(segments):
         if isinstance(seg, TextSegment):
@@ -293,15 +352,24 @@ def _stringify_segments(
                 )
             )
         elif isinstance(seg, InputSegment):
+            model = context in {"system", "task"}
             value = (
                 model_lookup_value(rt, seg.name, kwargs)
-                if context in {"system", "task"}
+                if model
                 else lookup_value(rt, seg.name, kwargs)
             )
-            parts.append(model_text(value) if context in {"system", "task"} else str(value))
+            parts.append(
+                computed_prompt_part(value, seg.name)
+                if prompt
+                else _text_value(value, context=context, name=seg.name, model=model)
+            )
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            parts.append(model_text(value) if context == "task" else str(value))
+            parts.append(
+                computed_prompt_part(value)
+                if prompt
+                else _text_value(value, context=context, model=context == "task")
+            )
         elif isinstance(seg, OutputSegment):
             if seg.name in kwargs:
                 parts.append(str(force(kwargs[seg.name])))
@@ -313,6 +381,10 @@ def _stringify_segments(
                     parts.append("")
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            parts.append(model_text(value) if context == "task" else str(value))
+            parts.append(
+                computed_prompt_part(value)
+                if prompt
+                else _text_value(value, context=context, model=context == "task")
+            )
 
-    return "".join(parts)
+    return parts

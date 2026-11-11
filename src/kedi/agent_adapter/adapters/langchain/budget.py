@@ -8,6 +8,7 @@ from kedi.agent_adapter.request_budget import (
     HistoryUsageCheckpoint,
     estimate_content_tokens,
     measured_history_tokens,
+    project_media_payloads,
 )
 
 
@@ -62,4 +63,6 @@ def estimate_history_tokens(state: Mapping[str, Any]) -> int:
     measured = measured_history_tokens(state, "langchain_messages")
     if measured is not None:
         return measured + estimate_content_tokens(extra)
-    return estimate_content_tokens(projected, extra) + opaque_tokens
+    # Inline media is estimated by kind and size, not as base64 text.
+    projected, media_tokens = project_media_payloads(projected)
+    return estimate_content_tokens(projected, extra) + opaque_tokens + media_tokens

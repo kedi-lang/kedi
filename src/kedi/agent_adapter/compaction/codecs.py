@@ -67,6 +67,19 @@ def canonical_json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def projected_json_bytes(value: object) -> tuple[bytes, int]:
+    """Encode a history entry for estimates and search with media payloads projected out.
+
+    Returns the encoding and the media token estimate: base64 media is neither text to
+    count nor text to search.
+    """
+
+    from kedi.agent_adapter.request_budget import project_media_payloads
+
+    projected, media_tokens = project_media_payloads(value)
+    return canonical_json_bytes(projected), media_tokens
+
+
 def fingerprint_value(value: object) -> str:
     return sha256(canonical_json_bytes(value)).hexdigest()
 

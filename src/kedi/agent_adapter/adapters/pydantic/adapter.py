@@ -171,6 +171,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_stream_events=True,
         supports_request_budget=True,
         supports_tool_attempt_budget=True,
+        supports_media_input=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -315,6 +316,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         )
         if history_processor is not None:
             warn_history_processor_cache()
+        self._history_archive = history_archive
         if history_archive is not None:
             from kedi.agent_adapter.compaction.pydantic_archive import (
                 PydanticArtifactHistoryCapability,
@@ -757,6 +759,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     ) -> Any:
         conversation = self._subagent_conversation_var.get()
         self._apply_conversation_history(run_kwargs, conversation)
+        user_prompt = self._user_prompt(agent, prompt, run_kwargs, conversation)
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
         with (
@@ -806,7 +809,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
 
                     control = current_live_input()
                     if control is None or not self.capabilities.supports("live_subagent_input"):
-                        result = await agent.run(prompt, **cast(Any, run_kwargs))
+                        result = await agent.run(user_prompt, **cast(Any, run_kwargs))
                     else:
                         from .live import InputDeliveryCapability, run_with_input
 
@@ -823,7 +826,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                             "capabilities": live_capabilities,
                         }
                         result = await run_with_input(
-                            agent.iter(prompt, **cast(Any, live_kwargs)),
+                            agent.iter(user_prompt, **cast(Any, live_kwargs)),
                             control=control,
                             capability=delivery,
                             capture=lambda active: self._capture_conversation_messages(
@@ -849,6 +852,37 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             if event_resolver is not None:
                 event_resolver.complete_run(final_text=str(result.output) if emit_final else None)
             return result
+
+    def _user_prompt(
+        self,
+        agent: Agent[Any, Any],
+        prompt: str,
+        run_kwargs: Mapping[str, object],
+        conversation: AdapterConversationContext | SubagentConversationContext | None,
+    ) -> str | list[Any]:
+        """Attach the request's media, unless the replayed history already holds it."""
+        from kedi.agent_adapter.request import take_prompt_media
+
+        media = take_prompt_media()
+        if not media:
+            return prompt
+        from kedi.agent_adapter.request.media import history_keeps_media
+
+        from .media import user_prompt
+
+        history = run_kwargs.get("message_history")
+        reusable = history_keeps_media(
+            conversation,
+            processor=self.active_history_processor,
+            archive=self._history_archive,
+            compaction=self.active_profile.compaction,
+        )
+        return user_prompt(
+            prompt,
+            media,
+            history=cast("Sequence[Any]", history) if reusable and history else None,
+            model=effective_model(agent, cast("Model | str | None", run_kwargs.get("model"))),
+        )
 
     @contextmanager
     def _required_tool_call_scope(self) -> Generator[None, None, None]:
