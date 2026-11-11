@@ -70,7 +70,6 @@ def register_python_origin(
     code: str,
     span: Any,
     compile_line_offset: int = 0,
-    wrapper_line_offset: int = 0,
     kedi_line_offset: int = 0,
     procedure_name: str | None = None,
     traceback_code: str | None = None,
@@ -113,7 +112,6 @@ def register_python_origin(
         code,
         span_key,
         compile_line_offset,
-        wrapper_line_offset,
         kedi_line_offset,
         procedure_name,
         traceback_code,
@@ -131,7 +129,6 @@ def register_python_origin(
             code=code,
             span=origin_span,
             compile_line_offset=compile_line_offset,
-            wrapper_line_offset=wrapper_line_offset,
             kedi_line_offset=kedi_line_offset,
             procedure_name=procedure_name,
         )

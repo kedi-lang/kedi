@@ -21,7 +21,7 @@ dependencies = [
     "pydantic-monty==1.4.0",
     "jsonschema>=4.26,<5",
     "tree-sitter==0.26.0",
-    "tree-sitter-kedi==0.4.7",
+    "tree-sitter-kedi==0.4.8",
     "tree-sitter-python==0.25.0",
     "pygls==2.1.1",
     "rich>=15,<16",

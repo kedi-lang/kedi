@@ -4,6 +4,7 @@ import ast as py_ast
 import keyword
 from typing import TYPE_CHECKING, List, Optional
 
+from pydantic import BaseModel
 from tree_sitter import Node
 
 from kedi.lang.ast import (
@@ -129,10 +130,11 @@ def _walk_type_def(self: _Walker, node: Node) -> TypeDef:
             fname_node = _field(f, "name")
             assert fname_node is not None
             fname = _identifier_name(self.source, fname_node)
-            if keyword.iskeyword(fname) or fname.startswith("_"):
+            if keyword.iskeyword(fname) or fname.startswith("_") or _model_member(fname):
                 self._error(
                     fname_node,
-                    f"field {fname!r} must not be a Python keyword or start with an underscore",
+                    f"field {fname!r} must not be a Python keyword, start with an underscore, "
+                    "or name a Pydantic model member such as 'model_dump'",
                     code="K-TYPE-FIELD-NAME",
                 )
             if fname in seen_names:
@@ -172,3 +174,8 @@ def _walk_type_def(self: _Walker, node: Node) -> TypeDef:
                 )
             )
     return TypeDef(name=name, fields=fields, loc=self._span(node))
+
+
+def _model_member(name: str) -> bool:
+    """Pydantic refuses, or Kedi itself relies on, ``BaseModel``'s ``model_*`` members."""
+    return name.startswith("model_") and hasattr(BaseModel, name)

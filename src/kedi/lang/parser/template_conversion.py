@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, List
 
 from tree_sitter import Node
@@ -52,13 +53,10 @@ def _template_line_from_expr(self: _Walker, expr_node: Node) -> TemplateLine:
 
 def _system_line_from_expr(self: _Walker, expr_node: Node) -> TemplateLine:
     segments: List[Segment] = []
-    previous: Node | None = None
-    for child in _named_children(expr_node):
-        if previous is not None:
-            gap = self.source[previous.end_byte : child.start_byte]
-            if gap and all(char in (32, 9) for char in gap):
-                segments.append(TextSegment(text=gap.decode("utf-8")))
-        previous = child
+    for child in _children_with_gaps(self, expr_node):
+        if isinstance(child, TextSegment):
+            segments.append(child)
+            continue
         if child.type == "system_angle_segment":
             raw = _src_text(self.source, child)
             inner = raw[1:-1] if raw.endswith(">") else raw[1:]
@@ -221,19 +219,28 @@ def _walk_template_expr(self: _Walker, node: Node) -> List[Segment]:
     return segs
 
 
-def _walk_template_segments(self: _Walker, node: Node, *, in_call: bool = False) -> List[Segment]:
-    segments: List[Segment] = []
+def _children_with_gaps(self: _Walker, node: Node) -> Iterator[Node | TextSegment]:
+    """Yield named children and the space/tab gaps between them.
+
+    Tree-sitter treats whitespace-only gaps as extras. Inside a template those bytes
+    separate substitutions and must survive CST conversion.
+    """
     previous: Node | None = None
     for child in _named_children(node):
-        # Tree-sitter treats whitespace-only gaps as extras. Inside a template
-        # those bytes separate substitutions and must survive CST conversion.
         if previous is not None:
             gap = self.source[previous.end_byte : child.start_byte]
-            if gap and all(char in (32, 9) for char in gap):
-                segments.append(TextSegment(text=gap.decode("utf-8")))
-        segments.append(self._walk_segment_in_call(child) if in_call else self._walk_segment(child))
+            if gap and not gap.strip(b" \t"):
+                yield TextSegment(text=gap.decode("utf-8"))
+        yield child
         previous = child
-    return segments
+
+
+def _walk_template_segments(self: _Walker, node: Node, *, in_call: bool = False) -> List[Segment]:
+    walk = self._walk_segment_in_call if in_call else self._walk_segment
+    return [
+        item if isinstance(item, TextSegment) else walk(item)
+        for item in _children_with_gaps(self, node)
+    ]
 
 
 def _sole_inline_python_expr(node: Node | None) -> Node | None:

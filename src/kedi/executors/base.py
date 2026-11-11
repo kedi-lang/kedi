@@ -419,7 +419,6 @@ class DefaultExecutor:
         kind: str,
         code: str,
         *,
-        wrapper_line_offset: int = 0,
         kedi_line_offset: int = 0,
     ) -> str:
         frames = rt.current_trace_frames()
@@ -434,7 +433,6 @@ class DefaultExecutor:
             code=code,
             span=span,
             compile_line_offset=self._python_line_offset(rt, kedi_line_offset),
-            wrapper_line_offset=wrapper_line_offset,
             kedi_line_offset=kedi_line_offset,
             procedure_name=procedure_name,
         )

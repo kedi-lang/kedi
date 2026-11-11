@@ -403,6 +403,7 @@ def _kedi_run(
         ]
 
         from kedi.agent_adapter.meta import SupportsProfileOverride, SupportsTemplatePromptMode
+        from kedi.agent_adapter.output_schema import output_value
         from kedi.agent_adapter.request import (
             KediTemplatePromptBuilder,
             SchemaOutput,
@@ -434,7 +435,7 @@ def _kedi_run(
             out_map: Dict[str, Any] = {}
             artifact_policy = profile.artifacts
             for key in required:
-                value = getattr(result, key, NotFound)
+                value = output_value(result, key, NotFound)
                 if value is NotFound:
                     raise ValueError(f"LLM did not return required key: {key}")
                 validated = self._validate_adapter_output(

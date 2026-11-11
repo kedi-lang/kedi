@@ -342,7 +342,9 @@ Outputs are placeholders filled by the LLM using `[...]`:
 >> [first_name] [last_name] lives in [city: str]
 ```
 
-Output names must be valid identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`
+Output names must be valid identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`. The model sees each
+output under its Kedi name, including names Pydantic reserves for itself such as `_draft`,
+`model_config` or `copy`.
 
 Backtick-wrapped type expressions in outputs are evaluated at runtime, giving you access to dynamic types from the prelude or computed values.
 
@@ -980,10 +982,12 @@ return Person(name="Bob", age=25, email="bob@example.com")
 
 Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable initializations. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
 
-Type names cannot be Python keywords. Field names cannot be Python keywords or
-start with an underscore: Pydantic treats underscore-prefixed names as private
-attributes rather than model fields. Kedi rejects these declarations during parsing
-instead of silently dropping fields. Fields named `self` or `instance` are supported.
+Type names cannot be Python keywords. Field names cannot be Python keywords,
+start with an underscore, or name a Pydantic `BaseModel` member that starts with
+`model_` (such as `model_dump` or `model_config`): Pydantic treats underscore-prefixed
+names as private attributes rather than model fields, and the `model_` members are the
+model API. Kedi rejects these declarations during parsing instead of silently dropping
+fields. Fields named `self`, `instance` or `model_name` are supported.
 
 Kedi's built-in type namespace includes common Python and typing types such as `str`,
 `int`, `list`, `dict`, `Union`, `Optional`, `Literal`, `Annotated`, plus
