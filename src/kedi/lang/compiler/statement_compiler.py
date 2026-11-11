@@ -73,7 +73,6 @@ from ..ast import (
     VariableInitBlockStmt,
     VariableInitStmt,
 )
-from ..parser.escapes import preserve_escaped_whitespace
 from .control_flow import (
     active_scope,
     assert_conditional_loop_capacity,
@@ -876,11 +875,7 @@ class StatementExecutor:
             )
             if not return_kedi_type.is_none():
                 native, rendered = evaluate_binding_rhs(self.rt, stmt.segments, closure_env)
-                return (
-                    native
-                    if native is not NO_NATIVE_VALUE
-                    else preserve_escaped_whitespace(rendered)
-                )
+                return native if native is not NO_NATIVE_VALUE else rendered
             return self.compiler.compile_return(stmt)(**closure_env)
 
         if isinstance(stmt, ReturnBlockStmt):

@@ -25,6 +25,13 @@ class TypeInitMetadata:
     default_sources: tuple[str | None, ...]
     default_values: tuple[Any | None, ...]
 
+    @property
+    def self_name(self) -> str:
+        name = "self"
+        while name in self.fields:
+            name += "_"
+        return name
+
     def display_source(self) -> str:
         return (
             f"{self._signature()}\n"
@@ -80,6 +87,7 @@ class TypeInitMetadata:
             self.default_values,
             "None",
             include_self=True,
+            self_name=self.self_name,
         )
 
     def _signature(self) -> str:
@@ -90,8 +98,8 @@ class TypeInitMetadata:
             )
         )
         if not params:
-            return "def __init__(self) -> None:"
-        return f"def __init__(self, {params}) -> None:"
+            return f"def __init__({self.self_name}) -> None:"
+        return f"def __init__({self.self_name}, {params}) -> None:"
 
     def _executable_signature(self) -> str:
         params = ", ".join(
@@ -105,8 +113,8 @@ class TypeInitMetadata:
             )
         )
         if not params:
-            return "def __init__(self) -> None:"
-        return f"def __init__(self, {params}) -> None:"
+            return f"def __init__({self.self_name}) -> None:"
+        return f"def __init__({self.self_name}, {params}) -> None:"
 
     def _param_signature(self, field: str, typ: str, default_source: str | None) -> str:
         piece = f"{field}: {typ}"
@@ -120,8 +128,8 @@ class TypeInitMetadata:
     def _init_call(self) -> str:
         kwargs = self._keyword_args()
         if not kwargs:
-            return "__kedi_model_init__(self)"
-        return f"__kedi_model_init__(self, {kwargs})"
+            return f"__kedi_model_init__({self.self_name})"
+        return f"__kedi_model_init__({self.self_name}, {kwargs})"
 
     def _class_field_lines(self) -> list[str]:
         lines: list[str] = []
@@ -171,7 +179,7 @@ def make_type_init(
     _cache_source(class_filename, class_source)
     _cache_source(init_filename, init_source)
 
-    def init_model(instance: BaseModel, **kwargs: Any) -> None:
+    def init_model(instance: BaseModel, /, **kwargs: Any) -> None:
         super(model_class, instance).__init__(**kwargs)
 
     default_namespace = metadata.default_namespace()

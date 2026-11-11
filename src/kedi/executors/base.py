@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import keyword
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
@@ -307,7 +309,10 @@ class DefaultExecutor:
             args=params,
         )
         defaults = defaults or {}
-        namespace: dict[str, Any] = {"_body": body}
+        body_name = "_body"
+        while body_name in params:
+            body_name += "_"
+        namespace: dict[str, Any] = {body_name: body}
         param_specs: list[str] = []
         for index, param in enumerate(params):
             if param in defaults:
@@ -318,7 +323,7 @@ class DefaultExecutor:
                 param_specs.append(param)
         param_list = ", ".join(param_specs)
         args_map = ", ".join(f"{param}={param}" for param in params)
-        src = f"def _impl({param_list}):\n    return _body({args_map})\n"
+        src = f"def _impl({param_list}):\n    return {body_name}({args_map})\n"
         exec(src, namespace, namespace)
         fn = namespace["_impl"]
         fn.__name__ = name
@@ -414,7 +419,6 @@ class DefaultExecutor:
         kind: str,
         code: str,
         *,
-        wrapper_line_offset: int = 0,
         kedi_line_offset: int = 0,
     ) -> str:
         frames = rt.current_trace_frames()
@@ -429,7 +433,6 @@ class DefaultExecutor:
             code=code,
             span=span,
             compile_line_offset=self._python_line_offset(rt, kedi_line_offset),
-            wrapper_line_offset=wrapper_line_offset,
             kedi_line_offset=kedi_line_offset,
             procedure_name=procedure_name,
         )
@@ -485,31 +488,38 @@ class DefaultExecutor:
         """
         env = self._build_python_env(rt, local_env)
         owners = env.binding_owners()
-        names = list(owners)
-        original_values = {name: dict.__getitem__(env, name) for name in names if name in env}
-        # A function wrapper is needed so ``return`` is legal; declaring the Kedi vars ``global``
-        # makes their reads LOAD_GLOBAL (-> KediEnv.__getitem__) and writes STORE_GLOBAL (-> env).
-        header = ["def __kedi_wrapper__():"]
-        if names:  # empty ``global`` is a SyntaxError
-            header.append(f"    global {', '.join(names)}")
-        body = ["    " + line for line in code.splitlines()]
-        wrapper_src = "\n".join(
-            header + body + ["    pass"]  # guarantees a non-empty body
-        )
+        names = [name for name in owners if name.isidentifier() and not keyword.iskeyword(name)]
+        original_values = {name: dict.__getitem__(env, name) for name in owners if name in env}
         filename = self._python_filename(
             rt,
             kind,
             code,
-            wrapper_line_offset=len(header),
             kedi_line_offset=kedi_line_offset,
         )
-        # Pad so traceback line numbers stay aligned with the Kedi source line.
-        compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
+        # Wrap the parsed statements, not their source: adding indentation to source would
+        # change multiline strings. Keep user nodes at their original traceback locations.
+        compile_source = self._python_source(rt, code, kedi_line_offset=kedi_line_offset)
+        block = ast.parse(compile_source, filename=filename)
+        wrapper_name = "__kedi_wrapper__"
+        while wrapper_name in env:
+            wrapper_name += "_"
+        wrapper = ast.parse(f"def {wrapper_name}():\n    pass\n")
+        function = wrapper.body[0]
+        assert isinstance(function, ast.FunctionDef)
+        if block.body:
+            function.body = block.body
+            function.end_lineno = block.body[-1].end_lineno
+            function.end_col_offset = block.body[-1].end_col_offset
+        if names:
+            declaration = ast.Global(names=names)
+            ast.copy_location(declaration, function.body[0])
+            function.body.insert(0, declaration)
+        ast.fix_missing_locations(wrapper)
         from ..decisions import decision_environment
 
         with decision_environment(local_env):
-            exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
-            result = env["__kedi_wrapper__"]()
+            exec(compile(wrapper, filename, "exec", dont_inherit=True), env, env)
+            result = env[wrapper_name]()
         # CPython's STORE_GLOBAL can bypass dict-subclass mutation hooks. Compare raw identities
         # around the block and feed only actual rebindings through owner-aware validation. In-place
         # mutations already affect the owned object; untouched lazy values remain promises.

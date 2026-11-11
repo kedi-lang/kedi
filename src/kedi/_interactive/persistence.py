@@ -39,6 +39,7 @@ MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 MAX_VALUE_DEPTH = 100
 _TAG = "$kedi"
 _PATTERN_TYPE = type(re.compile(""))
+_SURROGATES = re.compile(r"[\ud800-\udfff]")
 
 
 class SessionPersistenceError(RuntimeError):
@@ -91,6 +92,11 @@ class SessionValueEncoder:
     def encode(self, value: Any, *, path: str = "value", depth: int = 0) -> Any:
         if depth > MAX_VALUE_DEPTH:
             raise UnsupportedSessionValue(path, value, "maximum nesting depth exceeded")
+        if isinstance(value, str) and _SURROGATES.search(value):
+            return {
+                _TAG: "surrogate_str",
+                "data": base64.b64encode(value.encode("utf-8", "surrogatepass")).decode("ascii"),
+            }
         if value is None or isinstance(value, (bool, int, str)):
             return value
         if isinstance(value, float):
@@ -134,7 +140,11 @@ class SessionValueEncoder:
                 "filename": value.filename,
             }
         if isinstance(value, _PATTERN_TYPE):
-            return {_TAG: "regex", "pattern": value.pattern, "flags": value.flags}
+            return {
+                _TAG: "regex",
+                "pattern": self.encode(value.pattern, path=f"{path}.pattern", depth=depth + 1),
+                "flags": value.flags,
+            }
         if isinstance(value, DecisionInfo):
             if self._decision_records is None:
                 raise UnsupportedSessionValue(path, value, "decision record table is unavailable")
@@ -271,6 +281,10 @@ class SessionValueDecoder:
                     name=encoded["name"],
                     filename=encoded["filename"],
                 )
+            if tag == "surrogate_str":
+                return base64.b64decode(encoded["data"], validate=True).decode(
+                    "utf-8", "surrogatepass"
+                )
             if tag == "complex":
                 return complex(float(encoded["real"]), float(encoded["imag"]))
             if tag == "decimal":
@@ -292,7 +306,8 @@ class SessionValueDecoder:
             if tag == "path":
                 return Path(encoded["value"])
             if tag == "regex":
-                return re.compile(encoded["pattern"], encoded["flags"])
+                pattern = self.decode(encoded["pattern"], path=f"{path}.pattern", depth=next_depth)
+                return re.compile(pattern, encoded["flags"])
             if tag == "decision_info":
                 record_id = encoded["record_id"]
                 field_path = encoded["field_path"]

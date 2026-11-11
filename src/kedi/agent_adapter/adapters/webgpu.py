@@ -39,7 +39,7 @@ from ..hooks import (
     is_tool_execution_interrupted,
 )
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
-from ..output_schema import output_field_definition
+from ..output_schema import output_model_fields
 from ..telemetry import (
     mcp_initialization_span,
     mcp_server_name,
@@ -703,10 +703,7 @@ def _output_adapter(
         output_type = build_dynamic_model(
             "_WebGPUOutput",
             BaseModel,
-            {
-                name: output_field_definition(field_type)
-                for name, field_type in output_schema.items()
-            },
+            output_model_fields(output_schema),
         )
     if output_type is None:
         raise ValueError("Output spec must be provided.")

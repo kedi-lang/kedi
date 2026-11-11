@@ -31,6 +31,13 @@ class ProcedurePythonMetadata:
     return_type: str
     docstring: str | None
 
+    @property
+    def call_name(self) -> str:
+        name = "__kedi_call__"
+        while name in self.params or name == self.name:
+            name += "_"
+        return name
+
     def _signature(self) -> str:
         annotated_params = ", ".join(
             self._param_signature(name, typ, default)
@@ -70,7 +77,7 @@ class ProcedurePythonMetadata:
 
     def display_source(self) -> str:
         args = ", ".join(self.params)
-        call = f"__kedi_call__({args})" if args else "__kedi_call__()"
+        call = f"{self.call_name}({args})"
         lines = [self._signature()]
         if self.docstring:
             lines.extend(_render_docstring_lines(self.docstring, "    "))
@@ -79,7 +86,7 @@ class ProcedurePythonMetadata:
 
     def executable_source(self) -> str:
         args = ", ".join(self.params)
-        call = f"__kedi_call__({args})" if args else "__kedi_call__()"
+        call = f"{self.call_name}({args})"
         return f"{self._executable_signature()}\n    return {call}\n"
 
     def introspection_signature(self) -> inspect.Signature:
@@ -111,6 +118,7 @@ def build_introspection_signature(
     return_type: str,
     *,
     include_self: bool = False,
+    self_name: str = "self",
 ) -> inspect.Signature:
     """Build an ``inspect.Signature`` independent of Python typing repr changes.
 
@@ -120,7 +128,7 @@ def build_introspection_signature(
     """
     parameters: list[inspect.Parameter] = []
     if include_self:
-        parameters.append(inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD))
+        parameters.append(inspect.Parameter(self_name, inspect.Parameter.POSITIONAL_OR_KEYWORD))
     parameters.extend(
         inspect.Parameter(
             name,

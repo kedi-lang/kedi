@@ -228,7 +228,7 @@ def test_default_artifact_contract_does_not_change_between_model_turns() -> None
         adapter=adapter,
     )
 
-    assert runtime.run_main() == "response:First turn.response:Second turn."
+    assert runtime.run_main() == "response:First turn. response:Second turn."
     assert len(adapter.instruction_calls) == 2
     assert adapter.instruction_calls[0] == adapter.instruction_calls[1]
     assert adapter.tool_calls == [

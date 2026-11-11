@@ -382,7 +382,7 @@ def test_python_origin_trace_maps_source_line_when_source_map_is_available(
         kind="block",
         code="return 1",
         span=span,
-        wrapper_line_offset=2,
+        compile_line_offset=2,
         kedi_line_offset=1,
         procedure_name="boom",
     ).to_trace(5, source_map=SourceMap(), python_col=7)
@@ -398,7 +398,7 @@ def test_python_origin_trace_maps_source_line_when_source_map_is_available(
         kind="inline",
         code="1 / 0",
         span=None,
-        wrapper_line_offset=5,
+        compile_line_offset=5,
     ).to_trace(2)
 
     assert unspanned.python_lineno == 1

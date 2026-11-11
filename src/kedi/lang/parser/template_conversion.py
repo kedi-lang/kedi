@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, List
 
 from tree_sitter import Node
@@ -52,7 +53,10 @@ def _template_line_from_expr(self: _Walker, expr_node: Node) -> TemplateLine:
 
 def _system_line_from_expr(self: _Walker, expr_node: Node) -> TemplateLine:
     segments: List[Segment] = []
-    for child in _named_children(expr_node):
+    for child in _children_with_gaps(self, expr_node):
+        if isinstance(child, TextSegment):
+            segments.append(child)
+            continue
         if child.type == "system_angle_segment":
             raw = _src_text(self.source, child)
             inner = raw[1:-1] if raw.endswith(">") else raw[1:]
@@ -203,9 +207,40 @@ def _walk_template_line(self: _Walker, node: Node, *, deprecated: bool = False) 
 
 
 def _walk_template_expr(self: _Walker, node: Node) -> List[Segment]:
-    segs = [self._walk_segment(c) for c in _named_children(node) if c.is_named]
+    segs = _walk_template_segments(self, node)
     self._strip_leading_template_indent(segs)
+    if segs and isinstance(segs[-1], TextSegment):
+        last = segs[-1]
+        end = len(last.text)
+        while end and last.text[end - 1] in (" ", "\t") and end - 1 not in last.escaped_whitespace:
+            end -= 1
+        last.text = last.text[:end]
+        last.escaped_whitespace = {index for index in last.escaped_whitespace if index < end}
     return segs
+
+
+def _children_with_gaps(self: _Walker, node: Node) -> Iterator[Node | TextSegment]:
+    """Yield named children and the space/tab gaps between them.
+
+    Tree-sitter treats whitespace-only gaps as extras. Inside a template those bytes
+    separate substitutions and must survive CST conversion.
+    """
+    previous: Node | None = None
+    for child in _named_children(node):
+        if previous is not None:
+            gap = self.source[previous.end_byte : child.start_byte]
+            if gap and not gap.strip(b" \t"):
+                yield TextSegment(text=gap.decode("utf-8"))
+        yield child
+        previous = child
+
+
+def _walk_template_segments(self: _Walker, node: Node, *, in_call: bool = False) -> List[Segment]:
+    walk = self._walk_segment_in_call if in_call else self._walk_segment
+    return [
+        item if isinstance(item, TextSegment) else walk(item)
+        for item in _children_with_gaps(self, node)
+    ]
 
 
 def _sole_inline_python_expr(node: Node | None) -> Node | None:
@@ -338,7 +373,7 @@ def _walk_call_arg(self: _Walker, node: Node) -> CallArg:
         return lit
 
     if first.type == "template_arg":
-        segs = [self._walk_segment_in_call(c) for c in _named_children(first)]
+        segs = _walk_template_segments(self, first, in_call=True)
         if len(segs) == 1:
             only = segs[0]
             if isinstance(only, PythonExprSegment):
@@ -367,14 +402,10 @@ def _walk_call_arg(self: _Walker, node: Node) -> CallArg:
 def _walk_segment_in_call(self: _Walker, node: Node) -> Segment:
     """A segment appearing inside a ``template_arg`` (call argument).
 
-    Each call-argument text segment is BOTH the first AND the last
-    text of its enclosing arg expression in the legacy semantics —
-    so we trim both ends here (matching ``parse_call_arguments``,
-    which calls ``raw.strip()`` on the arg before segment-parsing
-    it). Internal whitespace is preserved.
+    Keep internal spaces; the renderer trims only the argument's outer boundaries.
     """
     if node.type == "text_in_call_segment":
-        raw = _src_text(self.source, node).strip(" \t")
+        raw = _src_text(self.source, node)
         text, escaped_positions = self._unescape_text_segment(node, raw)
         return TextSegment(
             text=text,

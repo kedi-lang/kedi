@@ -57,6 +57,7 @@ def load_session(
 ) -> InteractiveSession:
     payload = read_snapshot(path)
     try:
+        _validate_payload_metadata(payload)
         default_profile = decode_profile(
             payload["default_profile"],
             decoder=SessionValueDecoder(kedi_models={}),
@@ -406,6 +407,30 @@ def _declaration_persistence_issues(
             + ", ".join(sorted(extra_profiles))
         )
     return issues
+
+
+def _validate_payload_metadata(payload: dict[str, Any]) -> None:
+    cell_number = payload["cell_number"]
+    if type(cell_number) is not int or cell_number < 0:
+        raise SessionLoadError("cell_number must be a non-negative integer")
+    if not isinstance(payload["cwd"], str):
+        raise SessionLoadError("cwd must be a string")
+    source_names = payload["source_names"]
+    if not isinstance(source_names, list) or not all(
+        isinstance(name, str) for name in source_names
+    ):
+        raise SessionLoadError("source_names must be a list of strings")
+    if len(set(source_names)) != len(source_names):
+        raise SessionLoadError("source_names must not contain duplicates")
+    fragments = payload["fragments"]
+    if not isinstance(fragments, list):
+        raise SessionLoadError("fragments must be a list")
+    for index, entry in enumerate(fragments):
+        if not isinstance(entry, dict):
+            raise SessionLoadError(f"fragments[{index}] must be an object")
+        for field in ("source", "source_name", "digest"):
+            if not isinstance(entry.get(field), str):
+                raise SessionLoadError(f"fragments[{index}].{field} must be a string")
 
 
 def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> None:
