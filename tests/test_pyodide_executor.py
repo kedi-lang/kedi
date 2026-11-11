@@ -177,6 +177,29 @@ def test_pyodide_writeback_updates_nearest_owner_and_validates_atomically() -> N
     assert bridge.requests[0]["syncNames"] == ["count", "name"]
 
 
+def test_pyodide_fragment_prelude_writes_back_kedi_variables_atomically() -> None:
+    bridge = QueueBridge(
+        {"ok": True, "result": None, "env": {"x": "b", "count": 2, "helper": "h"}},
+        {"ok": True, "result": None, "env": {"x": "c", "count": "invalid"}},
+    )
+    executor = PyodideExecutor(bridge)
+    runtime = KediRuntime()
+    frame = ScopeFrame()
+    frame.declare("x", "a")
+    frame.declare("count", 1, BindingMetadata(type_contract=KediType(TypeRef(name="int"))))
+    runtime._globals_env = frame
+
+    namespace = executor.execute_prelude_incremental(
+        runtime, "x = 'b'\ncount = 2\nhelper = 'h'", None
+    )
+
+    assert (frame.raw_value("x"), frame.raw_value("count")) == ("b", 2)
+    assert namespace == {"helper": "h"}
+    with pytest.raises(TypeError, match="annotated type"):
+        executor.execute_prelude_incremental(runtime, "x = 'c'\ncount = 'invalid'", namespace)
+    assert (frame.raw_value("x"), frame.raw_value("count")) == ("b", 2)
+
+
 def test_pyodide_executor_surfaces_bridge_and_response_errors() -> None:
     exporter = MemoryExporter()
     executor = PyodideExecutor(
@@ -304,6 +327,7 @@ seed = 7
 def package_is_installed(package_name: str) -> bool:
     return importlib.util.find_spec(package_name) is not None
 """) == ["importlib", "ItemSequence", "seed", "package_is_installed"]
+    assert _prelude_names("def bump():\n    global n\n    n = n + 1\n") == ["bump", "n"]
 
 
 class WorkerBridge:

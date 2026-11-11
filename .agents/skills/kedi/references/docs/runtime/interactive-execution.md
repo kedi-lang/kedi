@@ -225,6 +225,14 @@ The execution model is synchronous and non-transactional. If a fragment fails:
 - completed external side effects are not rolled back;
 - the source-aware exception identifies the failed fragment.
 
+A fragment that starts with a Python block runs in the session's Python
+namespace, where prelude functions live. Its new names (imports, functions,
+other values) stay available to later fragments until the session closes. Its
+assignments to existing Kedi variables are written back under their type
+contracts, all or nothing: a value that does not match raises, and none of the
+fragment's assignments to Kedi variables apply. In a program file only a first
+block is a prelude; a later block keeps its new names local.
+
 Interactive fragments reject package metadata, export directives, and
 `@test`/`@eval` suites. Those constructs describe complete files, packages, or
 validation surfaces rather than one incremental cell.

@@ -90,8 +90,9 @@ class DefaultExecutor:
         eval_source = self._python_source(rt, code)
         try:
             from ..decisions import decision_environment
+            from ..lang.compiler.environment import running_python
 
-            with decision_environment(local_env):
+            with decision_environment(local_env), running_python(rt, env):
                 result = eval(
                     compile(eval_source, eval_filename, "eval", dont_inherit=True),
                     env,
@@ -221,8 +222,9 @@ class DefaultExecutor:
         compile_source = self._python_source(rt, code, kedi_line_offset=kedi_line_offset)
         try:
             from ..decisions import decision_environment
+            from ..lang.compiler.environment import running_python
 
-            with decision_environment(env_map):
+            with decision_environment(env_map), running_python(rt, env):
                 exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
         except Exception as exc:
             self._emit_debug(
@@ -268,16 +270,23 @@ class DefaultExecutor:
         *,
         env: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from ..lang.compiler.environment import PreludeNamespace, running_python
+
         self._emit_debug("execution_started", "execute_prelude", code=code)
         current = self._build_python_env(rt, {})
+        # The module's imports and procedures are stable and belong to its functions. Kedi
+        # variables are not copied: they resolve through the running Python's environment, so
+        # later calls see current values.
+        incremental = env is not None
         if env is None:
-            env = current
-        else:
-            env.update(current)
+            env = PreludeNamespace()
+        owners = current.binding_owners()
+        dict.update(env, {name: value for name, value in dict.items(current) if name not in owners})
         filename = self._python_filename(rt, "prelude", code, kedi_line_offset=1)
         compile_source = self._python_source(rt, code, kedi_line_offset=1)
         try:
-            exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
+            with running_python(rt, current, env, write_back=incremental):
+                exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -516,8 +525,9 @@ class DefaultExecutor:
             function.body.insert(0, declaration)
         ast.fix_missing_locations(wrapper)
         from ..decisions import decision_environment
+        from ..lang.compiler.environment import running_python
 
-        with decision_environment(local_env):
+        with decision_environment(local_env), running_python(rt, env):
             exec(compile(wrapper, filename, "exec", dont_inherit=True), env, env)
             result = env[wrapper_name]()
         # CPython's STORE_GLOBAL can bypass dict-subclass mutation hooks. Compare raw identities

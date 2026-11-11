@@ -122,10 +122,16 @@ class PlaygroundExecutor:
         env: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Execute a fragment prelude in the bridge's persistent namespace."""
-        from ..lang.compiler.environment import build_python_env
+        from ..lang.compiler.environment import (
+            build_python_env,
+            validate_owned_value,
+            write_owned_value,
+        )
 
         execution_env = build_python_env(rt, {})
-        sync_names: list[str] = list(dict.fromkeys([*(env or {}), *_prelude_names(code)]))
+        owners = execution_env.binding_owners()
+        assigned = _prelude_names(code)
+        sync_names: list[str] = list(dict.fromkeys([*(env or {}), *assigned]))
         response = self._request(
             rt,
             "execute_prelude",
@@ -133,7 +139,21 @@ class PlaygroundExecutor:
             execution_env,
             sync_names=sync_names,
         )
-        return _response_env(response)
+        namespace = _response_env(response)
+        # Kedi variables stay Kedi's: the fragment's assignments to them are written back under
+        # their type contracts, all or nothing, and do not enter the prelude namespace.
+        validated = [
+            (
+                owners[name],
+                name,
+                validate_owned_value(rt, owners[name], name, namespace[name], execution_env),
+            )
+            for name in assigned
+            if name in owners and name in namespace
+        ]
+        for owner, name, value in validated:
+            write_owned_value(owner, name, value)
+        return {name: value for name, value in namespace.items() if name not in owners}
 
     def create_dynamic_function(
         self,
@@ -308,12 +328,18 @@ def _referenced_names(code: str, action: str) -> set[str]:
 
 
 def _prelude_names(code: str) -> list[str]:
-    table = symtable.symtable(code, "<kedi-playground:prelude>", "exec")
-    return [
-        symbol.get_name()
-        for symbol in table.get_symbols()
-        if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace()
-    ]
+    """Names a prelude binds at module level, including ``global`` writes in its functions."""
+    names: dict[str, None] = {}
+    pending = [symtable.symtable(code, "<kedi-playground:prelude>", "exec")]
+    while pending:
+        table = pending.pop()
+        top = table.get_type() == "module"
+        for symbol in table.get_symbols():
+            binds = symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace()
+            if binds and (top or symbol.is_declared_global()):
+                names[symbol.get_name()] = None
+        pending.extend(table.get_children())
+    return list(names)
 
 
 def _visible_procedures(rt: KediRuntime, env: Mapping[str, Any]) -> dict[str, Callable[..., Any]]:

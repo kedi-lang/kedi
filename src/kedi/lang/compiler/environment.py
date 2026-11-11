@@ -12,7 +12,9 @@ import keyword
 import linecache
 import re
 import typing
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -460,6 +462,84 @@ class KediEnv(dict[str, Any]):
     def native_value(self, key: str) -> Any:
         """Return the Python-native value while retaining lazy storage."""
         return native_value(self.raw_value(key))
+
+
+_RUNNING_PYTHON_ENV: ContextVar[KediEnv | None] = ContextVar(
+    "kedi_running_python_env", default=None
+)
+
+
+class PreludeNamespace(dict[str, Any]):
+    """Python globals that the prelude and interactive fragments share.
+
+    Their functions run later, called from other Python. A name the namespace does not define
+    resolves in the environment of the Python running at that moment, so Kedi variables read
+    their current values. A ``global`` write lands here; ``running_python`` writes it back.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.setdefault("__builtins__", builtins.__dict__)
+
+    def __getitem__(self, key: str) -> Any:
+        try:
+            return dict.__getitem__(self, key)
+        except KeyError:
+            env = _RUNNING_PYTHON_ENV.get()
+            if env is None or not dict.__contains__(env, key):
+                raise
+            return env[key]
+
+
+@contextmanager
+def running_python(
+    rt: KediRuntime,
+    env: KediEnv,
+    namespace: dict[str, Any] | None = None,
+    *,
+    write_back: bool = True,
+) -> Generator[None, None, None]:
+    """Run Python whose Kedi view is ``env``; the prelude namespace resolves through it.
+
+    Kedi variables that the code rebinds in the namespace (a top-level fragment assignment, or a
+    prelude function's ``global x``) leave it again and are written back under their type
+    contracts, all or nothing. A failed run discards them. A program prelude runs with
+    ``write_back=False``: its top-level names are its own, even when a caller's global shares one.
+    """
+    namespace = rt._prelude_env if namespace is None else namespace
+    if not isinstance(namespace, PreludeNamespace):
+        yield
+        return
+    if not write_back:
+        token = _RUNNING_PYTHON_ENV.set(env)
+        try:
+            yield
+        finally:
+            _RUNNING_PYTHON_ENV.reset(token)
+        return
+    before = dict(namespace)
+    owners = env.binding_owners()
+    token = _RUNNING_PYTHON_ENV.set(env)
+    try:
+        yield
+    finally:
+        _RUNNING_PYTHON_ENV.reset(token)
+        written: dict[str, Any] = {}
+        for name in dict.keys(namespace) & owners.keys():
+            value = dict.__getitem__(namespace, name)
+            if name in before and before[name] is value:
+                continue
+            written[name] = value
+            if name in before:
+                dict.__setitem__(namespace, name, before[name])
+            else:
+                dict.__delitem__(namespace, name)
+    validated = [
+        (owners[name], name, validate_owned_value(rt, owners[name], name, value, env))
+        for name, value in sorted(written.items())
+    ]
+    for owner, name, value in validated:
+        write_owned_value(owner, name, value)
 
 
 def assert_kedienv_routing() -> None:
