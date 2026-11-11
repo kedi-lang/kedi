@@ -60,11 +60,17 @@ class InputDeliveryCapability(AbstractCapability[DepsT]):
         self.requests += 1
         self.control.confirm_contents(
             tuple(
-                part.content
+                text
                 for message in messages
                 if isinstance(message, ModelRequest)
                 for part in message.parts
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+                if isinstance(part, UserPromptPart)
+                # A prompt with media is a list: its text items carry the delivered input.
+                for text in (
+                    (part.content,)
+                    if isinstance(part.content, str)
+                    else (item for item in part.content if isinstance(item, str))
+                )
             )
         )
 

@@ -449,8 +449,8 @@ class KediRuntime:
             binding_contract=binding_contract,
         )
 
-    def _evaluate_claim(self, claim: str) -> bool:
-        """Classify a rendered control-flow claim through the active agent lane."""
+    def _evaluate_claim(self, claim: str | Sequence[Any]) -> bool:
+        """Classify a rendered control-flow claim (text, or parts with media mentions)."""
         return _model_calls._evaluate_claim(self, claim)
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:

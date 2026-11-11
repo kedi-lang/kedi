@@ -20,6 +20,7 @@ from kedi.core.expressions import (
     ComputedExpr,
     Expression,
     InputExpr,
+    MediaExpr,
     OutputExpr,
     ValueEnv,
 )
@@ -39,7 +40,8 @@ from kedi.errors import KediExecutionError
 from kedi.promise import KediPromise
 
 if TYPE_CHECKING:
-    from kedi.agent_adapter.request import AgentRunRequest
+    from kedi.agent_adapter.request import AgentRunRequest, MediaAttachment, PromptDraft
+    from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.core.runtime import KediRuntime
 
 
@@ -52,23 +54,83 @@ _CLAIM_OUTPUT_DESCRIPTION = (
 
 @dataclass(frozen=True, slots=True)
 class _PromptInputSnapshot:
-    text: str
+    part: Any
     identity: DecisionInput
 
 
 def _snapshot_prompt_input(name: str, value: Any) -> _PromptInputSnapshot:
     from kedi.lang.compiler.environment import model_value_and_text
+    from kedi.media import MediaMention, prompt_media
 
+    items = prompt_media(value)
+    if items is not None:
+        # Media is identified by content, not bytes: the attachment carries the content.
+        fingerprint = fingerprint_value(
+            ["media", [[item.kind, *item.content_key] for item in items]]
+        )
+        return _PromptInputSnapshot(
+            part=MediaMention(items=items, binding=name, is_list=isinstance(value, (list, tuple))),
+            identity=DecisionInput(name=name, fingerprint=fingerprint, supported=True),
+        )
     model_value, text = model_value_and_text(value)
     fingerprint = fingerprint_value(model_value)
     return _PromptInputSnapshot(
-        text=text,
+        part=text,
         identity=DecisionInput(
             name=name,
             fingerprint=fingerprint,
             supported=fingerprint is not None,
         ),
     )
+
+
+def _prompt_fingerprint(prompt: PromptDraft) -> str:
+    if not prompt.media:
+        return fingerprint_text(prompt.content)
+    from kedi.agent_adapter.request.media import media_digest_material
+
+    fingerprint = fingerprint_value(
+        {"content": prompt.content, "media": media_digest_material(prompt.media)}
+    )
+    assert fingerprint is not None
+    return fingerprint
+
+
+def _prepare_attachments(
+    self: KediRuntime,
+    attachments: tuple[MediaAttachment, ...],
+    *,
+    profile: Any,
+    adapter: Any,
+    tools: Sequence[ToolSpec],
+) -> tuple[MediaAttachment, ...]:
+    """Load URL text documents; store large ones as artifacts when the model can read them."""
+    if not attachments:
+        return attachments
+    from dataclasses import replace
+
+    from kedi.agent_adapter.request.media import load_text_documents
+    from kedi.artifacts import ArtifactHandle
+
+    attachments = load_text_documents(attachments)
+    if profile.artifacts is None or not any(item.media.is_text for item in attachments):
+        return attachments
+    if not self._artifact_contract_needed(profile, adapter, has_tools=bool(tools)):
+        return attachments
+    prepared = []
+    for attachment in attachments:
+        if attachment.media.is_text:
+            stored = self.artifacts.artifactize(
+                attachment.media.text,
+                policy=profile.artifacts,
+                source=f"input:{attachment.name}",
+            )
+            if isinstance(stored, ArtifactHandle):
+                attachment = replace(
+                    attachment, artifact_ref=stored.as_ref().model_dump(mode="json")
+                )
+        prepared.append(attachment)
+    return tuple(prepared)
 
 
 def _invoke_text_parts(
@@ -100,16 +162,18 @@ def _invoke_text_parts(
 
     def _call_invoke() -> Any:
         resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
-        prompt = "".join(resolved_parts)
 
         from kedi.agent_adapter.meta import SupportsProfileOverride
         from kedi.agent_adapter.request import (
             RawPromptBuilder,
             TextOutput,
             TypedOutput,
+            compose_prompt,
             lower_request_sync,
         )
         from kedi.agent_adapter.tools.specs import SupportsToolRegistration
+
+        prompt, media = compose_prompt(resolved_parts)
 
         profile = block_profile
         override_ctx = nullcontext()
@@ -141,10 +205,13 @@ def _invoke_text_parts(
                     value, policy=profile.artifacts, source=f"output:{capture_key}"
                 )
 
+            attachments = _prepare_attachments(
+                self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
+            )
             with override_ctx:
                 return self._run_conversation_call(
                     adapter,
-                    RawPromptBuilder(content=prompt).build(),
+                    RawPromptBuilder(content=prompt).build().with_media(attachments),
                     invoke_request if output_type is None else produce_request,
                     instructions=instruction_parts,
                     tools=captured_tool_specs,
@@ -218,8 +285,11 @@ def _declare_capture(env: ValueEnv, key: str, value: Any, contract: Any | None) 
         env[key] = value
 
 
-def _evaluate_claim(self: KediRuntime, claim: str) -> bool:
-    """Classify a rendered control-flow claim through the active agent lane."""
+def _evaluate_claim(self: KediRuntime, claim: str | Sequence[Any]) -> bool:
+    """Classify a rendered control-flow claim through the active agent lane.
+
+    ``claim`` is the rendered text, or its parts when the claim substitutes media.
+    """
     from kedi.agent_adapter.meta import SupportsProfileOverride
     from kedi.agent_adapter.tools.specs import SupportsToolRegistration
     from kedi.agent_profile import current_block_agent_profile
@@ -233,10 +303,12 @@ def _evaluate_claim(self: KediRuntime, claim: str) -> bool:
         ClaimPromptBuilder,
         InstructionPart,
         TypedOutput,
+        compose_prompt,
         lower_request_sync,
     )
 
-    question = ClaimPromptBuilder(claim=claim).build()
+    claim_text, media = (claim, ()) if isinstance(claim, str) else compose_prompt(claim)
+    question = ClaimPromptBuilder(claim=claim_text).build()
 
     override_ctx = nullcontext()
     if isinstance(adapter, SupportsProfileOverride):
@@ -252,6 +324,11 @@ def _evaluate_claim(self: KediRuntime, claim: str) -> bool:
         if tool_adapter is not None:
             for spec in captured_tool_specs:
                 tool_adapter.register_tool(spec)
+        question = question.with_media(
+            _prepare_attachments(
+                self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
+            )
+        )
         conversation_state, conversation_ticket, lane_identity = self._reserve_conversation_turn(
             profile, adapter, captured_tool_specs
         )
@@ -313,16 +390,16 @@ def _kedi_run(
             value = self._lookup_value(expr.key, env)
             if isinstance(value, KediPromise):
                 captured = value.map(lambda item, key=expr.key: _snapshot_prompt_input(key, item))
-                text = captured.map(lambda item: item.text)
+                text = captured.map(lambda item: item.part)
                 input_snapshots.append(captured)
             else:
                 captured = _snapshot_prompt_input(expr.key, value)
-                text = captured.text
+                text = captured.part
                 input_snapshots.append(captured)
             out = None
         else:
             text, out = self._evaluate_expression(expr, env)
-            if isinstance(expr, (CallExpr, ComputedExpr)):
+            if isinstance(expr, (CallExpr, ComputedExpr, MediaExpr)):
                 inputs_complete = False
         if out is not None:
             outputs.append(out)
@@ -406,6 +483,7 @@ def _kedi_run(
         from kedi.agent_adapter.request import (
             KediTemplatePromptBuilder,
             SchemaOutput,
+            compose_prompt,
             lower_request_sync,
         )
         from kedi.agent_adapter.tools.specs import SupportsToolRegistration
@@ -457,8 +535,9 @@ def _kedi_run(
             if tool_adapter is not None:
                 for spec in captured_tool_specs:
                     tool_adapter.register_tool(spec)
+            template, media = compose_prompt(resolved_parts)
             prompt_builder = KediTemplatePromptBuilder(
-                template="".join(resolved_parts),
+                template=template,
                 output_fields=tuple(required),
                 mode=(
                     adapter.template_prompt_mode(profile)
@@ -466,7 +545,11 @@ def _kedi_run(
                     else "completion"
                 ),
             )
-            prompt = prompt_builder.build()
+            prompt = prompt_builder.build().with_media(
+                _prepare_attachments(
+                    self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
+                )
+            )
             instruction_parts = (
                 *prompt_builder.instruction_parts(),
                 *self._agent_instruction_parts(profile, adapter),
@@ -511,7 +594,7 @@ def _kedi_run(
         record = DecisionRecord(
             call_id=call_id,
             source=decision_source,
-            prompt_fingerprint=fingerprint_text(prompt.content),
+            prompt_fingerprint=_prompt_fingerprint(prompt),
             inputs=tuple(unique_inputs.values()),
             inputs_complete=complete_input_set,
             outputs=tuple(output_identities),

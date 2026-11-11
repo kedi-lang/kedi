@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
+from .media import media_digest_material
 from .models import AgentRunRequest, SchemaOutput, TypedOutput
 
 
@@ -15,6 +16,7 @@ class RequestDiagnostics:
     prompt_kind: str
     prompt_chars: int
     prompt_digest: str
+    media_count: int
     instruction_parts: int
     instruction_identities: tuple[str, ...]
     instruction_digest: str
@@ -51,7 +53,18 @@ def request_diagnostics(request: AgentRunRequest) -> RequestDiagnostics:
         call_kind=request.metadata.call_kind,
         prompt_kind=request.prompt.kind,
         prompt_chars=len(request.prompt.content),
-        prompt_digest=_digest(request.prompt.content),
+        # Attachments enter the digest by name and content hash, never by bytes.
+        prompt_digest=(
+            _digest(request.prompt.content)
+            if not request.prompt.media
+            else _digest(
+                {
+                    "content": request.prompt.content,
+                    "media": media_digest_material(request.prompt.media),
+                }
+            )
+        ),
+        media_count=len(request.prompt.media),
         instruction_parts=len(request.instructions),
         instruction_identities=tuple(part.identity for part in request.instructions),
         instruction_digest=_digest(

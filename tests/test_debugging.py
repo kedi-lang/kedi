@@ -81,8 +81,7 @@ def test_paused_dispatch_does_not_block_other_lane_or_duplicate_effects():
 
 
 def test_model_frame_without_active_environment(monkeypatch):
-    from types import SimpleNamespace
-
+    from kedi.agent_adapter.request import PromptDraft
     from kedi.core import conversation
 
     runtime = compile_program(parse_program("= done\n"), adapter=MockAdapter())
@@ -92,7 +91,10 @@ def test_model_frame_without_active_environment(monkeypatch):
         assert runtime._current_env.get() is None
         with observe_execution(events.append):
             result = conversation._run_conversation_call(
-                runtime, runtime.adapter, SimpleNamespace(content="test"), lambda request: None
+                runtime,
+                runtime.adapter,
+                PromptDraft(content="test", kind="raw"),
+                lambda request: None,
             )
         assert result == "done"
         assert events[0].env == {}

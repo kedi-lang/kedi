@@ -6,11 +6,11 @@ from typing import Any, cast
 from .checkpoint import render_checkpoint
 from .codecs import (
     ESTIMATOR_VERSION,
-    canonical_json_bytes,
     conservative_token_estimate,
     extract_artifact_refs,
     fingerprint_sequence,
     fingerprint_value,
+    projected_json_bytes,
 )
 from .models import (
     CompactionCheckpoint,
@@ -95,14 +95,14 @@ class LangChainHistoryCodec:
             else:
                 raise TypeError
         except (KeyError, TypeError, ValueError):
-            encoded = canonical_json_bytes(raw)
+            encoded, media_tokens = projected_json_bytes(raw)
             fingerprint = fingerprint_value(raw)
             return NativeHistoryEntryRef(
                 index=index,
                 entry_id=f"langchain_{index}_{fingerprint[:16]}",
                 fingerprint=fingerprint,
                 kind="unknown",
-                token_estimate=conservative_token_estimate(encoded),
+                token_estimate=conservative_token_estimate(encoded) + media_tokens,
                 complete=False,
                 unknown=True,
                 searchable_text=encoded.decode("utf-8", errors="replace"),
@@ -142,14 +142,14 @@ class LangChainHistoryCodec:
 
         kind = _langchain_entry_kind(message, checkpoint=checkpoint, unknown=unknown)
         unknown = unknown or kind == "unknown"
-        encoded = canonical_json_bytes(canonical)
+        encoded, media_tokens = projected_json_bytes(canonical)
         fingerprint = fingerprint_value(canonical)
         return NativeHistoryEntryRef(
             index=index,
             entry_id=f"langchain_{index}_{fingerprint[:16]}",
             fingerprint=fingerprint,
             kind=kind,
-            token_estimate=conservative_token_estimate(encoded),
+            token_estimate=conservative_token_estimate(encoded) + media_tokens,
             part_kinds=tuple(part_kinds),
             lifecycle_ids=open_ids,
             closes_lifecycle_ids=close_ids,

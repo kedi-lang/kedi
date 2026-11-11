@@ -168,6 +168,14 @@ Public artifact models are `ArtifactRef`, `ArtifactChunk`,
 `ArtifactSearchResult`, `ArtifactReleaseResult`, and `ArtifactHandle`. See
 [Artifacts and Sessions](../python-api/artifacts-and-sessions.md).
 
+## Media
+
+`kedi.media` provides `Media`, `Image`, `Audio`, `Video` and `Document` for
+prompts with media. Construct them with `from_path`, `from_url`, `from_bytes`,
+`from_data_uri` or `from_file_id`; `Media.from_path` picks the kind from the
+media type, and `Image.coerce(value)` applies the validation typed parameters
+use. See [Media Input](../core-language/media-input.md).
+
 ## Interactive Execution
 
 `interactive(...) -> InteractiveSession` creates a synchronous, process-local

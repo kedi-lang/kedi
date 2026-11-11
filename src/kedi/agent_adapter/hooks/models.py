@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
 
 from ...errors import KediExecutionError
+from ..request.media import MediaSummary
 from ..tools.records import ToolCallRecord
 
 HookEventName: TypeAlias = Literal[
@@ -63,8 +64,14 @@ class HookContext:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UserPromptSubmitRequest(HookContext):
+    """The rendered prompt text, and a byte-free summary of each attachment.
+
+    The attachments are read-only: an ``edit`` decision replaces only ``content``.
+    """
+
     event: Literal["user_prompt_submit"] = field(default="user_prompt_submit", init=False)
     content: str = field(repr=False)
+    media: tuple[MediaSummary, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

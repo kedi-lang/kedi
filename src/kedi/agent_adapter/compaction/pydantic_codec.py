@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, cast
 from .checkpoint import render_checkpoint
 from .codecs import (
     ESTIMATOR_VERSION,
-    canonical_json_bytes,
     conservative_token_estimate,
     extract_artifact_refs,
     fingerprint_sequence,
     fingerprint_value,
+    projected_json_bytes,
 )
 from .models import (
     CompactionCheckpoint,
@@ -103,14 +103,14 @@ class PydanticHistoryCodec:
             message = ModelMessagesTypeAdapter.validate_python([raw])[0]
             canonical = ModelMessagesTypeAdapter.dump_python([message], mode="json")[0]
         except (TypeError, ValueError):
-            encoded = canonical_json_bytes(raw)
+            encoded, media_tokens = projected_json_bytes(raw)
             fingerprint = fingerprint_value(raw)
             return NativeHistoryEntryRef(
                 index=index,
                 entry_id=f"pydantic_{index}_{fingerprint[:16]}",
                 fingerprint=fingerprint,
                 kind="unknown",
-                token_estimate=conservative_token_estimate(encoded),
+                token_estimate=conservative_token_estimate(encoded) + media_tokens,
                 complete=False,
                 unknown=True,
                 searchable_text=encoded.decode("utf-8", errors="replace"),
@@ -155,14 +155,14 @@ class PydanticHistoryCodec:
         has_mixed_system_prompt = any(
             isinstance(part, SystemPromptPart) for part in message.parts
         ) and any(not isinstance(part, SystemPromptPart) for part in message.parts)
-        encoded = canonical_json_bytes(canonical)
+        encoded, media_tokens = projected_json_bytes(canonical)
         fingerprint = fingerprint_value(canonical)
         return NativeHistoryEntryRef(
             index=index,
             entry_id=f"pydantic_{index}_{fingerprint[:16]}",
             fingerprint=fingerprint,
             kind=kind,
-            token_estimate=conservative_token_estimate(encoded),
+            token_estimate=conservative_token_estimate(encoded) + media_tokens,
             part_kinds=part_kinds,
             lifecycle_ids=open_ids,
             closes_lifecycle_ids=close_ids,

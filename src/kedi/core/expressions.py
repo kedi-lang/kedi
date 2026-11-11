@@ -58,7 +58,14 @@ class ComputedExpr:
     text: str
 
 
-Expression = Union[str, InputExpr, OutputExpr, CallExpr, ComputedExpr]
+@dataclass(frozen=True, slots=True)
+class MediaExpr:
+    """Media a prompt call or inline Python produced; the request names and attaches it."""
+
+    mention: Any
+
+
+Expression = Union[str, InputExpr, OutputExpr, CallExpr, ComputedExpr, MediaExpr]
 
 
 def i(key: str) -> InputExpr:
@@ -117,18 +124,16 @@ def _evaluate_expression(
     if isinstance(expr, str):
         return expr, None
     if isinstance(expr, InputExpr):
+        from kedi.lang.compiler.environment import prompt_part
+
         value = self._lookup_value(expr.key, env)
         # Defer: a promise input becomes a dependency edge; the prompt is built (in the
-        # produce job) only after it resolves. ``.map(str)`` makes the deferred value resolve
-        # to a STRING — matching the sequential path's eager ``str(value)`` so a non-str typed
-        # output (list/model/int) chained into a prompt renders identically in both modes.
+        # produce job) only after it resolves. The deferred value resolves to the same prompt
+        # part as the sequential path's eager rendering (text, or a media mention), so a
+        # non-str typed output chained into a prompt renders identically in both modes.
         if isinstance(value, KediPromise):
-            from kedi.lang.compiler.environment import model_text
-
-            return value.map(model_text), None
-        from kedi.lang.compiler.environment import model_text
-
-        return model_text(value), None
+            return value.map(lambda item, key=expr.key: prompt_part(item, key)), None
+        return prompt_part(value, expr.key), None
     if isinstance(expr, CallExpr):
         evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
         callee = self._get_proc(expr.func_name)
@@ -136,12 +141,24 @@ def _evaluate_expression(
         # promise here. If one ever does, str() raising KediPromiseLeak is the correct loud
         # failure — better than silently deferring an unsupported cross-proc dataflow.
         result = self._invoke_procedure(callee, evaluated_args)
-        return str(result), None
+        return computed_prompt_part(result), None
     if isinstance(expr, ComputedExpr):
         return expr.text, None
+    if isinstance(expr, MediaExpr):
+        return expr.mention, None
     if isinstance(expr, OutputExpr):
         return f"[{expr.key}]", expr
     return str(expr), None
+
+
+def computed_prompt_part(value: Any, binding: str | None = None) -> Any:
+    """Render a value into a prompt as text, or as a mention the request attaches."""
+    from kedi.media import MediaMention, prompt_media
+
+    items = prompt_media(value)
+    if items is None:
+        return str(value)
+    return MediaMention(items=items, binding=binding, is_list=isinstance(value, (list, tuple)))
 
 
 def _evaluate_value(self: KediRuntime, value: Any, env: ValueEnv) -> Any:

@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 from ..events import (
@@ -23,6 +23,9 @@ from .dispatcher import (
 )
 from .models import HookDeniedError, UserPromptSubmitDecision, UserPromptSubmitRequest
 from .registration import HookRegistrationMixin
+
+if TYPE_CHECKING:
+    from ..request.media import MediaSummary
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -82,8 +85,14 @@ def hooked_agent_run(prompt_argument: str) -> Callable[[Callable[P, R]], Callabl
 def prepared_agent_hook_run(
     adapter: HookRegistrationMixin,
     prompt: str,
+    *,
+    media: tuple[MediaSummary, ...] = (),
 ) -> Generator[PreparedAgentPrompt, None, None]:
-    """Resolve prompt mutation before request assembly and suppress nested redispatch."""
+    """Resolve prompt mutation before request assembly and suppress nested redispatch.
+
+    ``media`` describes the prompt's attachments; hooks see them read-only and an edit
+    replaces only the text.
+    """
 
     dispatcher, identity = _dispatcher_for(adapter)
     run_key = (id(adapter), identity.run_id)
@@ -101,7 +110,7 @@ def prepared_agent_hook_run(
             bind_hook_dispatcher(dispatcher),
         ):
             yield PreparedAgentPrompt(
-                content=_dispatch_prompt_sync(adapter, dispatcher, identity, prompt),
+                content=_dispatch_prompt_sync(adapter, dispatcher, identity, prompt, media),
                 identity=identity,
             )
     finally:
@@ -208,8 +217,9 @@ def _dispatch_prompt_sync(
     dispatcher: HookDispatcher,
     identity: AgentRunIdentity,
     prompt: str,
+    media: tuple[MediaSummary, ...] = (),
 ) -> str:
-    result = dispatcher.dispatch_sync(_prompt_event(adapter, identity, prompt))
+    result = dispatcher.dispatch_sync(_prompt_event(adapter, identity, prompt, media))
     return _resolve_prompt_decision(result, prompt)
 
 
@@ -217,6 +227,7 @@ def _prompt_event(
     adapter: HookRegistrationMixin,
     identity: AgentRunIdentity,
     prompt: str,
+    media: tuple[MediaSummary, ...] = (),
 ) -> UserPromptSubmitRequest:
     profile = getattr(adapter, "active_profile", None)
     return UserPromptSubmitRequest(
@@ -227,6 +238,7 @@ def _prompt_event(
         adapter_shortname=cast(str, getattr(adapter, "shortname", type(adapter).__name__)),
         sequence=0,
         content=prompt,
+        media=media,
     )
 
 

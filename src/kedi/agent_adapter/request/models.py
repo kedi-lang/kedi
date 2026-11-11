@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Callable, Literal, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypeAlias
+
+if TYPE_CHECKING:
+    from .media import MediaAttachment
 
 PromptKind: TypeAlias = Literal["raw", "template", "claim"]
 CallKind: TypeAlias = Literal["invoke", "produce"]
@@ -28,13 +31,23 @@ def _mapping_snapshot(value: Mapping[str, Any]) -> Mapping[str, Any]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PromptDraft:
-    """One fully rendered user prompt before adapter-native lowering."""
+    """One fully rendered user prompt before adapter-native lowering.
+
+    ``content`` is the prompt text. ``media`` holds the attachments the text names; adapters
+    place them, each with a ``name:`` label, before the text in the same user message.
+    """
 
     content: str
     kind: PromptKind
+    media: tuple[MediaAttachment, ...] = ()
 
     def with_content(self, content: str) -> PromptDraft:
-        return PromptDraft(content=content, kind=self.kind)
+        """Replace the text (for example after a hook edit); the attachments stay."""
+
+        return replace(self, content=content)
+
+    def with_media(self, media: tuple[MediaAttachment, ...]) -> PromptDraft:
+        return replace(self, media=tuple(media))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
