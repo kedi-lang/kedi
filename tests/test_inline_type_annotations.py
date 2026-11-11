@@ -351,7 +351,8 @@ class TestErrorCases:
 = <`str(x)`>
 """
         with pytest.raises(
-            TypeError, match="Native initialization value does not match annotated type"
+            TypeError,
+            match="Invalid type expression 'UndefinedType': name 'UndefinedType' is not defined",
         ):
             _run(src)
 
@@ -361,9 +362,7 @@ class TestErrorCases:
 [x: `int +`] = `42`
 = <`str(x)`>
 """
-        with pytest.raises(
-            TypeError, match="Native initialization value does not match annotated type"
-        ):
+        with pytest.raises(TypeError, match="Invalid type expression 'int \\+'"):
             _run(src)
 
     def test_non_type_expression_backtick(self):
@@ -372,9 +371,7 @@ class TestErrorCases:
 [x: `42`] = `42`
 = <`str(x)`>
 """
-        with pytest.raises(
-            TypeError, match="Native initialization value does not match annotated type"
-        ):
+        with pytest.raises(TypeError, match="Expression '42' does not evaluate to a valid type"):
             _run(src)
 
 

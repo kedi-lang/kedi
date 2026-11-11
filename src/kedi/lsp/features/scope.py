@@ -224,7 +224,10 @@ def _direct_statement_declarations(
     proc: Optional[ProcedureDef],
 ) -> list[_ValueDeclaration]:
     declarations: list[_ValueDeclaration] = []
-    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)) and stmt.name == name:
+    if (
+        isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt, RawInvokeStmt))
+        and stmt.name == name
+    ):
         span = binding_name_span(stmt)
         if span is not None:
             declarations.append(

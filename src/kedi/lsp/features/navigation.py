@@ -36,19 +36,23 @@ from kedi.lang.ast import (
 )
 from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lang.parser import KediParseError
+from kedi.lang.parser.parser import parse as _ts_parse
 from kedi.lsp.ast_helpers import binding_name_span
 from kedi.lsp.ast_spans import name_token_span
 from kedi.lsp.coordinates import current_source, with_source_coordinates
 from kedi.lsp.coordinates import span_to_range as _span_to_range
+from kedi.lsp.features.python_names import binding_uses, python_regions
 from kedi.lsp.features.resolution import _resolve_symbol_at
 from kedi.lsp.features.scope import (
     _all_procedures,
     _all_type_defs,
     _control_body_statements,
     _iter_control_statements,
+    _nested_procedures,
     _proc_name_span,
     _procedure_for_declaration,
     _resolve_lexical_name,
+    _resolve_value_declaration,
     _segments_of,
 )
 from kedi.lsp.features.symbols import (
@@ -205,6 +209,7 @@ def _find_all_references(
             for candidate in value_candidates
             if _reference_resolves_to(prog, candidate, sym)
         )
+        out.extend(_python_value_references(prog, sym))
     # Deduplicate spans by (start_byte, end_byte) — extra-safe.
     seen: set = set()
     uniq: List[Span] = []
@@ -215,6 +220,43 @@ def _find_all_references(
         seen.add(key)
         uniq.append(s)
     return uniq
+
+
+def _python_value_references(prog: Program | ProgramWithValidation, sym: SymbolRef) -> List[Span]:
+    """Names in embedded Python that read or write the same Kedi binding."""
+    source = current_source()
+    if source is None or sym.declaration_span is None:
+        return []
+    raw = source.source.encode("utf-8")
+    name = sym.name.encode("utf-8")
+    spans: List[Span] = []
+    for code, offsets in python_regions(_ts_parse(raw).root_node, raw):
+        for line, column in binding_uses(code, sym.name):
+            start = offsets[line] + column
+            line_start = raw.rfind(b"\n", 0, start) + 1
+            span = Span(
+                start_byte=start,
+                end_byte=start + len(name),
+                start_line=raw.count(b"\n", 0, start) + 1,
+                start_col=start - line_start + 1,
+                end_line=raw.count(b"\n", 0, start) + 1,
+                end_col=start - line_start + len(name) + 1,
+            )
+            chain = _procedure_chain_at(prog.procedures, start)
+            declaration = _resolve_value_declaration(
+                prog, chain[-1] if chain else None, chain[:-1], sym.name, span
+            )
+            if declaration is not None and declaration.declaration_span == sym.declaration_span:
+                spans.append(span)
+    return spans
+
+
+def _procedure_chain_at(procedures: Sequence[ProcedureDef], byte: int) -> tuple[ProcedureDef, ...]:
+    """The procedures around a source byte, outermost first."""
+    for procedure in procedures:
+        if procedure.loc is not None and procedure.loc.start_byte <= byte < procedure.loc.end_byte:
+            return (procedure, *_procedure_chain_at(_nested_procedures(procedure), byte))
+    return ()
 
 
 def _declaration_identifier_span(

@@ -7,6 +7,7 @@ from typing import Optional
 from ..lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    RawInvokeStmt,
     Span,
     VariableInitBlockStmt,
     VariableInitStmt,
@@ -22,7 +23,11 @@ __all__ = [
 
 
 def binding_name_span(
-    stmt: VariableInitStmt | VariableInitBlockStmt | AssignmentStmt | AssignmentBlockStmt,
+    stmt: VariableInitStmt
+    | VariableInitBlockStmt
+    | AssignmentStmt
+    | AssignmentBlockStmt
+    | RawInvokeStmt,
 ) -> Optional[Span]:
     if stmt.loc is None:
         return None

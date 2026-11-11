@@ -6,6 +6,8 @@ from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.directives import (
     eval_adapter_directive,
@@ -192,12 +194,13 @@ class StatementCompiler:
                 expr, _ = prepare_segments(self.rt, stmt.segments, kwargs)
                 kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
                 output_type = kedi_type.resolve_required(self.rt, kwargs)
-                if output_type is None or output_type is str:
+                if output_type is None:
                     return self.rt.invoke(expr, capture=stmt.name)
+                # A `str` capture keeps the text reply but, like any typed capture, its contract.
                 return self.rt.invoke(
                     expr,
                     capture=stmt.name,
-                    output_type=output_type,
+                    output_type=None if output_type is str else output_type,
                     binding_contract=kedi_type,
                 )
 
@@ -324,7 +327,7 @@ class StatementCompiler:
                 # Strict validation with TypeAdapter
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
-                except Exception:
+                except ValidationError:
                     raise TypeError("Native initialization value does not match annotated type")
             else:
                 if not isinstance(value, str):
@@ -351,7 +354,7 @@ class StatementCompiler:
             if kedi_type is not None and not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
-                except Exception as exc:
+                except ValidationError as exc:
                     raise TypeError(
                         "Assigned value does not match the binding's annotated type"
                     ) from exc
@@ -373,7 +376,7 @@ class StatementCompiler:
             if kedi_type is not None and not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
-                except Exception as exc:
+                except ValidationError as exc:
                     raise TypeError(
                         "Assigned value does not match the binding's annotated type"
                     ) from exc
@@ -406,7 +409,7 @@ class StatementCompiler:
             return rendered
         try:
             return kedi_type.validate(self.rt, closure_env, rendered)
-        except Exception as exc:
+        except ValidationError as exc:
             raise TypeError("Native initialization value does not match annotated type") from exc
 
     def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import kedi.lang.ast as lang_ast_module
 import kedi.lsp.features.hover as lsp_hover_module
 import kedi.lsp.features.resolution as lsp_resolution_module
@@ -123,3 +125,18 @@ def test_hover_imported_value_with_surface(monkeypatch) -> None:
         ),
     )
     assert "another Kedi module" in hover_text_at("= ok\n", "/tmp/x.kedi", "=")
+
+
+@pytest.mark.parametrize(
+    ("name", "exports", "expected"),
+    [
+        ("greeting", "", "not exported"),
+        ("greeting", "> export:\n  other\n", "not exported"),
+        ("greeting", "> export:\n  greeting\n", "exported by this module"),
+        ("greeting", "> export: *\n", "exported by this module"),
+        ("_hidden", "> export: *\n", "not exported"),
+    ],
+)
+def test_module_value_hover_says_whether_the_value_is_exported(name, exports, expected) -> None:
+    source = f"[{name}] = hello\n[other] = x\n{exports}"
+    assert expected in hover_text_at(source, "/tmp/mod.kedi", name)
