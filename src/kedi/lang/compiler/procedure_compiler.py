@@ -110,10 +110,14 @@ class ProcedureCompiler:
 
             try:
                 validated = kedi_type.validate(self.rt, None, provided)
-            except Exception:
+            except Exception as exc:
+                from ...media import media_error_detail
+
+                detail = media_error_detail(exc)
                 raise KediTypeExecutionError(
                     f"Parameter '{param_name}' does not match annotated type"
-                )
+                    + ("" if detail is None else f": {detail}")
+                ) from None
             kwargs[param_name] = validated
 
     def _enforce_return_type(

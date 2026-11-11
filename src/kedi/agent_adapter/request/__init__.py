@@ -1,7 +1,14 @@
 from .assembler import RunRequestAssembler, conversation_lane_identity
-from .context import agent_run_request_scope, current_agent_run_request
+from .context import agent_run_request_scope, current_agent_run_request, take_prompt_media
 from .diagnostics import RequestDiagnostics, request_diagnostics
 from .lowering import RequestLoweringAdapter, lower_request_sync
+from .media import (
+    MediaAttachment,
+    MediaMention,
+    MediaSummary,
+    compose_prompt,
+    media_summaries,
+)
 from .models import (
     AdapterCallOptions,
     AdapterRunOutcome,
@@ -35,6 +42,9 @@ __all__ = [
     "ConversationCoordinates",
     "InstructionPart",
     "KediTemplatePromptBuilder",
+    "MediaAttachment",
+    "MediaMention",
+    "MediaSummary",
     "OutputContract",
     "PromptDraft",
     "PromptKind",
@@ -48,8 +58,11 @@ __all__ = [
     "ToolDefinition",
     "TypedOutput",
     "agent_run_request_scope",
+    "compose_prompt",
     "current_agent_run_request",
     "request_diagnostics",
     "conversation_lane_identity",
     "lower_request_sync",
+    "media_summaries",
+    "take_prompt_media",
 ]

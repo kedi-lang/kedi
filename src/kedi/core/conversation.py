@@ -41,7 +41,12 @@ def _run_conversation_call(
         env = {}
     with execution_frame(self, "<model>", env):
         if execution_observed():
-            checkpoint(self, "model_input", payload={"rendered_input": prompt.content})
+            payload: dict[str, Any] = {"rendered_input": prompt.content}
+            if prompt.media:
+                from dataclasses import asdict
+
+                payload["media"] = [asdict(item.summary) for item in prompt.media]
+            checkpoint(self, "model_input", payload=payload)
         try:
             with observation_only():
                 result = _execute_conversation_call(self, adapter, prompt, call, **kwargs)
@@ -80,6 +85,7 @@ def _execute_conversation_call(
         AdapterRunOutcome,
         ConversationCoordinates,
         RunRequestAssembler,
+        media_summaries,
     )
     from kedi.agent_adapter.request_budget import ModelRequestBudget
     from kedi.core.request_execution import execute_request
@@ -98,9 +104,18 @@ def _execute_conversation_call(
     )
     assembler = RunRequestAssembler()
 
+    if prompt.media and not adapter.capabilities.supports("media_input"):
+        from kedi.media import MediaError
+
+        raise MediaError(
+            f"Adapter {adapter.shortname!r} does not accept media input; "
+            "use the Pydantic AI or LangChain adapter for prompts with media"
+        )
     runtime_adapter: Any = adapter
     if isinstance(runtime_adapter, HookRegistrationMixin):
-        hook_context = prepared_agent_hook_run(runtime_adapter, prompt.content)
+        hook_context = prepared_agent_hook_run(
+            runtime_adapter, prompt.content, media=media_summaries(prompt.media)
+        )
     else:
         hook_context = nullcontext(None)
 

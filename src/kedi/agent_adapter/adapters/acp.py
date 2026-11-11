@@ -427,6 +427,7 @@ class ACPAdapter(HookRegistrationMixin):
         supports_history_processing=False,
         supports_history_replay=False,
         supports_stream_events=True,
+        supports_media_input=False,
         hooks=HookCapabilities.prompt_only(),
         settings=ACP_AGENT_SETTING_KEYS,
     )

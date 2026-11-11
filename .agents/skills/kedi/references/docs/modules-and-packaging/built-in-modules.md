@@ -57,6 +57,12 @@ It does not install packages or validate their versions.
 
 See [`filesystem`](filesystem.md).
 
+## `media`
+
+`media` exports the loaders `image`, `audio`, `video` and `document` and the
+types `Media`, `Image`, `Audio`, `Video` and `Document`. See
+[Media Input](../core-language/media-input.md).
+
 ## `sandbox`
 
 The optional `sandbox` module exports `execute_code` and a `sandbox` profile:

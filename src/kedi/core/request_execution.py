@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 from kedi.agent_adapter.history_provenance import history_source_scope
 from kedi.agent_adapter.invocation import observe_invocations
 from kedi.agent_adapter.request import SchemaOutput, TypedOutput
-from kedi.agent_adapter.request_budget import SupportsHistoryTokenEstimate
+from kedi.agent_adapter.request_budget import (
+    SupportsHistoryTokenEstimate,
+    estimate_attachment_tokens,
+)
 from kedi.agent_adapter.telemetry import (
     agent_call_span,
     model_call_span,
@@ -76,20 +79,22 @@ def execute_request(
         else None
     )
     output_field_count = 0 if output_schema is None else len(output_schema)
+    media = request.prompt.media
 
     from kedi.run_budget import assert_run_budget_supported
 
     if execution_observed():
-        checkpoint_event(
-            "request",
-            safe=False,
-            payload={
-                "prompt": request.prompt.content,
-                "instructions": request.instruction_text,
-                "model": configured_model,
-                "tools": [tool.name for tool in tools],
-            },
-        )
+        payload: dict[str, Any] = {
+            "prompt": request.prompt.content,
+            "instructions": request.instruction_text,
+            "model": configured_model,
+            "tools": [tool.name for tool in tools],
+        }
+        if media:
+            from dataclasses import asdict
+
+            payload["media"] = [asdict(item.summary) for item in media]
+        checkpoint_event("request", safe=False, payload=payload)
 
     assert_run_budget_supported(
         adapter,
@@ -98,6 +103,7 @@ def execute_request(
     )
     record_conversation_assets(
         prompt=request.prompt.content,
+        media=media,
         instructions=request.instruction_text,
         profile=profile,
         tools=tools,
@@ -119,6 +125,7 @@ def execute_request(
         artifacts_enabled=bool(profile.artifacts and profile.artifacts.enabled),
         configured_model=configured_model,
         prompt_kind=request.prompt.kind,
+        media_count=len(media),
         instruction_count=len(request.instructions),
         history_count=(0 if request.conversation is None else request.conversation.history_count),
         cache_epoch=(None if request.conversation is None else request.conversation.cache_epoch),
@@ -147,6 +154,7 @@ def execute_request(
         reservation = budget.reserve(
             request.prompt.content,
             context=tuple(context),
+            media_tokens=estimate_attachment_tokens(media),
             resume_state=resume_state,
             history_tokens=(
                 history_estimator.estimate_history_tokens(resume_state)
@@ -255,10 +263,13 @@ def _call_with_live_input(
                 continuation.resume_state.update(continuation.result_state)
                 control.begin_attempt()
                 inputs = control.take_pending(revision=0)
+                # The continuation replays the first attempt, attachments included.
                 active_request = replace(
                     request,
-                    prompt=request.prompt.with_content(
-                        "\n\n".join(item.render() for item in inputs)
+                    prompt=replace(
+                        request.prompt,
+                        content="\n\n".join(item.render() for item in inputs),
+                        media=(),
                     ),
                 )
     finally:

@@ -35,6 +35,7 @@ from kedi.lang.ast import (
     ProgramWithValidation,
     RawInvokeStmt,
     RequiresDirectiveStmt,
+    Segment,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
@@ -66,6 +67,7 @@ from kedi.lsp.features.capability_state import (
     _with_hooks_state,
     _with_requirements_state,
 )
+from kedi.lsp.features.media import MediaNames, media_prompt_spans
 from kedi.lsp.features.symbols import (
     _approval_value_span,
     _directive_keyword_span,
@@ -73,6 +75,8 @@ from kedi.lsp.features.symbols import (
     _use_single_target_span,
     _use_tool_entry_spans,
 )
+
+_NO_MEDIA = MediaNames()
 
 
 def _profile_capability_diagnostics(
@@ -180,6 +184,8 @@ def _scan_capability_scope(
     type_defs: dict[str, TypeDef],
     warned_approval_spans: set[tuple[str | None, int, int]] | None = None,
     active_profile_name: str | None = None,
+    *,
+    media_names: MediaNames = _NO_MEDIA,
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     active = state
@@ -362,6 +368,11 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, TemplateBlock):
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
+            diagnostics.extend(
+                _media_capability_diagnostics(
+                    active, [seg for line in stmt.lines for seg in line.segments], media_names
+                )
+            )
             continue
         if isinstance(stmt, TaskStmt):
             diagnostics.extend(
@@ -404,9 +415,11 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
+            diagnostics.extend(_media_capability_diagnostics(active, stmt.segments, media_names))
             continue
         if isinstance(stmt, RawInvokeStmt):
             diagnostics.extend(_raw_invoke_capability_diagnostics(active, stmt, type_defs))
+            diagnostics.extend(_media_capability_diagnostics(active, stmt.segments, media_names))
             continue
         if isinstance(stmt, TaskGroupStmt):
             for arm in stmt.arms:
@@ -421,10 +434,14 @@ def _scan_capability_scope(
                         type_defs,
                         warned_approval_spans,
                         selected_profile,
+                        media_names=media_names,
                     )
                 )
             continue
         if isinstance(stmt, IfStmt):
+            diagnostics.extend(
+                _media_capability_diagnostics(active, stmt.condition_segments or [], media_names)
+            )
             diagnostics.extend(
                 _scan_capability_scope(
                     prog,
@@ -436,6 +453,7 @@ def _scan_capability_scope(
                     type_defs,
                     warned_approval_spans,
                     selected_profile,
+                    media_names=media_names,
                 )
             )
             if stmt.else_body is not None:
@@ -450,6 +468,7 @@ def _scan_capability_scope(
                         type_defs,
                         warned_approval_spans,
                         selected_profile,
+                        media_names=media_names,
                     )
                 )
             continue
@@ -468,6 +487,7 @@ def _scan_capability_scope(
                     type_defs,
                     warned_approval_spans,
                     selected_profile,
+                    media_names=media_names,
                 )
             )
             continue
@@ -483,6 +503,7 @@ def _scan_capability_scope(
                     type_defs,
                     warned_approval_spans,
                     selected_profile,
+                    media_names=media_names,
                 )
             )
             continue
@@ -498,6 +519,7 @@ def _scan_capability_scope(
                     type_defs,
                     warned_approval_spans,
                     selected_profile,
+                    media_names=media_names,
                 )
             )
             continue
@@ -513,6 +535,7 @@ def _scan_capability_scope(
                     type_defs,
                     warned_approval_spans,
                     selected_profile,
+                    media_names=media_names,
                 )
             )
             continue
@@ -899,6 +922,20 @@ def _profile_capability_usage(
         elif target in profile.tool_names:
             capabilities.add("tool_registration")
     return capabilities
+
+
+def _media_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    segments: Sequence[Segment],
+    media_names: MediaNames,
+) -> list[lsp.Diagnostic]:
+    return _unsupported_capability_diagnostics(
+        state,
+        "media_input",
+        media_prompt_spans(segments, media_names),
+        "media input",
+        severity=lsp.DiagnosticSeverity.Error,
+    )
 
 
 def _template_capability_diagnostics(

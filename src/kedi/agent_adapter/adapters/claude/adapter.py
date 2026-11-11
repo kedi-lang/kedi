@@ -93,6 +93,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
+        supports_media_input=False,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "provider_builtin"}),

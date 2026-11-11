@@ -32,6 +32,7 @@ part of the base adapter protocol rather than an optional capability.
 | Subagent interruption | yes | no | yes |
 | Semantic stream events | yes | no | yes |
 | Native history processing | yes | no | yes |
+| Media input | yes | no | yes |
 | Agent lifecycle hooks | yes | no | yes |
 
 ## Agent Harnesses
@@ -56,6 +57,7 @@ part of the base adapter protocol rather than an optional capability.
 | Subagent interruption | yes | yes | no | no |
 | Semantic stream events | yes | yes | yes | yes |
 | Native history processing | no | no | no | no |
+| Media input | no | no | no | no |
 | Agent lifecycle hooks | yes | yes | yes | yes |
 <!-- END GENERATED ADAPTER CAPABILITIES -->
 

@@ -16,7 +16,9 @@ Use `<name>` to read a value from the current lexical environment:
 ```
 
 Substitution always renders the value as text at that position. It is therefore
-appropriate for prompts, messages, paths, and final text. If the next operation
+appropriate for prompts, messages, paths, and final text. Media values are the
+exception: in a model prompt they become attachments named in the text, and
+anywhere else they are an error (see [Media Input](media-input.md)). If the next operation
 needs the original `int`, `list`, model, or other Python object, use the value by
 bare name inside Python or pass it as a native call argument.
 

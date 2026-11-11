@@ -134,6 +134,7 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_stream_events=True,
         supports_request_budget=True,
         supports_tool_attempt_budget=True,
+        supports_media_input=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -325,7 +326,8 @@ class LangChainAdapter(HookRegistrationMixin):
                     structured=True,
                 ),
             )
-            payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
+            content = await self._user_content(template, model)
+            payload = {"messages": self._messages_for_prompt(content, model=model), **kwargs}
             async with model_responses_turn(model):
                 result = await self._invoke_agent(agent, payload, emit_final=False)
             _capture_langchain_typesafe_decision_evidence(
@@ -377,7 +379,8 @@ class LangChainAdapter(HookRegistrationMixin):
                     ),
                 ),
             )
-            payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
+            content = await self._user_content(template, model)
+            payload = {"messages": self._messages_for_prompt(content, model=model), **kwargs}
             async with model_responses_turn(model):
                 result = _langchain_structured_response(
                     await self._invoke_agent(agent, payload, emit_final=False)
@@ -411,7 +414,8 @@ class LangChainAdapter(HookRegistrationMixin):
                     codemode_enabled=projection.enabled,
                 ),
             )
-            payload = {"messages": self._messages_for_prompt(prompt, model=model), **kwargs}
+            content = await self._user_content(prompt, model)
+            payload = {"messages": self._messages_for_prompt(content, model=model), **kwargs}
             async with model_responses_turn(model):
                 return _langchain_text_response(
                     await self._invoke_agent(agent, payload, emit_final=True)
@@ -723,7 +727,37 @@ class LangChainAdapter(HookRegistrationMixin):
             ) from exc
         return init_chat_model(model, **settings)
 
-    def _messages_for_prompt(self, prompt: str, *, model: Any | None = None) -> list[Any]:
+    async def _user_content(self, prompt: str, model: Any) -> str | list[Any]:
+        """Attach the request's media, unless the replayed history already holds it."""
+        from kedi.agent_adapter.request import take_prompt_media
+
+        media = take_prompt_media()
+        if not media:
+            return prompt
+        from langchain_core.messages import messages_from_dict
+
+        from kedi.agent_adapter.request.media import history_keeps_media
+
+        from .media import user_content
+
+        conversation = self._conversation_var.get()
+        reusable = history_keeps_media(
+            conversation,
+            processor=self.active_history_processor,
+            archive=self._history_archive,
+            compaction=self.active_profile.compaction,
+        )
+        serialized = (
+            conversation.resume_state.get("langchain_messages")
+            if reusable and conversation is not None
+            else None
+        )
+        history = list(messages_from_dict(serialized)) if isinstance(serialized, list) else None
+        return await user_content(prompt, media, history=history, model=model)
+
+    def _messages_for_prompt(
+        self, prompt: str | list[Any], *, model: Any | None = None
+    ) -> list[Any]:
         conversation = self._conversation_var.get()
         if conversation is None:
             return [{"role": "user", "content": prompt}]

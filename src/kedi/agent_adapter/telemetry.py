@@ -34,6 +34,7 @@ from .tools.specs import ToolSpec
 if TYPE_CHECKING:
     from ..agent_profile import AgentProfile
     from ..agent_profile.capabilities import CapabilityToolPolicy
+    from .request.media import MediaAttachment
 
 AgentCallKind = Literal["produce", "invoke", "subagent"]
 
@@ -42,6 +43,7 @@ def record_conversation_assets(
     *,
     prompt: str,
     instructions: str | None,
+    media: Sequence[MediaAttachment] = (),
     profile: AgentProfile,
     tools: Sequence[ToolSpec],
     output_schema: Mapping[str, str] | None,
@@ -100,6 +102,9 @@ def record_conversation_assets(
         "source_path": source_path,
         "source_line": source_line,
     }
+    if media:
+        # Metadata only: never bytes, and no URLs, which may carry access tokens.
+        template_metadata["media"] = [_media_metadata(item) for item in media]
     if group_member is not None:
         # A group's model call belongs to its form, not to a source line.
         source_locator = group_member.group
@@ -108,6 +113,7 @@ def record_conversation_assets(
             "profile": profile_name,
             "group": group_member.group,
             "ordinal": group_member.ordinal,
+            **({"media": template_metadata["media"]} if media else {}),
         }
     elif source_path is not None:
         source_locator = f"kedi:source:{source_path}:{source_line or 0}"
@@ -189,6 +195,18 @@ def record_conversation_assets(
             content=dict(output_schema),
             metadata={"owner": template_key, "role": "output"},
         )
+
+
+def _media_metadata(attachment: MediaAttachment) -> dict[str, Any]:
+    media = attachment.media
+    return {
+        "name": attachment.name,
+        "kind": media.kind,
+        "media_type": media.media_type,
+        "source": "data" if media.data is not None else "url" if media.url else "file_id",
+        "size": media.size,
+        "sha256": media.sha256,
+    }
 
 
 def _record_behavioral_asset(
@@ -385,6 +403,7 @@ def agent_call_span(
     artifacts_enabled: bool,
     configured_model: str | None,
     prompt_kind: str | None = None,
+    media_count: int = 0,
     instruction_count: int = 0,
     history_count: int = 0,
     cache_epoch: int | None = None,
@@ -412,6 +431,8 @@ def agent_call_span(
     }
     if prompt_kind is not None:
         attributes["kedi.prompt.kind"] = prompt_kind
+    if media_count:
+        attributes["kedi.prompt.media_count"] = media_count
     if cache_epoch is not None:
         attributes["kedi.cache.epoch"] = cache_epoch
     if turn_sequence is not None:

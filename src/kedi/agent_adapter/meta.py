@@ -70,6 +70,7 @@ AdapterCapability = Literal[
     "stream_events",
     "request_budget",
     "tool_attempt_budget",
+    "media_input",
     "hooks",
 ]
 
@@ -172,6 +173,7 @@ class AdapterCapabilities:
     supports_stream_events: bool | None = None
     supports_request_budget: bool | None = None
     supports_tool_attempt_budget: bool | None = None
+    supports_media_input: bool | None = None
     hooks: HookCapabilities | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
@@ -215,6 +217,7 @@ class AdapterCapabilities:
             "stream_events": self.supports_stream_events,
             "request_budget": self.supports_request_budget,
             "tool_attempt_budget": self.supports_tool_attempt_budget,
+            "media_input": self.supports_media_input,
             "hooks": self.hooks is not None,
         }
         return values[feature]

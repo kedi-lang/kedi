@@ -191,6 +191,7 @@ class ModelRequestBudget:
         context: Iterable[Any] = (),
         resume_state: Mapping[str, Any] | None = None,
         history_tokens: int | None = None,
+        media_tokens: int = 0,
     ) -> ModelRequestReservation:
         if history_tokens is not None and (
             not isinstance(history_tokens, int)
@@ -198,11 +199,15 @@ class ModelRequestBudget:
             or history_tokens < 0
         ):
             raise ValueError("history_tokens must be a nonnegative integer")
-        estimated_tokens = estimate_request_tokens(
-            prompt,
-            *context,
-            resume_state if history_tokens is None else None,
-        ) + (history_tokens or 0)
+        estimated_tokens = (
+            estimate_request_tokens(
+                prompt,
+                *context,
+                resume_state if history_tokens is None else None,
+            )
+            + (history_tokens or 0)
+            + media_tokens
+        )
         from kedi.artifacts.telemetry import model_context_preflight_span
 
         with model_context_preflight_span(
@@ -278,6 +283,94 @@ def estimate_request_tokens(*values: Any) -> int:
 def estimate_content_tokens(*values: Any) -> int:
     """Byte-based upper estimate for visible content, without request overhead."""
     return sum(len(_portable_bytes(value)) for value in values if value is not None)
+
+
+_MEDIA_MIN_TOKENS = 258
+_IMAGE_TOKENS = 1_600
+# Bytes per token, rough upper bounds: PDFs carry text and page images, audio and video are
+# sampled by the provider at a fixed token rate per second.
+_MEDIA_BYTES_PER_TOKEN = {"document": 50, "audio": 500, "video": 1_000}
+
+
+def estimate_media_tokens(kind: str, size: int | None) -> int:
+    """Conservative token estimate for one binary attachment, without decoding it."""
+
+    if kind == "image" or size is None:
+        return _IMAGE_TOKENS
+    return max(_MEDIA_MIN_TOKENS, size // _MEDIA_BYTES_PER_TOKEN.get(kind, 50))
+
+
+def estimate_attachment_tokens(attachments: Iterable[Any]) -> int:
+    """Estimate a prompt's attachments: text documents as text, other media by kind."""
+
+    total = 0
+    for attachment in attachments:
+        if attachment.is_text and attachment.media.data is not None:
+            total += len(attachment.inline_text().encode("utf-8"))
+        else:
+            total += len(attachment.label()) + estimate_media_tokens(
+                attachment.media.kind, attachment.media.size
+            )
+    return total
+
+
+def project_media_payloads(value: Any) -> tuple[Any, int]:
+    """Replace inline media payloads in serialized messages with short placeholders.
+
+    Base64 media would otherwise count as text in byte-based estimates and fill searchable
+    history text. Returns the projected value and the media token estimate.
+    """
+
+    tokens = 0
+
+    def placeholder(kind: str, encoded: str) -> str:
+        nonlocal tokens
+        size = len(encoded) * 3 // 4
+        tokens += estimate_media_tokens(kind, size)
+        return f"[{kind}: {size} bytes]"
+
+    def visit(node: Any) -> Any:
+        if isinstance(node, Mapping):
+            key = _media_payload_key(node)
+            return {
+                name: (placeholder(_payload_kind(node), item) if name == key else visit(item))
+                for name, item in node.items()
+            }
+        if isinstance(node, (list, tuple)):
+            return [visit(item) for item in node]
+        if isinstance(node, str) and node.startswith("data:") and ";base64," in node[:128]:
+            media_type, encoded = node[5:].split(";base64,", 1)
+            return placeholder(_kind_for_media_type(media_type), encoded)
+        return node
+
+    return visit(value), tokens
+
+
+def _media_payload_key(node: Mapping[Any, Any]) -> str | None:
+    # Pydantic AI BinaryContent, LangChain v1 data blocks and v0 base64 blocks.
+    if node.get("kind") == "binary" and isinstance(node.get("data"), str):
+        return "data"
+    if node.get("type") in {"image", "audio", "video", "file"}:
+        if isinstance(node.get("base64"), str):
+            return "base64"
+        if node.get("source_type") == "base64" and isinstance(node.get("data"), str):
+            return "data"
+    return None
+
+
+def _payload_kind(node: Mapping[Any, Any]) -> str:
+    block_type = node.get("type")
+    if block_type in {"image", "audio", "video"}:
+        return str(block_type)
+    if block_type == "file":
+        return "document"
+    media_type = node.get("media_type") or node.get("mime_type") or ""
+    return _kind_for_media_type(str(media_type))
+
+
+def _kind_for_media_type(media_type: str) -> str:
+    major = media_type.split("/", 1)[0].lower()
+    return major if major in {"image", "audio", "video"} else "document"
 
 
 def _portable_bytes(value: Any) -> bytes:

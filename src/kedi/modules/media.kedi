@@ -1,0 +1,75 @@
+###
+Media values for multimodal prompts: images, audio, video and documents.
+
+A media value substituted into a model prompt (>>, <<, a typed capture or a > if: claim) is
+attached before the prompt text, and the text shows only its name: the binding name, or
+image_1, audio_1, ... for an unnamed value. Paths start at the working directory and follow
+KEDI_WORKSPACE_POLICY like the filesystem module; .env files are refused.
+###
+
+```
+from typing import Any
+
+from kedi.media import Audio, Document, Image, Media, Video
+```
+
+@image(source: Any) -> Image:
+    ###
+    Load an image from a workspace path, an http(s) URL or a data: URI.
+
+    Args:
+        source (Any): A path relative to the working directory, a URL, a data URI or an image.
+
+    Returns:
+        Image: A PNG, JPEG, GIF or WebP image. Prompts attach it and show its name.
+    ###
+    = `Image.coerce(source)`
+
+@audio(source: Any) -> Audio:
+    ###
+    Load audio from a workspace path, an http(s) URL or a data: URI.
+
+    Args:
+        source (Any): A path relative to the working directory, a URL, a data URI or audio.
+
+    Returns:
+        Audio: WAV, MP3, OGG, FLAC, AIFF or AAC audio. Gemini reads all of them; OpenAI audio
+            models read WAV and MP3; Anthropic and Bedrock take no audio.
+    ###
+    = `Audio.coerce(source)`
+
+@video(source: Any) -> Video:
+    ###
+    Load a video from a workspace path, an http(s) URL, a YouTube URL or a data: URI.
+
+    Args:
+        source (Any): A path relative to the working directory, a URL, a data URI or a video.
+
+    Returns:
+        Video: A video for Gemini or Bedrock Nova models. YouTube URLs go to Gemini as URLs.
+    ###
+    = `Video.coerce(source)`
+
+@document(source: Any) -> Document:
+    ###
+    Load a PDF or a UTF-8 text document from a workspace path, an http(s) URL or a data: URI.
+
+    Args:
+        source (Any): A path relative to the working directory, a URL, a data URI or a document.
+
+    Returns:
+        Document: A PDF, read by the provider, or a text document (text, Markdown, CSV, HTML,
+            JSON, XML, YAML, TOML), which reaches the model as delimited text.
+    ###
+    = `Document.coerce(source)`
+
+> export:
+  image
+  audio
+  video
+  document
+  Media
+  Image
+  Audio
+  Video
+  Document

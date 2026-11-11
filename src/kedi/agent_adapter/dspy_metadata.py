@@ -22,6 +22,7 @@ DSPY_ADAPTER = AdapterDescriptor(
         supports_history_processing=False,
         supports_history_replay=False,
         supports_stream_events=False,
+        supports_media_input=False,
         settings=DSPY_LM_SETTING_KEYS,
     ),
 )
