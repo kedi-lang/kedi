@@ -16,8 +16,6 @@ export OPENAI_API_KEY="..."
 kedi examples/knapsack/main.kedi --adapter pydantic --adapter-model openai:gpt-6-luna
 ```
 
-The Pydantic adapter needs its OpenAI provider dependency. For a source checkout,
-install it with `python -m pip install -e . 'pydantic-ai-slim[openai]'`.
 The program does not fix a model or enable telemetry; choose the model at the CLI.
 Model calls require network access and may incur charges.
 
