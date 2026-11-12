@@ -9,13 +9,12 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from dataclasses import replace
 from typing import Any, cast
 
 from kedi.agent_adapter.request.media import (
     MediaAttachment,
     check_media_support,
-    download_media,
+    download_image_urls,
     media_provider,
     unsent_attachments,
 )
@@ -41,15 +40,9 @@ async def user_prompt(
     """
 
     provider = media_provider(getattr(model, "system", None))
-    check_media_support(attachments, provider=provider, model=getattr(model, "model_name", None))
     if provider == "typesafe":
-        # Jev reads image data, so Kedi downloads image URLs for it.
-        attachments = [
-            replace(item, media=await download_media(item.media))
-            if item.media.url is not None
-            else item
-            for item in attachments
-        ]
+        attachments = await download_image_urls(attachments)
+    check_media_support(attachments, provider=provider, model=getattr(model, "model_name", None))
     pending = unsent_attachments(
         attachments, None if history is None else sent_attachments(history)
     )

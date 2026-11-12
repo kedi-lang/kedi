@@ -18,6 +18,7 @@ from kedi.agent_adapter.request.media import (
     MediaAttachment,
     MediaProvider,
     check_media_support,
+    download_image_urls,
     download_media,
     unsent_attachments,
 )
@@ -63,6 +64,8 @@ async def user_content(
 
     provider = langchain_media_provider(model)
     model_name = langchain_model_name(model)
+    if provider == "typesafe":
+        attachments = await download_image_urls(attachments)
     check_media_support(attachments, provider=provider, model=model_name)
     _check_profile(attachments, model, model_name)
     pending = unsent_attachments(

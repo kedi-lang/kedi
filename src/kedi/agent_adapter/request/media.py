@@ -239,6 +239,8 @@ def check_media_support(
                 f"{attachment.name}: {_provider_text(provider)} decision models read only "
                 f"{accepted}; {_model_text(model)} cannot read {media.label}"
             )
+        if provider == "typesafe":
+            _check_jev_image(attachment)
         if media.kind == "video" and provider in {"openai", "anthropic"}:
             raise MediaError(
                 f"{attachment.name}: {_provider_text(provider)} models do not accept video; "
@@ -257,6 +259,65 @@ def check_media_support(
             raise MediaError(
                 f"{attachment.name}: OpenAI accepts only WAV and MP3 audio, not {media.media_type}"
             )
+
+
+# TypeSafe's limits for image input: https://docs.typesafe.ai/images
+_JEV_IMAGE_TYPES = frozenset({"image/png", "image/jpeg"})
+_JEV_IMAGE_BYTES = 16 * 1024 * 1024
+_JEV_IMAGE_SIDES = (280, 1568)
+
+
+def _check_jev_image(attachment: MediaAttachment) -> None:
+    media = attachment.media
+    if media.media_type is not None and media.media_type not in _JEV_IMAGE_TYPES:
+        raise MediaError(
+            f"{attachment.name}: Jev reads PNG and JPEG images, not {media.media_type}"
+        )
+    if media.data is None:
+        return
+    if len(media.data) > _JEV_IMAGE_BYTES:
+        raise MediaError(f"{attachment.name}: Jev images are limited to 16 MiB")
+    size = image_size(media.data)
+    low, high = _JEV_IMAGE_SIDES
+    if size is not None and not all(low <= side <= high for side in size):
+        width, height = size
+        raise MediaError(
+            f"{attachment.name}: Jev needs each image side between {low} and {high} pixels, "
+            f"not {width}x{height}"
+        )
+
+
+def image_size(data: bytes) -> tuple[int, int] | None:
+    """Width and height from a PNG or JPEG header; None for other or unreadable data."""
+
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if not data.startswith(b"\xff\xd8"):
+        return None
+    index = 2
+    while index + 9 < len(data):
+        if data[index] != 0xFF:
+            return None
+        marker = data[index + 1]
+        length = int.from_bytes(data[index + 2 : index + 4], "big")
+        if 0xC0 <= marker <= 0xCF and marker not in {0xC4, 0xC8, 0xCC}:
+            height = int.from_bytes(data[index + 5 : index + 7], "big")
+            width = int.from_bytes(data[index + 7 : index + 9], "big")
+            return width, height
+        index += 2 + length
+    return None
+
+
+async def download_image_urls(
+    attachments: Sequence[MediaAttachment],
+) -> list[MediaAttachment]:
+    """Download URL images for a model that reads image data only (Jev)."""
+    return [
+        replace(item, media=await download_media(item.media))
+        if item.media.kind == "image" and item.media.url is not None and not item.media.is_youtube
+        else item
+        for item in attachments
+    ]
 
 
 async def download_media(media: Media) -> Media:
@@ -332,6 +393,8 @@ __all__ = [
     "MediaProvider",
     "MediaSummary",
     "check_media_support",
+    "download_image_urls",
+    "image_size",
     "compose_prompt",
     "history_keeps_media",
     "media_digest_material",

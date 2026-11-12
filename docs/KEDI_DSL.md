@@ -394,8 +394,9 @@ example video on OpenAI. With LangChain it also honors the model profile flags
 model I/O; the editor reports such prompts statically.
 
 Decision models read less. Jev (`typesafe/...`) reads images and text documents: images
-reach TypeSafe as image assets, and Kedi downloads image URLs first. Laya reads text
-documents only. Kedi rejects any other attachment for them before the call.
+reach TypeSafe as image assets, and Kedi downloads image URLs first. TypeSafe image input
+is experimental and takes PNG or JPEG images of 16 MiB at most, each side 280 to 1568
+pixels ([TypeSafe image limits](https://docs.typesafe.ai/images)); Kedi checks these before the call. Laya reads text documents only. Kedi rejects any other attachment for them before the call.
 
 URLs go to the provider as URLs when the model accepts them. Otherwise Kedi downloads them,
 over `http(s)` only, with private and cloud-metadata addresses blocked. YouTube URLs are
