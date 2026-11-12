@@ -17,7 +17,7 @@ dependencies = [
     "python-dotenv>=1.2.4,<2",
     "pydantic-settings>=2.16.2,<2.17",
     "prompt-toolkit>=3.0.53,<3.1",
-    "pydantic-ai-slim>=2.66.0,<2.67",
+    "pydantic-ai-slim[openai]>=2.66.0,<2.67",
     "pydantic-monty==1.4.0",
     "jsonschema>=4.26,<5",
     "tree-sitter==0.26.0",

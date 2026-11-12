@@ -7,13 +7,22 @@ from pathlib import Path
 import pydantic_ai.models
 import pytest
 from pydantic import BaseModel
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
 import kedi
 from kedi.agent_adapter import PydanticAdapter
 from kedi.lang import compile_program, parse_program
+from tests.test_media_values import png_bytes
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 SOURCES = dict(
@@ -52,7 +61,15 @@ def run_example(monkeypatch):
 
 
 def test_readme_marks_all_kedi_examples():
-    assert set(SOURCES) == {"actions", "release-notes", "subagents", "jev", "rubric", "cloud-agent"}
+    assert set(SOURCES) == {
+        "actions",
+        "release-notes",
+        "subagents",
+        "media",
+        "jev",
+        "rubric",
+        "cloud-agent",
+    }
     for source in SOURCES.values():
         parse_program(source)
 
@@ -97,6 +114,30 @@ def test_readme_actions_return_native_typed_objects(run_example):
     )
     assert isinstance(result[0], BaseModel)
     assert result[0].model_dump() == action
+
+
+def test_readme_media_reaches_the_model_by_name(run_example, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KEDI_WORKSPACE_POLICY", raising=False)
+    (tmp_path / "receipt.png").write_bytes(png_bytes())
+    receipt = {"merchant": "Simit Sarayi", "total": 245.5, "currency": "TRY"}
+    prompts = []
+
+    def respond(messages, info):
+        prompts.extend(
+            part.content for part in messages[-1].parts if isinstance(part, UserPromptPart)
+        )
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"receipt": receipt})])
+
+    result = run_example("media", FunctionModel(respond))
+
+    assert result.model_dump() == receipt
+    [[label, image, text]] = prompts
+    assert label == "photo:"
+    assert isinstance(image, BinaryContent)
+    assert image.media_type == "image/png"
+    assert "Read the receipt in photo." in text
+    assert "receipt.png" not in repr(prompts)
 
 
 def test_readme_conditions_filter_internal_changes(run_example):

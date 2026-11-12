@@ -28,8 +28,9 @@ In Kedi, a sentence can define a model interaction **and** the typed values it
 produces. Those values become inputs to the rest of your program: another
 template, a Python function, a branch, or a remote agent.
 
-The language owns that composition. Python handles ordinary computation;
-models and agent SDKs connect through the `AgentAdapter` boundary.
+The language owns that composition. Python handles ordinary computation, and
+the model side is pluggable: a program runs on Pydantic AI or LangChain, or
+through Codex, Claude, ACP, and A2A agents.
 
 ## A Sentence Becomes a Value
 
@@ -49,10 +50,18 @@ models and agent SDKs connect through the `AgentAdapter` boundary.
 = `extract_actions("Sam will add tests by Friday. The redesign is only a suggestion.")`
 ```
 
-`<notes>` supplies the input. `[actions: list[Action]]` declares a capture.
-`actions` then holds a validated list of `Action` objects, not text to parse later.
-The model sees the capture **inside the sentence that gives it meaning**, alongside
-the output schema. `=` returns the value from the procedure or program.
+```console
+$ kedi main.kedi
+[Action(task='add tests', owner='Sam', deadline='Friday')]
+```
+
+`~Action` declares a type and `@extract_actions` a procedure. `>>` starts a
+template, the text sent to the model, and `<notes>` inserts a value into it.
+`[actions: list[Action]]` declares a capture: the model sees it **inside the
+sentence that gives it meaning**, alongside the output schema, and `actions`
+then holds a validated list of `Action` objects, not text to parse later.
+Backticks hold Python expressions, and `=` returns a value from the procedure
+or the program. The redesign was only a suggestion, so it is not in the list.
 
 | Written once | Used throughout the program |
 | --- | --- |
@@ -64,40 +73,18 @@ Type validation checks structure, not the factual truth of a model's answer.
 
 ## Try It
 
-Install the released package:
-
 ```bash
 pip install kedi
+export OPENAI_API_KEY="..."
+kedi --idle
 ```
 
-The examples below live in the repository. Clone it to run them against the
-current source, including its parser:
-
-```bash
-git clone --recurse-submodules https://github.com/kedi-lang/kedi.git
-cd kedi
-uv sync --locked --dev
-source .venv/bin/activate
-export KEDI_ADAPTER=pydantic
-export KEDI_ADAPTER_MODEL=openai:gpt-6-luna
-kedi examples/meeting_actions/main.kedi
-```
-
-Set `OPENAI_API_KEY` in your environment or the checkout's `.env` before running
-the final command. Never commit credentials. To try Kedi **without a model or
-API key**, run `kedi examples/module_imports/main.kedi` instead.
-
-Already using Codex? See [subscription authentication](https://github.com/kedi-lang/kedi/blob/stable/examples/README.md#setup).
-On Windows, use `.venv\Scripts\Activate.ps1` and PowerShell environment syntax.
-The [installation guide](https://docs.kedi-lang.org/getting-started/installation/)
-covers package installs; the PyPI badge reports the published release, which may
-lag the source examples.
-
-## Program in the Terminal
-
-**`kedi --idle` brings the language into a live session, with syntax highlighting
-on by default.** Write templates, inspect typed captures, call procedures, and
-mix in Python without creating a file. Bindings stay available between inputs.
+**`kedi --idle` opens a live session, with syntax highlighting on by default.**
+Write templates, inspect typed captures, call procedures, and mix in Python
+without creating a file. Bindings stay available between inputs. The default
+model is OpenAI's `gpt-6-luna`; the
+[installation guide](https://docs.kedi-lang.org/getting-started/installation/)
+covers other providers and optional extras.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/kedi-lang/kedi/stable/docs/assets/repl/terminal-session.png" alt="A highlighted Kedi REPL session captures Istanbul and prints Cats love Istanbul" width="960">
@@ -128,6 +115,27 @@ to save on exit. No language server is needed.
 Prefer plain input? Run `kedi --idle --no-color`.
 [Explore the terminal REPL](https://docs.kedi-lang.org/tooling/repl/).
 
+### Run the Examples
+
+Clone the repository to run its examples against the current source, including
+its parser:
+
+```bash
+git clone --recurse-submodules https://github.com/kedi-lang/kedi.git
+cd kedi
+uv sync --locked --dev
+source .venv/bin/activate
+kedi examples/meeting_actions/main.kedi
+```
+
+Set `OPENAI_API_KEY` in your environment or the checkout's `.env`; never commit
+credentials. To try Kedi **without a model or API key**, run
+`kedi examples/module_imports/main.kedi` instead.
+
+Already using Codex? See [subscription authentication](https://github.com/kedi-lang/kedi/blob/stable/examples/README.md#setup).
+On Windows, use `.venv\Scripts\Activate.ps1` and PowerShell environment syntax.
+The PyPI badge reports the published release, which may lag the source examples.
+
 ## Let the Program Carry the Workflow
 
 Conditions can ask a model a question. Loops, assignments, and returns remain
@@ -152,11 +160,11 @@ ordinary program control flow. Here, only user-visible changes become release no
 = `release_notes(["CSV exports now preserve accents.", "Renamed a test fixture."])`
 ```
 
-Use a Python condition such as `` > if: `count > 0`: `` for a deterministic
-branch. Attach `> map:` to a loop to process each iteration's outputs as they
-resolve. Independent template calls run
-concurrently by default; dependent calls wait for their inputs. Calls sharing
-a conversation retain their turn order.
+**Independent template calls run concurrently by default**, with no special
+syntax: dependent calls wait for their inputs, and calls sharing a conversation
+keep their turn order. Use a Python condition such as `` > if: `count > 0`: ``
+for a deterministic branch, and attach `> map:` to a loop to process each
+iteration's outputs as they resolve.
 
 [Control flow](https://docs.kedi-lang.org/core-language/control-flow/) &middot;
 [Runnable release-notes workflow](https://github.com/kedi-lang/kedi/blob/stable/examples/release_notes/README.md)
@@ -200,6 +208,37 @@ to start and collect child work explicitly, without a coordinator model call.
 [Profiles](https://docs.kedi-lang.org/agentic-engineering/profiles/) &middot;
 [Task and await](https://docs.kedi-lang.org/agentic-engineering/subagent-tasks/) &middot;
 [A real procedure exposed as a tool](https://github.com/kedi-lang/kedi/blob/stable/examples/support_reply/README.md)
+
+## Images, Audio, and Documents Are Values
+
+`image`, `audio`, `video`, and `document` load a local file, an `http(s)` URL,
+or a `data:` URI. A media value goes into a sentence like any other value, and
+into a procedure as a typed parameter.
+
+**Kedi** &middot; read a receipt photo into a typed value
+
+<!-- kedi-example: media -->
+
+```python
+> import: media
+
+~Receipt(merchant: str, total: float, currency: str)
+
+@read_receipt(photo: Image) -> Receipt:
+  >> Read the receipt in <photo>.
+  The receipt details are [receipt: Receipt].
+  = `receipt`
+
+= `read_receipt(image("receipt.png"))`
+```
+
+The model receives the local image as an attachment labeled `photo`, the name the
+program uses, rather than `receipt.png`. URL attachments retain their source URLs.
+Media works with the Pydantic AI and LangChain adapters on OpenAI, Anthropic,
+Google Gemini, and AWS Bedrock. Kedi rejects an attachment the provider cannot
+take before calling the model.
+
+[Media input](https://docs.kedi-lang.org/core-language/media-input/)
 
 ## Let Jev Make the Decision
 
@@ -277,9 +316,9 @@ The assessment of this reply against the policy is [assessment: Assessment].
 
 </details>
 
-Install with `uv sync --dev --extra typesafe` and set `TYPESAFE_API_KEY`.
-The source development environment includes the shared decision types.
-Both Pydantic AI and LangChain integrations are supported.
+Install with `pip install "kedi[typesafe]"`, which includes the shared decision
+types, and set `TYPESAFE_API_KEY`; the source development environment has both.
+Jev works with the Pydantic AI and LangChain adapters.
 `decision_info(...)` and `kedi.capture_decisions()` expose recorded evidence,
 including applicable probabilities and thresholds, without another inference.
 The shared primitives also support local Laya models through
@@ -354,12 +393,20 @@ needs a real endpoint, its credentials, and the `a2a` extra.
 | [Test, eval, optimize](https://docs.kedi-lang.org/tooling/test-eval-and-optimize/) | Keep tests, datasets, scoring, and prompt optimization beside the procedure |
 | [Notebook and REPL](https://docs.kedi-lang.org/tooling/notebook/) | Explore a program incrementally with `kedi notebook` or `kedi --idle` |
 | [Editor tooling](https://docs.kedi-lang.org/tooling/) | Use VS Code or Zed with completion, diagnostics, hovers, and a debugger |
+| [OpenTelemetry](https://github.com/kedi-lang/kedi-otel) | Trace program runs, model and tool calls, subagents, and artifacts; content capture is off by default |
+| [MCP server](https://github.com/kedi-lang/kedi-mcp) | Let an MCP client parse, run, test, and evaluate Kedi programs through `kedi-mcp` |
 
 **One language, multiple execution surfaces.** Pydantic AI and LangChain sit at
 the framework integration boundary. Codex, Claude, ACP, and A2A provide
 agent-harness integrations. Profiles declare required capabilities, and Kedi
 rejects unsupported combinations rather than silently changing their meaning.
 Optional surfaces require their respective dependencies and credentials.
+
+**Measured on real engineering tasks.** In two single-trial Terminal-Bench 2.1
+runs, Kedi's agent harness with `codex/gpt-5.6-luna` solved 68 of 89 tasks on
+both the Pydantic AI and the LangChain adapter, at about six cents of
+API-equivalent model cost per task. These are engineering runs, not leaderboard
+submissions; see the [results and methodology](https://docs.kedi-lang.org/tooling/terminal-bench-results/).
 
 ## Programs to Explore
 
@@ -386,8 +433,7 @@ Try the decision loop with Jev or local Laya, or take over with manual controls.
 </details>
 
 [All examples](https://github.com/kedi-lang/kedi/blob/stable/examples/README.md) &middot;
-[What was actually tested](https://github.com/kedi-lang/kedi/blob/stable/examples/VALIDATION.md) &middot;
-[Terminal-Bench results and methodology](https://docs.kedi-lang.org/tooling/terminal-bench-results/)
+[What was actually tested](https://github.com/kedi-lang/kedi/blob/stable/examples/VALIDATION.md)
 
 ## Develop With Kedi
 
@@ -395,8 +441,8 @@ Try the decision loop with Jev or local Laya, or take over with manual controls.
 kedi main.kedi --parse        # Parse without executing
 kedi main.kedi --test         # Run colocated tests
 kedi main.kedi --eval         # Evaluate dataset-backed metrics
-kedi --idle                  # Interactive terminal session
-kedi notebook                # Local notebook; requires the notebook extra
+kedi --idle                   # Interactive terminal session
+kedi notebook                 # Local notebook; requires the notebook extra
 ```
 
 Use `> show:` to display values; `=` returns. The

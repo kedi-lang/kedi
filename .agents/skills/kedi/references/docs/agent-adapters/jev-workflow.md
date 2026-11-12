@@ -4,8 +4,7 @@ A generative model writes a draft; Jev evaluates it against explicit evidence;
 Kedi selects the next operation. Neither the draft nor a high probability is
 permission to send a message or perform a financial action.
 
-This example requires `kedi[typesafe]`, `pydantic-ai-slim[openai]` and
-credentials for both integrations. It prints a review result; it does not send
+This example requires `kedi[typesafe]` and credentials for both providers. It prints a review result; it does not send
 email. Model availability is a provider prerequisite, not a compiler guarantee.
 
 ```kedi

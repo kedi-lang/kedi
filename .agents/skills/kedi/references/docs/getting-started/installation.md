@@ -49,15 +49,10 @@ The `source` command above is for POSIX shells.
 
 No provider or API key is needed for parsing or deterministic Python expressions.
 The model-backed learning examples explicitly select
-`openai:gpt-6-luna` through the Pydantic adapter. Install its provider
-support in the same environment:
+`openai:gpt-6-luna` through the Pydantic adapter, and Kedi installs its OpenAI
+provider support. Kedi 0.1.5 and earlier also need `pydantic-ai-slim[openai]`
+in the same environment.
 
-```bash
-uv add 'pydantic-ai-slim[openai]'
-```
-
-For a pip-managed environment, use `python -m pip install 'pydantic-ai-slim[openai]'`.
-Keep Kedi installed so the resolver retains its compatible Pydantic AI bounds.
 Set `OPENAI_API_KEY` in your shell or a local, untracked `.env` file:
 
 ```dotenv
@@ -74,9 +69,10 @@ model call can incur provider charges. Start with the no-model verification belo
 
 ## Optional Backend Dependencies
 
-The core distribution includes the Pydantic AI adapter. Other adapters,
-provider SDKs, and runtime surfaces are installed only when selected. These are
-alternative additions for different applications, not one installation sequence:
+The core distribution includes the Pydantic AI adapter and its OpenAI provider.
+Other adapters, provider SDKs, and runtime surfaces are installed only when
+selected. These are alternative additions for different applications, not one
+installation sequence:
 
 ```bash
 uv add "kedi[claude]"
