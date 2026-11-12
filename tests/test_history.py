@@ -1390,7 +1390,7 @@ async def _empty_async_tools() -> list[Any]:
 
 
 def test_history_lsp_hover_highlighting_and_unsupported_adapter_error() -> None:
-    source = "> adapter: dspy\n> history: enabled\n"
+    source = "> agent: acp\n> history: enabled\n"
     hover = hover_text_at(source, "/tmp/history.kedi", "enabled")
     assert "conversation continuity" in hover
     assert "default is disabled" in hover
@@ -1413,7 +1413,7 @@ def test_history_lsp_hover_highlighting_and_unsupported_adapter_error() -> None:
 
     profile_source = """
 > profile: memory:
-    > adapter: dspy
+    > agent: acp
     > history: enabled
 
 > use: memory

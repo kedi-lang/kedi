@@ -83,8 +83,7 @@ leave them executing as detached host processes. Finished handles are retained
 only within bounded retention.
 
 Pydantic AI, LangChain, Claude and Codex support background lifecycle tools.
-DSPy's bridge supports blocking delegation and continuation but not the
-background lifecycle. See the [capability matrix](../reference/capability-matrix.md).
+See the [capability matrix](../reference/capability-matrix.md).
 
 For durable *completed* results rather than live task migration, see
 [Continuations and Persistence](subagent-continuations.md).

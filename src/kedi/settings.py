@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     """
 
     debug: bool = Field(False, description="Enable debug mode with verbose logging")
-    adapter: Literal["dspy", "pydantic"] = Field(
+    adapter: Literal["pydantic", "langchain"] = Field(
         "pydantic", description="Adapter to use for LLM calls"
     )
     model_name: str = Field(

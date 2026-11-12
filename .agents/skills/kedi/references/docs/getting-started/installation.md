@@ -86,7 +86,7 @@ uv add "kedi[notebook]"
 uv add "kedi[typesafe]"
 ```
 
-`dspy` installs the DSPy adapter and optimization instrumentation. `langchain`
+`dspy` installs DSPy for GEPA optimization, not a runtime adapter. `langchain`
 installs the LangChain adapter's common OpenAI, OpenRouter, and MCP
 integrations; add `langchain-aws` only for Bedrock. `groq` installs the provider
 SDK used by Groq-backed Pydantic AI models. `claude` and `codex-model` install

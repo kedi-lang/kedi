@@ -22,14 +22,6 @@ def _pydantic(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]
     return PydanticAdapter(model=model, **dict(kwargs))
 
 
-def _dspy(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
-    from .adapters.dspy import DSPyAdapter
-
-    if model is None:
-        raise ValueError("DSPy adapter requires a model")
-    return DSPyAdapter(model=model, **dict(kwargs))
-
-
 def _langchain(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
     from .adapters.langchain import LangChainAdapter
 
@@ -66,12 +58,6 @@ def _pydantic_capabilities() -> AdapterCapabilities:
     return PydanticAdapter.capabilities
 
 
-def _dspy_capabilities() -> AdapterCapabilities:
-    from .adapters.dspy import DSPyAdapter
-
-    return DSPyAdapter.capabilities
-
-
 def _langchain_capabilities() -> AdapterCapabilities:
     from .adapters.langchain import LangChainAdapter
 
@@ -104,7 +90,6 @@ def _a2a_capabilities() -> AdapterCapabilities:
 
 _ADAPTERS: dict[str, AdapterFactory] = {
     "pydantic": AdapterFactory("pydantic", "agent-framework", _pydantic),
-    "dspy": AdapterFactory("dspy", "agent-framework", _dspy),
     "langchain": AdapterFactory("langchain", "agent-framework", _langchain),
     "claude": AdapterFactory("claude", "agent-harness", _claude),
     "codex": AdapterFactory("codex", "agent-harness", _codex),
@@ -114,7 +99,6 @@ _ADAPTERS: dict[str, AdapterFactory] = {
 
 _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
     "pydantic": _pydantic_capabilities,
-    "dspy": _dspy_capabilities,
     "langchain": _langchain_capabilities,
     "claude": _claude_capabilities,
     "codex": _codex_capabilities,
@@ -128,6 +112,12 @@ def known_adapter_shortnames() -> tuple[str, ...]:
 
 
 def adapter_factory(shortname: str) -> AdapterFactory:
+    if shortname == "dspy":
+        raise KediExecutionError(
+            "The DSPy runtime adapter moved to https://github.com/kedi-lang/dspy-adapter. "
+            "Use 'pydantic' or 'langchain' for built-in runtime execution. "
+            "GEPA still uses DSPy through kedi[dspy]."
+        )
     try:
         return _ADAPTERS[shortname]
     except KeyError as exc:

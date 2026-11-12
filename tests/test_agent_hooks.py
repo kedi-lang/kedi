@@ -49,7 +49,6 @@ from kedi.agent_adapter.adapters.claude.messages import (
 )
 from kedi.agent_adapter.adapters.claude.tools import _claude_tool_call_input
 from kedi.agent_adapter.adapters.codex.adapter import CodexAdapter
-from kedi.agent_adapter.adapters.dspy import DSPyAdapter
 from kedi.agent_adapter.adapters.langchain.adapter import LangChainAdapter
 from kedi.agent_adapter.adapters.langchain.middleware import (
     _langchain_approval_middleware,
@@ -219,7 +218,6 @@ def test_adapter_hook_capability_matrix_matches_declared_bridges() -> None:
     assert ACPAdapter.capabilities.hooks is not None
     assert ACPAdapter.capabilities.hooks.user_prompt_submit is not None
     assert ACPAdapter.capabilities.hooks.pre_tool_use is None
-    assert DSPyAdapter.capabilities.hooks is None
     codex_hooks = CodexAdapter.capabilities.hooks
     assert codex_hooks is not None
     codex_pre = codex_hooks.pre_tool_use
@@ -332,12 +330,12 @@ def test_claude_session_fingerprint_changes_with_stable_hook_identity() -> None:
 
 
 def test_runtime_rejects_hook_profile_for_unsupported_adapter() -> None:
-    adapter = DSPyAdapter.__new__(DSPyAdapter)
+    adapter = SimpleNamespace(shortname="custom", capabilities=None)
     profile = AgentProfile(
         hooks=HookSettings(pre_tool_use=(lambda _event: None,)),
     )
 
-    with pytest.raises(AgentProfileOverrideUnsupported, match="not supported by adapter 'dspy'"):
+    with pytest.raises(AgentProfileOverrideUnsupported, match="not supported by adapter 'custom'"):
         KediRuntime._assert_profile_override_supported(profile, adapter)
 
 

@@ -13,8 +13,7 @@ import kedi.lsp.features.document as lsp_document_module
 import kedi.lsp.features.hover as lsp_hover_module
 import kedi.lsp.features.resolution as lsp_resolution_module
 import kedi.lsp.features.symbols as lsp_symbols_module
-from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
-from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compile import (
     build_capture_env,
@@ -260,56 +259,6 @@ def test_pydantic_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> N
     with adapter.profile_override(AgentProfile(effort="low")):
         pass
     assert entered == [{"model": "anthropic:claude"}]
-
-
-def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    lm_calls: list[dict[str, Any]] = []
-    context_calls: list[Any] = []
-
-    class FakeLM:
-        def __init__(self, **kwargs: Any) -> None:
-            lm_calls.append(kwargs)
-
-    class FakeContext:
-        def __init__(self, *, lm: Any, track_usage: bool = False) -> None:
-            assert track_usage
-            context_calls.append(lm)
-
-        def __enter__(self) -> None:
-            return None
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-    monkeypatch.setattr(dspy_adapter_module, "ThinkingStrippingLM", FakeLM)
-    monkeypatch.setattr(dspy_adapter_module.dspy, "context", lambda **kwargs: FakeContext(**kwargs))
-    monkeypatch.setattr(
-        dspy_adapter_module.dspy,
-        "settings",
-        SimpleNamespace(configure=lambda **_: None),
-    )
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._lm_model = "openai:gpt-4o-mini"
-    adapter._lm_provider = None
-    adapter._lm_max_tokens = 1
-    adapter._lm_temperature = 0.0
-    adapter._lm_extra_kwargs = {}
-    _set_profile_stack(adapter)
-
-    with adapter.profile_override(AgentProfile(model="openai:gpt-4o-mini")):
-        pass
-    assert lm_calls == []
-
-    with adapter.profile_override(AgentProfile(model="openai/gpt-4o")):
-        pass
-    assert lm_calls[-1]["model"] == "openai/gpt-4o"
-    assert context_calls
-
-    with adapter.profile_override(AgentProfile(effort="max")):
-        pass
-    assert lm_calls[-1]["model"] == "openai:gpt-4o-mini"
-    assert lm_calls[-1]["reasoning_effort"] == "max"
 
 
 def test_lsp_profile_helpers_and_hovers() -> None:

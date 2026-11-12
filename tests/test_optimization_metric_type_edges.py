@@ -7,9 +7,7 @@ import pytest
 
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import ProcedureDef
-from kedi.optimization.services import type_handler as type_handler_module
 from kedi.optimization.services.metric_factory import MetricFactory
-from kedi.optimization.services.type_handler import StructuredTypeHandler
 
 
 def test_metric_factory_inline_error_and_normalization_edges() -> None:
@@ -39,88 +37,31 @@ def test_metric_factory_inline_error_and_normalization_edges() -> None:
     assert normalize_metric_result(True) == (1.0, None)
 
 
-def test_type_handler_schema_and_signature_edges(
+def test_gepa_signature_builder_uses_native_dspy_types(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rt = compile_program(parse_program("= ok\n"), adapter=None)
-    handler = StructuredTypeHandler(rt)
+    import dspy
 
-    schema = handler.build_output_schema(
-        [
-            ("plain", None),
-            ("count", "int"),
-            ("items", "list[int]"),
-        ]
+    from kedi.optimization.services.dspy_module_builder import DSPyModuleBuilder
+
+    runtime = compile_program(parse_program("= ok\n"), adapter=None)
+    builder = DSPyModuleBuilder(runtime)
+    signature = builder._create_signature(
+        ["query"], [("plain", None), ("count", "int"), ("items", "list[int]")], {}
     )
-    assert schema["plain"] is str
-    assert schema["count"] is int
-    assert getattr(schema["items"], "__origin__", None) is list
+    assert issubclass(signature, dspy.Signature)
+    assert tuple(signature.input_fields) == ("query",)
+    assert signature.output_fields["plain"].annotation is str
+    assert signature.output_fields["count"].annotation is int
+    assert signature.output_fields["items"].annotation == list[int]
+    assert builder.runtime is runtime
 
-    # A written-but-unresolvable annotation fails loud.
     with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
-        handler.build_output_schema([("missing", "MissingType")])
-
-    with pytest.raises(ValueError, match="Output schema"):
-        handler.create_dspy_signature_sync(["x"], [])
-
-    def typed_builder(output_schema: dict[str, type], **_: Any) -> str:
-        assert output_schema
-        return "user_prompt -> generated: Custom"
-
-    monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", typed_builder)
-    assert handler.create_dspy_signature_sync(["x"], [("answer", "str")]) == "x -> answer: Custom"
+        builder._create_signature(["query"], [("missing", "MissingType")], {})
 
     def fail_resolve(self: Any, runtime: Any, env: Any) -> object:
         raise RuntimeError("bad type")
 
-    with monkeypatch.context() as mp:
-        mp.setattr("kedi.lang.compiler.type_system.KediType.resolve", fail_resolve)
-        with pytest.raises(RuntimeError, match="bad type"):
-            handler.build_output_schema([("broken", "int")])
-
-    def no_arrow_builder(output_schema: dict[str, type], **_: Any) -> str:
-        assert output_schema
-        return "generated"
-
-    monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", no_arrow_builder)
-    assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer: int"
-
-    def object_builder(output_schema: dict[str, type], **_: Any) -> object:
-        assert output_schema
-        return object()
-
-    monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", object_builder)
-    assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer"
-
-    handler = StructuredTypeHandler(rt)
-
-    def bare_output_builder(output_schema: dict[str, type], **_: Any) -> str:
-        assert output_schema == {"different": int}
-        return "user_prompt -> other"
-
-    monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", bare_output_builder)
-    monkeypatch.setattr(handler, "build_output_schema", lambda fields: {"different": int})
-    assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer"
-
-    def no_arrow_missing_builder(output_schema: dict[str, type], **_: Any) -> str:
-        assert output_schema == {"different": int}
-        return "other"
-
-    monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", no_arrow_missing_builder)
-    assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer"
-
-    unknown_type = object()
-
-    def matching_schema_builder(output_schema: dict[str, type], **_: Any) -> str:
-        assert output_schema == {"other": cast(Any, unknown_type)}
-        return "user_prompt -> other"
-
-    monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", matching_schema_builder)
-    monkeypatch.setattr(
-        handler,
-        "build_output_schema",
-        lambda fields: {"other": cast(Any, unknown_type)},
-    )
-    assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]).startswith(
-        "x -> answer: <object object at"
-    )
+    monkeypatch.setattr("kedi.lang.compiler.type_system.KediType.resolve", fail_resolve)
+    with pytest.raises(RuntimeError, match="bad type"):
+        builder._create_signature(["query"], [("broken", "int")], {})

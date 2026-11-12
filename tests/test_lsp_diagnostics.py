@@ -985,7 +985,7 @@ def test_diagnostics_warn_when_adapter_cannot_apply_native_approval_policy(
         "adapter_capabilities",
         lambda _name: AdapterCapabilities(supports_native_approvals=False),
     )
-    src = "> adapter: dspy\n> approval: deny\n"
+    src = "> adapter: pydantic\n> approval: deny\n"
 
     diags = lsp_diagnostics_module.compute_diagnostics(src, "example.kedi")
 
@@ -1014,7 +1014,7 @@ def test_diagnostics_track_approval_policy_across_later_adapter_and_profile_use(
     )
     src = (
         "> approval: allow\n"
-        "> adapter: dspy\n\n"
+        "> adapter: pydantic\n\n"
         "> profile: guarded:\n"
         "    > approval: deny\n\n"
         "> use: guarded\n"
@@ -1318,7 +1318,7 @@ def test_native_approval_diagnostic_helpers_cover_suppression_and_value_spans(
     )
     prog = Program(source_text=source)
     state = capability_state_module._AdapterDiagnosticState(
-        shortname="dspy",
+        shortname="pydantic",
         kind="agent-framework",
         approval_loc=loc,
     )

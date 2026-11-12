@@ -27,7 +27,6 @@ from .utils import ArgType, AttrDict
 _DEFAULT_ADAPTER_MODELS = {
     "pydantic": "openai/gpt-6-luna",
     "langchain": "openai/gpt-6-luna",
-    "dspy": "openai/gpt-6-luna",
 }
 
 
@@ -41,10 +40,6 @@ def _build_runtime_adapter(
     model = model or _DEFAULT_ADAPTER_MODELS.get(adapter)
     if adapter == "pydantic":
         return PydanticAdapter(model=model, defer_model_check=True)
-    if adapter == "dspy":
-        from .agent_adapter.adapters import DSPyAdapter
-
-        return DSPyAdapter(model=model or _DEFAULT_ADAPTER_MODELS["dspy"])
     if adapter == "langchain":
         return LangChainAdapter(model=model)
     if adapter == "acp":
@@ -190,7 +185,6 @@ def run_optimization_cli(
         max_validation_examples=max_validation_examples,
     )
 
-    adapter_for_runtime = None
     if optimizer == "gepa":
         try:
             from .optimization.services.dspy_config import DSPyConfigurationService
@@ -199,24 +193,13 @@ def run_optimization_cli(
             main_model = config.optimizer_model or "openai/gpt-6-luna"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
-            adapter_for_runtime = _build_runtime_adapter("dspy", main_model)
         except ImportError:
             return (
                 1,
                 "DSPy is required for GEPA optimizer. Install with: uv add 'kedi[dspy]'",
             )
-    else:
-        model = adapter_model or "openai/gpt-6-luna"
-        if adapter == "dspy":
-            try:
-                adapter_for_runtime = _build_runtime_adapter("dspy", model)
-            except ImportError:
-                return (
-                    1,
-                    "DSPy is required for dspy adapter. Install with: uv add 'kedi[dspy]'",
-                )
-        else:
-            adapter_for_runtime = _build_runtime_adapter(adapter, model)
+
+    adapter_for_runtime = _build_runtime_adapter(adapter, adapter_model or "openai/gpt-6-luna")
 
     result_writer = OptimizationResultWriter(source_path)
 

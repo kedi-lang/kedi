@@ -100,7 +100,7 @@ LangChain it also honors the model profile flags `image_inputs`, `pdf_inputs`,
 `audio_inputs` and `video_inputs`. Kedi never transcribes or describes media
 for a model that cannot read it.
 
-The other adapters (Claude Agent SDK, Codex, DSPy, WebGPU, ACP and A2A) do not
+The other adapters (Claude Agent SDK, Codex, WebGPU, ACP and A2A) do not
 accept media: a prompt with media fails before model I/O, and the editor reports
 it statically. See the [capability matrix](../reference/capability-matrix.md).
 

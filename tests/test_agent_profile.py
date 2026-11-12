@@ -265,7 +265,7 @@ def test_parse_settings_directives_top_level_profile_and_procedure() -> None:
 
 @foo():
     > settings:
-        num_retries: 1
+        max_retries: 1
     >> value [x]
 """
     prog = parse_program(src)
@@ -281,7 +281,7 @@ def test_parse_settings_directives_top_level_profile_and_procedure() -> None:
     assert profile.settings_members[0].fields[0].name == "parallel_tool_calls"
     assert profile.settings_members[0].fields[0].plain_value == "false"
     assert isinstance(prog.procedures[0].body[0], SettingsDirectiveStmt)
-    assert prog.procedures[0].body[0].fields[0].name == "num_retries"
+    assert prog.procedures[0].body[0].fields[0].name == "max_retries"
 
 
 def test_parse_codemode_directive_short_and_expanded_forms() -> None:
@@ -856,7 +856,7 @@ def test_adapter_registry_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "pydantic" in known_adapter_shortnames()
     assert adapter_factory("pydantic").kind == "agent-framework"
     assert adapter_capabilities("pydantic").supports("structured_output")
-    assert adapter_capabilities("dspy").supports("tool_registration")
+    assert "dspy" not in known_adapter_shortnames()
     assert adapter_capabilities("langchain").supports("mcp")
     assert adapter_capabilities("claude").supports("mcp")
     assert not adapter_capabilities("codex").supports("mcp")
@@ -864,26 +864,17 @@ def test_adapter_registry_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     assert build_adapter("claude", "claude-model").shortname == "claude"
     assert build_adapter("codex", "codex-model").shortname == "codex"
 
-    class FakeDSPyAdapter:
-        def __init__(self, *, model: str, **kwargs: Any) -> None:
-            self.model = model
-            self.kwargs = kwargs
-
     class FakeLangChainAdapter:
         def __init__(self, *, model: str | None, **kwargs: Any) -> None:
             self.model = model
             self.kwargs = kwargs
 
-    import kedi.agent_adapter.adapters.dspy as dspy_module
-
-    monkeypatch.setattr(dspy_module, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setattr(
         "kedi.agent_adapter.adapters.langchain.LangChainAdapter", FakeLangChainAdapter
     )
-    assert build_adapter("dspy", "dspy-model", cache=False).model == "dspy-model"
     assert build_adapter("langchain", "langchain-model", temperature=0.2).model == "langchain-model"
 
-    with pytest.raises(ValueError, match="DSPy adapter requires"):
+    with pytest.raises(Exception, match="DSPy runtime adapter moved.*GEPA still uses DSPy"):
         build_adapter("dspy")
     with pytest.raises(Exception, match="Unknown agent adapter"):
         adapter_factory("missing")

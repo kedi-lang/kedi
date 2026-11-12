@@ -119,7 +119,7 @@ kedi program.kedi --adapter pydantic
 kedi program.kedi --adapter codex
 ```
 
-Inside source, use the semantically strict `> adapter:` for Pydantic/DSPy/
+Inside source, use the semantically strict `> adapter:` for Pydantic/
 LangChain and `> agent:` for Claude/Codex/ACP/A2A.
 
 ## Select a Model

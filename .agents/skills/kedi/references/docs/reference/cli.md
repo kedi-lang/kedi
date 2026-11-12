@@ -28,7 +28,7 @@ source-file identity and adjacent artifacts.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--adapter NAME` | `pydantic` | `pydantic`, `dspy`, `langchain`, `claude`, `codex`, `acp`, or `a2a` |
+| `--adapter NAME` | `pydantic` | `pydantic`, `langchain`, `claude`, `codex`, `acp`, or `a2a` |
 | `--adapter-model MODEL` | `openai/gpt-6-luna` | Default model identifier; examples explicitly select `openai:gpt-6-luna` |
 
 The historical option name is `--adapter`, but it accepts both framework

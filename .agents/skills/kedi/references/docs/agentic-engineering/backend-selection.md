@@ -12,7 +12,7 @@ different execution and capability contracts.
 >> A summary of <document> is [summary: str].
 ```
 
-Built-in framework shortnames are `pydantic`, `dspy`, and `langchain`.
+Built-in framework shortnames are `pydantic` and `langchain`.
 Frameworks are appropriate when Kedi owns structured prompting and registers
 typed tools through the framework's model interface.
 

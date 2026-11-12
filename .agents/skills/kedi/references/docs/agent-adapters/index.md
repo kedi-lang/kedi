@@ -11,7 +11,6 @@ Use `> adapter:` or Python `adapter=`:
 | Shortname | Backend |
 | --- | --- |
 | `pydantic` | Pydantic AI |
-| `dspy` | DSPy |
 | `langchain` | LangChain agents |
 
 Framework adapters accept Kedi-defined tools and structured output directly.
@@ -60,7 +59,6 @@ details are adapter-specific and remain documented on each adapter page.
 
 - Choose Pydantic for the broadest typed Python integration.
 - Choose LangChain for LangChain models, middleware, and tool ecosystems.
-- Choose DSPy for signatures, ReAct, and GEPA workflows.
 - Choose Claude or Codex when a coding-agent harness and its native tools are
   part of the task.
 - Choose ACP when driving an existing stdio ACP agent as a text harness.
@@ -80,7 +78,9 @@ details are adapter-specific and remain documented on each adapter page.
 
 - [Pydantic AI](pydantic-ai.md)
 - [LangChain](langchain.md)
-- [DSPy](dspy.md)
+
+The former [DSPy runtime adapter](dspy.md) is an unmaintained external package.
+GEPA still uses DSPy internally and works with the selected runtime adapter.
 
 **Agent Harnesses**
 

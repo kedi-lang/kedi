@@ -187,7 +187,7 @@ def _run_notebook_command(arguments: list[str]) -> int:
 )
 @click.option(
     "--adapter",
-    type=click.Choice(["pydantic", "dspy", "langchain", "claude", "codex", "acp"]),
+    type=click.Choice(["pydantic", "langchain", "claude", "codex", "acp"]),
     envvar="KEDI_ADAPTER",
     default="pydantic",
     help="Backend adapter for template execution",

@@ -191,6 +191,6 @@ token cancels its registered runs; redirecting one Kedi task uses run-local
 cancellation and does not cancel siblings that share the caller's token.
 
 These adapters expose the same public tools, receipts, ownership checks, and
-terminal waits. A2A, ACP, and DSPy reject live input as unsupported. Pydantic AI
+terminal waits. A2A and ACP reject live input as unsupported. Pydantic AI
 versions without native enqueue support also reject it. No adapter promises
 that interrupting work reverses already completed host effects.

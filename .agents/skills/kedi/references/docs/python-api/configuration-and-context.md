@@ -87,7 +87,6 @@ Use `adapter=` for frameworks:
 
 ```python
 kedi.configure(adapter="pydantic")
-kedi.configure(adapter="dspy")
 kedi.configure(adapter="langchain")
 ```
 

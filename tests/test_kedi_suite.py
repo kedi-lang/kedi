@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.cli import main as cli_main
 from kedi.lang import compile_program, parse_program
 from kedi.utils import parse_args
@@ -18,12 +18,9 @@ _SCOPING_KEDI = _FILES_DIR / "scoping.kedi"
 _WORD_CHAIN_KEDI = _FILES_DIR / "word_chain.kedi"
 
 
-def _build_live_adapter() -> DSPyAdapter | PydanticAdapter:
-    adapter_name = os.environ.get("KEDI_ADAPTER", "pydantic").lower()
+def _build_live_adapter() -> PydanticAdapter:
     # The recorded cassettes were captured against this model; keep it so they replay.
     model_name = os.environ.get("MODEL_NAME", os.environ.get("GROQ_MODEL", "groq:qwen/qwen3-32b"))
-    if adapter_name == "dspy":
-        return DSPyAdapter(model=model_name)
     return PydanticAdapter(model=model_name)
 
 

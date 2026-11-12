@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
     from ..output_schema import make_repr
     from ..output_schema import output_field_definition as _output_field_definition
-    from . import a2a, acp, claude, codex, dspy, langchain, lazy, pydantic, webgpu
+    from . import a2a, acp, claude, codex, langchain, lazy, pydantic, webgpu
     from .a2a import A2AAdapter
     from .acp import ACPAdapter
     from .claude import (
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
         _output_json_schema,
     )
     from .codex import CodexAdapter
-    from .dspy import DSPyAdapter
     from .langchain import (
         LangChainAdapter,
         _apply_langchain_effort_settings,
@@ -50,7 +49,6 @@ _EXPORT_MODULES = {
     "A2AAdapter": ".a2a",
     "ACPAdapter": ".acp",
     "CodexAdapter": ".codex",
-    "DSPyAdapter": ".dspy",
     "LazyAdapter": ".lazy",
     **dict.fromkeys(("BrowserModelBridge", "WebGPUAdapter"), ".webgpu"),
     **dict.fromkeys(
@@ -86,9 +84,7 @@ _EXPORT_MODULES = {
         ".pydantic",
     ),
 }
-_MODULES = frozenset(
-    {"a2a", "acp", "claude", "codex", "dspy", "langchain", "lazy", "pydantic", "webgpu"}
-)
+_MODULES = frozenset({"a2a", "acp", "claude", "codex", "langchain", "lazy", "pydantic", "webgpu"})
 
 
 def __getattr__(name: str) -> Any:
@@ -110,7 +106,6 @@ __all__ = [
     "BrowserModelBridge",
     "ClaudeAdapter",
     "CodexAdapter",
-    "DSPyAdapter",
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
@@ -136,7 +131,6 @@ __all__ = [
     "acp",
     "claude",
     "codex",
-    "dspy",
     "langchain",
     "lazy",
     "make_repr",

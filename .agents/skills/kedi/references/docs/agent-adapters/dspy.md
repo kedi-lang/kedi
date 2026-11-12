@@ -1,76 +1,46 @@
-# DSPy
+<span id="dspy"></span>
 
-## Installation
+# Archived DSPy Runtime Adapter
 
-DSPy is an optional integration:
+The DSPy runtime adapter is no longer built into Kedi. Its implementation and
+adapter-specific tests are preserved in the unmaintained
+[kedi-lang/dspy-adapter](https://github.com/kedi-lang/dspy-adapter) repository.
+
+Use Pydantic AI or LangChain for maintained framework integration. The
+`dspy` runtime shortname is no longer accepted by `> adapter:`, Python
+`adapter=`, or the CLI.
+
+<span id="installation"></span>
+<span id="language-models"></span>
+<span id="signatures-and-structured-outputs"></span>
+<span id="react-tool-calls"></span>
+<span id="blocking-subagents"></span>
+<span id="reasoning-effort-and-settings"></span>
+<span id="stdio-mcp"></span>
+<span id="current-capability-limits"></span>
+
+## Existing DSPy Applications
+
+The external package is installed from GitHub and imported separately:
 
 ```bash
-uv add 'kedi[dspy]'
+python -m pip install "git+https://github.com/kedi-lang/dspy-adapter.git"
 ```
 
-A model is required; DSPy has no model-less Kedi default.
+It exports `kedi_dspy_adapter.DSPyAdapter`. Pass an adapter object through
+`kedi.context(adapter=...)` or `compile_program(..., adapter=...)` rather than
+using the removed built-in shortname. See the external repository for its
+tested Python example, compatibility requirements, and original limitations.
 
-## Language Models
+DSPy-only `> settings:` keys such as `model_type`, `cache`, `num_retries`, and
+`provider` are no longer accepted in Kedi source. Shared settings such as
+`temperature` and `max_tokens` remain available on the backends that support them.
 
-```kedi
-> adapter: dspy
-> model: openai/gpt-6-luna
-```
+<span id="gepa-integration"></span>
 
-Model names normalize to LiteLLM form. The adapter establishes a baseline
-`dspy.LM`, then uses `dspy.context` for lexical model/profile overrides.
+## GEPA Is Unchanged
 
-## Reasoning Effort and Settings
-
-Supported settings are `model_type`, `temperature`, `max_tokens`, `cache`,
-`callbacks`, `num_retries`, `provider`, `finetuning_model`, `launch_kwargs`,
-`train_kwargs`, `use_developer_role`, and `reasoning_effort`.
-
-`> effort:` becomes `reasoning_effort`. Kedi's adapter defaults DSPy LM caching
-to false unless explicitly configured.
-
-## Signatures and Structured Outputs
-
-Kedi output fields become a dynamic DSPy `Signature` with `OutputField`
-entries. Active system instructions become signature instructions.
-
-```kedi
-> adapter: dspy
->> <text> identifies [name] with score [score: float].
-```
-
-Reasoning-model thinking wrappers are stripped before DSPy's structured marker
-parser sees them; raw traces remain available on the internal LM for debugging.
-
-## ReAct Tool Calls
-
-Without tools, Kedi uses `dspy.Predict`. With scoped tools, it uses
-`dspy.ReAct`. Kedi procedure/Python tools are converted to `dspy.Tool` and
-wrapped with approval enforcement before child execution.
-
-## Stdio MCP
-
-DSPy MCP support is **stdio only**. Kedi opens each server, initializes a client
-session, lists tools, converts them with `dspy.Tool.from_mcp_tool`, and runs
-ReAct over local plus MCP tools. SSE or HTTP declarations raise
-`NotImplementedError`.
-
-## Blocking Subagents
-
-DSPy supports foreground child delegation and structured child results. It
-does not support background subagents or native conversation resume. Continued
-turns use Kedi's bounded transcript mechanism.
-
-## GEPA Integration
-
-GEPA is DSPy-backed but distinct from selecting the DSPy runtime adapter.
-`--optimizer gepa` configures optimizer and reflection LMs, converts optimize
-spans to DSPy modules, and evaluates them through the Kedi metric bridge.
-
-## Current Capability Limits
-
-- MCP is stdio-only.
-- Subagents are blocking-only.
-- Approval is enforced on Kedi-projected tools, not through a separate native
-  DSPy approval protocol.
-- Provider-specific settings outside the supported key set are filtered.
+`kedi[dspy]` still installs DSPy for [GEPA optimization](../evals-and-optimization/gepa.md).
+GEPA's DSPy modules, optimizer LM, and reflection LM remain in Kedi and do not
+depend on the external runtime adapter. Calls outside an optimized span use
+the selected runtime `--adapter` and `--adapter-model`.

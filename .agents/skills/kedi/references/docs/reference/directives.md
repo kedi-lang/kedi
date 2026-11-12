@@ -4,7 +4,7 @@
 
 | Directive | Scope and contract |
 | --- | --- |
-| `> adapter: pydantic` | Select framework adapter: `pydantic`, `dspy`, or `langchain` |
+| `> adapter: pydantic` | Select framework adapter: `pydantic` or `langchain` |
 | `> agent: codex` | Select harness: `claude`, `codex`, `acp`, or `a2a` |
 | `> agent: acp:` | Select ACP and bind its explicit stdio `command` |
 | `> agent: a2a:` | Select a remote A2A endpoint, auth reference, and transport timeouts |

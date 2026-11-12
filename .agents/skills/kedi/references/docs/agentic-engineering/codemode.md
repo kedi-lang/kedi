@@ -13,7 +13,7 @@ as a promise that every task becomes cheaper.
 CodeMode is disabled by default and implemented for Pydantic AI, LangChain,
 Claude Agent SDK, and Codex App Server. All four adapters expose the same three
 controls and use the same catalog, Monty subset, limits, approval composition,
-and artifact boundary. DSPy intentionally remains unsupported.
+and artifact boundary.
 
 ## Enable CodeMode
 

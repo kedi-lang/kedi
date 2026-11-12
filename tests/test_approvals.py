@@ -424,7 +424,7 @@ def test_run_source_cli_denies_risky_tools_without_an_explicit_policy(
     )
 
     with pytest.raises(ToolApprovalDenied, match="interactive CLI approval requires a TTY"):
-        app_module.run_source_cli(source, adapter="dspy", model=None)
+        app_module.run_source_cli(source, adapter="pydantic", model=None)
 
 
 def test_run_source_cli_explicit_allow_overrides_the_cli_default(
@@ -444,7 +444,7 @@ def test_run_source_cli_explicit_allow_overrides_the_cli_default(
         lambda _adapter, _model: _ToolCallingAdapter(),
     )
 
-    assert app_module.run_source_cli(source, adapter="dspy", model=None) == (0, "safe.txt")
+    assert app_module.run_source_cli(source, adapter="pydantic", model=None) == (0, "safe.txt")
 
 
 def test_compiler_default_profile_reaches_top_level_and_procedure_tool_approval() -> None:

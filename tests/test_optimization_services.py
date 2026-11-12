@@ -29,7 +29,6 @@ from kedi.optimization.services.gepa_metric_wrapper import GEPAMetricWrapper
 from kedi.optimization.services.program_loader import (
     load_program_with_optimized_prompts,
 )
-from kedi.optimization.services.type_handler import StructuredTypeHandler
 from kedi.optimization.utils import extract_output_fields
 from tests.optimization_helpers import parse_validation_program
 
@@ -687,10 +686,10 @@ def test_program_loader_debug_output_with_stale_optimized_prompts() -> None:
         assert "AFTER injection" not in output
 
 
-# ==================== StructuredTypeHandler Tests ====================
+# ==================== DSPy Signature Tests ====================
 
 
-def test_type_handler_simple_signature():
+def test_dspy_module_builder_simple_signature():
     """Test creating simple DSPy signature."""
     src = """
 @test(x: int) -> int:
@@ -699,48 +698,48 @@ def test_type_handler_simple_signature():
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
 
-    handler = StructuredTypeHandler(rt)
+    builder = DSPyModuleBuilder(rt)
 
     inputs = ["x"]
     outputs = [("result", "int")]
 
-    signature = handler.create_dspy_signature_sync(inputs, outputs, use_string_signature=True)
+    signature = builder._create_signature(inputs, outputs, {})
 
-    assert isinstance(signature, str)
-    assert "x" in signature
-    assert "result" in signature
+    assert issubclass(signature, dspy.Signature)
+    assert "x" in signature.input_fields
+    assert signature.output_fields["result"].annotation is int
 
 
-def test_type_handler_multi_output():
+def test_dspy_module_builder_multi_output():
     """Test signature with multiple outputs."""
     src = "@test(x: int) -> int:\n  = `x * 2`"
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
 
-    handler = StructuredTypeHandler(rt)
+    builder = DSPyModuleBuilder(rt)
 
     inputs = ["x"]
     outputs = [("result1", "int"), ("result2", "str")]
 
-    signature = handler.create_dspy_signature_sync(inputs, outputs, use_string_signature=True)
+    signature = builder._create_signature(inputs, outputs, {})
 
-    assert "result1" in signature
-    assert "result2" in signature
+    assert signature.output_fields["result1"].annotation is int
+    assert signature.output_fields["result2"].annotation is str
 
 
-def test_type_handler_sync_signature_works_inside_running_loop():
+def test_dspy_module_builder_signature_works_inside_running_loop():
     src = "@test(x: int) -> int:\n  = `x * 2`"
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    handler = StructuredTypeHandler(rt)
+    builder = DSPyModuleBuilder(rt)
 
-    async def run() -> str:
-        return handler.create_dspy_signature_sync(["x"], [("result", "int")])
+    async def run() -> type[dspy.Signature]:
+        return builder._create_signature(["x"], [("result", "int")], {})
 
     signature = asyncio.run(run())
 
-    assert "x" in signature
-    assert "result" in signature
+    assert "x" in signature.input_fields
+    assert signature.output_fields["result"].annotation is int
 
 
 # ==================== DSPy-Dependent Service Tests ====================

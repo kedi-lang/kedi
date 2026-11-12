@@ -45,7 +45,6 @@ import kedi.api.configuration as api_configuration_module
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
 from kedi.agent_adapter import AdapterCapabilities, WebGPUAdapter
 from kedi.agent_adapter import ClaudeAdapter as ExportedClaudeAdapter
-from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import adapters as adapters_module
@@ -53,13 +52,10 @@ from kedi.agent_adapter.adapters import (
     ACPAdapter,
     ClaudeAdapter,
     CodexAdapter,
-    DSPyAdapter,
     LangChainAdapter,
     PydanticAdapter,
     make_repr,
 )
-from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
-from kedi.agent_adapter.adapters.dspy_tools import dspy_sync_tool_function
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.codemode import CodeModeExecutionError, CodeModeHydrationError
 from kedi.agent_adapter.conversation import AdapterConversationContext
@@ -166,7 +162,6 @@ def test_artifact_capabilities_require_structured_tool_adapters() -> None:
     artifact_adapters = (
         PydanticAdapter,
         LangChainAdapter,
-        DSPyAdapter,
         ClaudeAdapter,
         CodexAdapter,
         WebGPUAdapter,
@@ -194,7 +189,7 @@ def test_builtin_capability_composition_support_matches_native_mapping() -> None
     assert PydanticAdapter.capabilities.supports("deferred_tools")
     assert LangChainAdapter.capabilities.supports("capabilities")
     assert not LangChainAdapter.capabilities.supports("deferred_tools")
-    for adapter in (DSPyAdapter, ClaudeAdapter, CodexAdapter, WebGPUAdapter):
+    for adapter in (ClaudeAdapter, CodexAdapter, WebGPUAdapter):
         assert not adapter.capabilities.supports("capabilities")
         assert not adapter.capabilities.supports("deferred_tools")
 
@@ -268,7 +263,6 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     expected = [
         (PydanticAdapter, ExportedPydanticAdapter, "pydantic"),
         (LangChainAdapter, ExportedLangChainAdapter, "langchain"),
-        (DSPyAdapter, ExportedDSPyAdapter, "dspy"),
     ]
     for adapter_cls, exported_cls, shortname in expected:
         assert adapter_cls is exported_cls
@@ -295,16 +289,12 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert CodexAdapter.capabilities.supports("background_subagents")
     assert LangChainAdapter.capabilities.supports("subagents")
     assert LangChainAdapter.capabilities.supports("background_subagents")
-    assert DSPyAdapter.capabilities.supports("subagents")
-    assert not DSPyAdapter.capabilities.supports("background_subagents")
     assert LangChainAdapter.capabilities.supports("native_approvals")
     assert LangChainAdapter.capabilities.supports("native_approval_handler")
     for adapter in (PydanticAdapter, LangChainAdapter, ClaudeAdapter, CodexAdapter, ACPAdapter):
         assert adapter.capabilities.supports("stream_events")
     for adapter in (PydanticAdapter, LangChainAdapter, ClaudeAdapter, CodexAdapter):
         assert adapter.capabilities.supports("codemode")
-    assert not DSPyAdapter.capabilities.supports("codemode")
-    assert not DSPyAdapter.capabilities.supports("stream_events")
     assert not WebGPUAdapter.capabilities.supports("stream_events")
 
 
@@ -313,7 +303,6 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     [
         PydanticAdapter,
         LangChainAdapter,
-        DSPyAdapter,
         ClaudeAdapter,
         CodexAdapter,
         WebGPUAdapter,
@@ -3637,52 +3626,6 @@ def test_pydantic_adapter_includes_active_profile_mcp_toolsets(
     assert adapter._toolsets_for_run() == ["approval-required-mcp-toolset"]
 
 
-def test_dspy_adapter_configures_lm_and_builds_signature(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    lm_calls: list[dict[str, Any]] = []
-    configure_calls: list[dict[str, Any]] = []
-
-    class FakeTSLM:
-        """Stand-in for ThinkingStrippingLM that records init args."""
-
-        def __init__(self, **kwargs: Any) -> None:
-            lm_calls.append(kwargs)
-
-    class FakeSettings:
-        def configure(self, **kwargs: Any) -> None:
-            configure_calls.append(kwargs)
-
-    monkeypatch.setattr(dspy_adapter_module, "ThinkingStrippingLM", FakeTSLM)
-    monkeypatch.setattr(dspy_adapter_module.dspy, "settings", FakeSettings())
-
-    DSPyAdapter(model="openai:gpt-4o-mini", max_tokens=12, temperature=0.25, provider=None)
-
-    assert lm_calls == [
-        {
-            "model": "openai/gpt-4o-mini",
-            "provider": None,
-            "max_tokens": 12,
-            "temperature": 0.25,
-            "cache": False,
-        }
-    ]
-    assert configure_calls and isinstance(configure_calls[0]["lm"], FakeTSLM)
-
-    signature = DSPyAdapter.type_builder({"answer": int})
-    assert issubclass(signature, dspy_adapter_module.dspy.Signature)
-    typed_signature = DSPyAdapter.output_type_builder(bool)
-    assert typed_signature.model_fields["result"].annotation is bool
-
-    documented = DSPyAdapter.type_builder({"answer": Annotated[str, "Documented answer"]})
-    answer_field = documented.model_fields["answer"]
-    assert answer_field.annotation is str
-    assert answer_field.json_schema_extra["desc"] == "Documented answer"
-
-    with pytest.raises(ValueError, match="Output schema must be provided"):
-        DSPyAdapter.type_builder({})
-
-
 @pytest.mark.parametrize(
     "builder",
     [
@@ -3704,504 +3647,6 @@ def test_structured_output_builders_only_use_explicit_annotated_descriptions(
     assert "description" not in undocumented_output_type.model_json_schema()["properties"]["answer"]
 
 
-def test_dspy_adapter_reuses_existing_global_lm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeSettings:
-        lm = object()
-
-        def configure(self, **_kwargs: Any) -> None:
-            raise AssertionError("existing DSPy baseline must not be reconfigured")
-
-    monkeypatch.setattr(dspy_adapter_module.dspy, "settings", FakeSettings())
-
-    DSPyAdapter(model="openai:gpt-4o-mini")
-
-
-def test_dspy_adapter_filters_lm_settings() -> None:
-    adapter = object.__new__(DSPyAdapter)
-    adapter._lm_model = "openai/gpt-4o-mini"
-    adapter._lm_provider = None
-    adapter._lm_max_tokens = 4000
-    adapter._lm_temperature = 1.0
-    adapter._lm_extra_kwargs = {}
-    adapter._lm_settings = {"max_tokens": 64}
-
-    provider, kwargs = adapter._lm_kwargs(
-        {
-            "temperature": 0.2,
-            "num_retries": 2,
-            "parallel_tool_calls": False,
-        }
-    )
-
-    assert provider is None
-    assert kwargs == {
-        "max_tokens": 64,
-        "temperature": 0.2,
-        "cache": False,
-        "num_retries": 2,
-    }
-
-
-def test_dspy_adapter_produce_and_sync_use_predict(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeSignature:
-        def __init__(self) -> None:
-            self.instructions: str | None = None
-
-        def with_instructions(self, instructions: str | None) -> "FakeSignature":
-            self.instructions = instructions
-            return self
-
-    class FakePredict:
-        def __init__(self, signature: FakeSignature) -> None:
-            self.signature = signature
-
-        def __call__(self, **kwargs: Any) -> dict[str, Any] | SimpleNamespace:
-            if kwargs["user_prompt"] == "raw prompt":
-                return SimpleNamespace(response="raw response")
-            return {"instructions": self.signature.instructions, **kwargs}
-
-    def fake_type_builder(output_schema: dict[str, type], **_: Any) -> FakeSignature:
-        assert output_schema == {"answer": str}
-        return FakeSignature()
-
-    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
-    monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
-    monkeypatch.setattr(DSPyAdapter, "invoke_signature", staticmethod(FakeSignature))
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._lm_model = None
-    _set_profile_stack(adapter)
-    result = asyncio.run(
-        adapter.produce(
-            "prompt",
-            {"answer": str},
-            user_prompt="ignored",
-            instructions="use context",
-            extra=1,
-        )
-    )
-
-    assert result == {
-        "instructions": "use context",
-        "extra": 1,
-        "user_prompt": "prompt",
-    }
-    assert adapter.produce_sync("prompt", {"answer": str}, instructions=None) == {
-        "instructions": None,
-        "user_prompt": "prompt",
-    }
-    assert adapter.invoke_sync(prompt="raw prompt", user_prompt="ignored") == "raw response"
-    assert asyncio.run(adapter.invoke(prompt="raw prompt")) == "raw response"
-
-    with pytest.raises(ValueError, match="Output spec must be provided"):
-        asyncio.run(adapter.produce("prompt", {}))
-
-
-def test_dspy_adapter_supports_prebuilt_output_types(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Review(BaseModel):
-        accepted: bool
-        reason: str
-
-    class FakeSignature:
-        def with_instructions(self, instructions: str | None) -> "FakeSignature":
-            assert instructions == "Judge carefully."
-            return self
-
-    class FakePredict:
-        def __init__(self, signature: FakeSignature) -> None:
-            assert isinstance(signature, FakeSignature)
-
-        def __call__(self, **kwargs: Any) -> dict[str, Any]:
-            assert kwargs == {"user_prompt": "Evaluate this proposal."}
-            return {"result": {"accepted": True, "reason": "Safe"}}
-
-    def fake_output_type_builder(output_type: type[Any]) -> FakeSignature:
-        assert output_type is Review
-        return FakeSignature()
-
-    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
-    monkeypatch.setattr(
-        DSPyAdapter,
-        "output_type_builder",
-        staticmethod(fake_output_type_builder),
-    )
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._lm_model = None
-    _set_profile_stack(adapter)
-
-    result = adapter.produce_sync(
-        "Evaluate this proposal.",
-        output_type=Review,
-        instructions="Judge carefully.",
-    )
-
-    assert result == Review(accepted=True, reason="Safe")
-
-
-def test_dspy_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeSignature:
-        def __init__(self) -> None:
-            self.instructions: str | None = None
-
-        def with_instructions(self, instructions: str | None) -> "FakeSignature":
-            self.instructions = instructions
-            return self
-
-    prediction_result: Any = {
-        "task_summary": "done",
-        "final_result": {"value": 13},
-    }
-
-    class FakePredict:
-        def __init__(self, signature: FakeSignature) -> None:
-            self.signature = signature
-
-        def __call__(self, **kwargs: Any) -> dict[str, Any]:
-            assert self.signature.instructions == "child system"
-            assert kwargs["user_prompt"] == "delegate"
-            return {"result": prediction_result}
-
-    monkeypatch.setattr(
-        dspy_adapter_module,
-        "build_dynamic_model",
-        lambda *_args, **_kwargs: FakeSignature(),
-    )
-    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._lm_model = None
-    adapter._tool_scope = ToolScope()
-    adapter._tool_spec_scope = ToolScope()
-    adapter._subagent_failure_policy = "fail_closed"
-    _set_profile_stack(adapter)
-    request = SubagentExecutionRequest(
-        profile=AgentProfile(system="child system", approval=ApprovalPolicy.allow()),
-        tools=(
-            ToolSpec(
-                fn=lambda: "ok",
-                name="lookup",
-                metadata={"kind": "subagent"},
-            ),
-        ),
-        instructions="child system",
-        approval_ceiling=(ApprovalPolicy.allow(),),
-        usage_limits=SubagentUsageLimits(),
-    )
-
-    with adapter.subagent_scope(request):
-        assert tuple(tool.name for tool in adapter.scoped_tool_specs) == ("lookup",)
-    assert adapter.scoped_tools == ()
-    inherited_request = SubagentExecutionRequest(
-        profile=AgentProfile(system="child system"),
-        tools=request.tools,
-        instructions=request.instructions,
-        approval_ceiling=request.approval_ceiling,
-        usage_limits=request.usage_limits,
-    )
-    with adapter.subagent_scope(inherited_request):
-        assert tuple(tool.name for tool in adapter.scoped_tool_specs) == ("lookup",)
-    with adapter.tool_scope(("native",)):
-        assert adapter.scoped_tools == ("native",)
-
-    usages: list[InvocationUsage] = []
-    with observe_invocations(usages.append):
-        result = asyncio.run(
-            adapter.produce_subagent(
-                template="delegate",
-                output_schema={"type": "object"},
-                instructions="child system",
-            )
-        )
-    assert result["final_result"] == {"value": 13}
-    assert usages == [InvocationUsage(requests=1)]
-    assert adapter.telemetry_model_name() is None
-    assert adapter.subagent_run_kwargs(request.usage_limits) == {}
-
-    prediction_result = "bad"
-    with pytest.raises(TypeError, match="must be an object"):
-        asyncio.run(
-            adapter.produce_subagent(
-                template="delegate",
-                output_schema={"type": "object"},
-                instructions="child system",
-            )
-        )
-
-    with pytest.raises(ValueError, match="Unknown subagent failure policy"):
-        DSPyAdapter(
-            model="openai/gpt-4o-mini",
-            subagent_failure_policy=cast(Any, "invalid"),
-        )
-
-
-def test_dspy_subagent_tool_failure_is_recoverable() -> None:
-    async def fail() -> str:
-        raise KediExecutionError("delegation failed")
-
-    wrapped = dspy_adapter_module._dspy_recoverable_subagent_tool(
-        ToolSpec(fn=fail, name="delegate_task", metadata={"kind": "subagent"})
-    )
-    assert asyncio.run(wrapped.fn()) == "delegation failed"
-
-    sync = dspy_adapter_module._dspy_recoverable_subagent_tool(
-        ToolSpec(fn=lambda: "ok", name="delegate_task", metadata={"kind": "subagent"})
-    )
-    assert asyncio.run(sync.fn()) == "ok"
-
-    guarded = dspy_adapter_module._dspy_tool_with_approval_policies(
-        ToolSpec(fn=lambda: "ok", name="delegate_task"),
-        (ApprovalPolicy.allow(),),
-    )
-    assert guarded.fn() == "ok"
-
-
-def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[Any] = []
-
-    @dataclass
-    class FakeStdioServerParameters:
-        command: str
-        args: list[str]
-        env: dict[str, str] | None
-
-    class FakeStdioClient:
-        def __init__(self, params: FakeStdioServerParameters) -> None:
-            self.params = params
-
-        async def __aenter__(self) -> tuple[str, str]:
-            events.append(("stdio", self.params))
-            return "read", "write"
-
-        async def __aexit__(self, *_: object) -> None:
-            events.append("stdio-closed")
-
-    class FakeClientSession:
-        def __init__(self, read: str, write: str) -> None:
-            self.read = read
-            self.write = write
-
-        async def __aenter__(self) -> "FakeClientSession":
-            events.append(("session", self.read, self.write))
-            return self
-
-        async def __aexit__(self, *_: object) -> None:
-            events.append("session-closed")
-
-        async def initialize(self) -> None:
-            events.append("initialized")
-
-        async def list_tools(self) -> SimpleNamespace:
-            return SimpleNamespace(tools=[SimpleNamespace(name="remote_search")])
-
-    mcp_module = ModuleType("mcp")
-    setattr(mcp_module, "ClientSession", FakeClientSession)
-    setattr(mcp_module, "StdioServerParameters", FakeStdioServerParameters)
-    mcp_client_module = ModuleType("mcp.client")
-    mcp_stdio_module = ModuleType("mcp.client.stdio")
-    setattr(mcp_stdio_module, "stdio_client", FakeStdioClient)
-    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
-    monkeypatch.setitem(sys.modules, "mcp.client", mcp_client_module)
-    monkeypatch.setitem(sys.modules, "mcp.client.stdio", mcp_stdio_module)
-
-    class FakeTool:
-        @staticmethod
-        def from_mcp_tool(session: FakeClientSession, tool: SimpleNamespace) -> str:
-            assert isinstance(session, FakeClientSession)
-            return f"mcp:{tool.name}"
-
-    class FakeReAct:
-        def __init__(self, signature: object, tools: list[Any]) -> None:
-            self.signature = signature
-            self.tools = tools
-
-        async def acall(self, **kwargs: Any) -> dict[str, Any]:
-            return {"tools": self.tools, **kwargs}
-
-    monkeypatch.setattr(dspy_adapter_module.dspy, "Tool", FakeTool)
-    monkeypatch.setattr(dspy_adapter_module.dspy, "ReAct", FakeReAct)
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-    _set_profile_stack(
-        adapter,
-        AgentProfile(
-            mcp_servers=(McpServerSpec(command="vsh", args=("run", "--mcp"), env={"A": "B"}),)
-        ),
-    )
-
-    result = asyncio.run(adapter._produce_with_mcp(object(), ["local"], "prompt", {"extra": 1}))
-
-    assert result == {
-        "tools": ["local", "mcp:remote_search"],
-        "extra": 1,
-        "user_prompt": "prompt",
-    }
-    assert events[0][0] == "stdio"
-    assert events[0][1] == FakeStdioServerParameters("vsh", ["run", "--mcp"], {"A": "B"})
-    assert events[1:] == [
-        ("session", "read", "write"),
-        "initialized",
-        "session-closed",
-        "stdio-closed",
-    ]
-
-    async def structured_mcp(
-        _signature: object,
-        _tools: list[Any],
-        _template: str,
-        _kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        return {
-            "result": {
-                "task_summary": "done",
-                "final_result": {"value": 3},
-            }
-        }
-
-    adapter._lm_model = None
-    adapter._subagent_failure_policy = "fail_closed"
-    monkeypatch.setattr(adapter, "_produce_with_mcp", structured_mcp)
-    assert adapter._produce_subagent_sync(
-        "delegate",
-        {"type": "object"},
-        {"instructions": "child system"},
-    ) == {
-        "task_summary": "done",
-        "final_result": {"value": 3},
-    }
-
-
-def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_produce_with_mcp(
-        self: DSPyAdapter,
-        sig: object,
-        tools: list[Any],
-        template: str,
-        kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        if template == "raw":
-            return {"response": "raw mcp"}
-        return {"sig": sig, "tools": tools, "template": template, "kwargs": kwargs}
-
-    class FakeSignature:
-        def with_instructions(self, instructions: str | None) -> str:
-            assert instructions is None
-            return "sig"
-
-    monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(lambda _: FakeSignature()))
-    monkeypatch.setattr(DSPyAdapter, "_produce_with_mcp", fake_produce_with_mcp)
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-    adapter._lm_model = None
-    _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),)))
-
-    result = adapter.produce_sync("prompt", {"answer": str}, user_prompt="ignored", extra=1)
-    raw = asyncio.run(adapter.invoke(prompt="raw"))
-
-    assert result == {
-        "sig": "sig",
-        "tools": [],
-        "template": "prompt",
-        "kwargs": {"extra": 1},
-    }
-    assert raw == "raw mcp"
-
-
-def test_dspy_adapter_mcp_rejects_non_stdio() -> None:
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-    _set_profile_stack(
-        adapter,
-        AgentProfile(mcp_servers=(McpServerSpec(transport="http", url="http://localhost"),)),
-    )
-
-    with pytest.raises(NotImplementedError, match="stdio"):
-        asyncio.run(adapter._produce_with_mcp(object(), [], "prompt", {}))
-
-
-def test_dspy_adapter_mcp_rejects_missing_stdio_command() -> None:
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-    _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(),)))
-
-    with pytest.raises(ValueError, match="stdio transport requires a command"):
-        asyncio.run(adapter._produce_with_mcp(object(), [], "prompt", {}))
-
-
-def test_dspy_adapter_profile_override_rejects_broken_model_profile() -> None:
-    adapter = object.__new__(DSPyAdapter)
-    adapter._lm_model = "openai/gpt-4o-mini"
-    _set_profile_stack(adapter)
-
-    broken_profile = cast(
-        AgentProfile,
-        SimpleNamespace(
-            model=None,
-            effort=None,
-            needs_model_override=lambda _default: True,
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="requires a model override"):
-        with adapter.profile_override(broken_profile):
-            pass
-
-
-def test_dspy_adapter_register_tool_wraps_async_callable() -> None:
-    async def lookup(query: str, limit: int = 3) -> str:
-        """Lookup docs."""
-        return f"{query}:{limit}"
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-
-    adapter.register_tool(python_callable_tool_spec("lookup", lookup))
-
-    tool = adapter.scoped_tools[0]
-    assert getattr(tool, "name") == "lookup"
-    assert getattr(tool, "desc") == "Lookup docs."
-    assert getattr(tool, "args") == {
-        "query": {"type": "string"},
-        "limit": {"default": 3, "type": "integer"},
-    }
-    assert inspect.signature(tool.func) == inspect.signature(lookup)
-    assert tool(query="kedi", limit=2) == "kedi:2"
-
-
-def test_dspy_sync_tool_function_awaits_inside_running_loop() -> None:
-    async def lookup(query: str) -> str:
-        return query.upper()
-
-    wrapped = dspy_sync_tool_function(lookup)
-
-    async def outer() -> str:
-        return wrapped("kedi")
-
-    assert asyncio.run(outer()) == "KEDI"
-
-
-def test_dspy_sync_tool_function_reports_tool_usage() -> None:
-    usages: list[InvocationUsage] = []
-    wrapped = dspy_sync_tool_function(lambda value: value.upper())
-
-    with observe_invocations(usages.append):
-        assert wrapped("kedi") == "KEDI"
-
-    assert usages == [InvocationUsage(tool_calls=1)]
-
-
 def test_nested_invocation_observers_compose_and_restore() -> None:
     outer: list[InvocationUsage] = []
     inner: list[InvocationUsage] = []
@@ -4215,73 +3660,6 @@ def test_nested_invocation_observers_compose_and_restore() -> None:
 
     assert inner == [nested_usage]
     assert outer == [nested_usage, restored_usage]
-
-
-def test_dspy_invocation_usage_reads_tracked_tokens() -> None:
-    class Prediction:
-        @staticmethod
-        def get_lm_usage() -> dict[str, Any]:
-            return {
-                "invalid": "ignored",
-                "first": {
-                    "prompt_tokens": 3,
-                    "completion_tokens": 5,
-                    "total_tokens": 8,
-                },
-                "second": {"input_tokens": 2, "output_tokens": 4},
-            }
-
-    usages: list[InvocationUsage] = []
-    with observe_invocations(usages.append):
-        dspy_adapter_module._report_dspy_invocation(Prediction())
-
-    assert usages == [
-        InvocationUsage(
-            requests=1,
-            input_tokens=5,
-            output_tokens=9,
-            total_tokens=14,
-        )
-    ]
-
-
-def test_dspy_adapter_register_tool_wraps_async_callable_instance() -> None:
-    class WebFetchLocalTool:
-        """Callable object doc should not replace __call__ metadata."""
-
-        async def __call__(self, url: str, timeout: int = 10) -> str:
-            """Fetch a URL."""
-            return f"{url}:{timeout}"
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-
-    adapter.register_tool(python_callable_tool_spec("web_fetch", WebFetchLocalTool()))
-
-    tool = adapter.scoped_tools[0]
-    assert getattr(tool, "name") == "web_fetch"
-    assert getattr(tool, "desc") == "Fetch a URL."
-    assert getattr(tool, "args") == {
-        "url": {"type": "string"},
-        "timeout": {"default": 10, "type": "integer"},
-    }
-    assert inspect.signature(tool.func) == inspect.signature(WebFetchLocalTool().__call__)
-    assert tool(url="https://example.com", timeout=2) == "https://example.com:2"
-
-
-def test_dspy_adapter_register_tool_wraps_sync_callable_idempotently() -> None:
-    def lookup(query: str) -> str:
-        """Lookup docs."""
-        return query.upper()
-
-    adapter = object.__new__(DSPyAdapter)
-    adapter._tool_scope = ToolScope()
-
-    adapter.register_tool(python_callable_tool_spec("lookup", lookup))
-    tool = adapter.scoped_tools[0]
-
-    assert tool(query="kedi") == "KEDI"
-    assert dspy_sync_tool_function(tool.func) is tool.func
 
 
 def test_pydantic_adapter_registers_kedi_and_python_tools() -> None:

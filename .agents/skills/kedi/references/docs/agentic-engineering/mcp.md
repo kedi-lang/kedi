@@ -102,8 +102,7 @@ configuration.
 
 ## Adapter Support
 
-Pydantic and LangChain map specs through their MCP integrations. DSPy currently
-supports the stdio path using `dspy.Tool.from_mcp_tool` and `ReAct.acall`.
+Pydantic and LangChain map specs through their MCP integrations.
 Harness and provider support varies.
 
 The LSP emits capability diagnostics when the selected adapter cannot attach
