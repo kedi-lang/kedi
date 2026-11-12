@@ -1,4 +1,4 @@
-"""LLM wrapper that strips model thinking blocks from DSPy output."""
+"""DSPy LM for GEPA that strips model thinking blocks from its output."""
 
 from __future__ import annotations
 

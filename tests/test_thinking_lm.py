@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-from kedi.agent_adapter.llm_wrapper import ThinkingStrippingLM, _strip_thinking
+from kedi.optimization.thinking_lm import ThinkingStrippingLM, _strip_thinking
 
 
 class TestStripThinking:

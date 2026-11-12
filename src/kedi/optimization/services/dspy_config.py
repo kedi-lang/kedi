@@ -8,10 +8,10 @@ import dspy
 from dspy import LM
 from dspy.adapters.json_adapter import JSONAdapter
 
-from ...agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ...model_normalization import normalize_for_litellm
 from ...reporter import CliReporter, Reporter
 from ..config import OptimizerConfig
+from ..thinking_lm import ThinkingStrippingLM
 
 
 class DSPyConfigurationService:
