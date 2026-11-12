@@ -9,11 +9,13 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any, cast
 
 from kedi.agent_adapter.request.media import (
     MediaAttachment,
     check_media_support,
+    download_media,
     media_provider,
     unsent_attachments,
 )
@@ -25,7 +27,7 @@ _INLINE_FILE = re.compile(
 )
 
 
-def user_prompt(
+async def user_prompt(
     prompt: str,
     attachments: Sequence[MediaAttachment],
     *,
@@ -38,11 +40,16 @@ def user_prompt(
     attachments it already holds under the same name and content are not sent again.
     """
 
-    check_media_support(
-        attachments,
-        provider=media_provider(getattr(model, "system", None)),
-        model=getattr(model, "model_name", None),
-    )
+    provider = media_provider(getattr(model, "system", None))
+    check_media_support(attachments, provider=provider, model=getattr(model, "model_name", None))
+    if provider == "typesafe":
+        # Jev reads image data, so Kedi downloads image URLs for it.
+        attachments = [
+            replace(item, media=await download_media(item.media))
+            if item.media.url is not None
+            else item
+            for item in attachments
+        ]
     pending = unsent_attachments(
         attachments, None if history is None else sent_attachments(history)
     )

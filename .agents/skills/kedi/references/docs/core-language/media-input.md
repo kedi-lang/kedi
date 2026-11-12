@@ -104,6 +104,11 @@ The other adapters (Claude Agent SDK, Codex, WebGPU, ACP and A2A) do not
 accept media: a prompt with media fails before model I/O, and the editor reports
 it statically. See the [capability matrix](../reference/capability-matrix.md).
 
+Decision models read less. Jev (`typesafe/...`) reads images and text documents:
+images reach TypeSafe as image assets, and Kedi downloads image URLs first. Laya
+reads text documents only. Kedi rejects any other attachment for them before the
+call.
+
 URLs go to the provider as URLs when the model accepts them. Otherwise Kedi
 downloads them over `http(s)` only, with private and cloud-metadata addresses
 blocked. YouTube URLs are never downloaded, and only Gemini reads them.

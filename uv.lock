@@ -2,17 +2,19 @@ version = 1
 revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
+    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
@@ -103,14 +105,14 @@ name = "aiohttp"
 version = "3.14.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohappyeyeballs" },
-    { name = "aiosignal" },
-    { name = "attrs" },
-    { name = "frozenlist" },
-    { name = "multidict" },
-    { name = "propcache" },
+    { name = "aiohappyeyeballs", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "aiosignal", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "attrs", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "frozenlist", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "multidict", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "propcache", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-    { name = "yarl" },
+    { name = "yarl", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6c/4c/bdccd81e9ee225b69c60e7766c9a5b05364f118f4d383713b89a682d772d/aiohttp-3.14.5.tar.gz", hash = "sha256:5558a7f5a05af9ecf744af91e5baefc436f93c9333e656c27ec253f9a6bbe178", size = 8078052, upload-time = "2026-10-11T01:05:12.408Z" }
 wheels = [
@@ -289,7 +291,7 @@ name = "aiosignal"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "frozenlist" },
+    { name = "frozenlist", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
@@ -329,8 +331,7 @@ name = "anthropic"
 version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "anyio" },
     { name = "docstring-parser" },
     { name = "httpx2" },
     { name = "jiter" },
@@ -346,48 +347,11 @@ wheels = [
 
 [[package]]
 name = "anyio"
-version = "4.13.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-]
-dependencies = [
-    { name = "idna", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "typing-extensions", marker = "(python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc", size = 231622, upload-time = "2026-03-24T12:59:09.671Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/42/e921fccf5015463e32a3cf6ee7f980a6ed0f395ceeaa45060b61d86486c2/anyio-4.13.0-py3-none-any.whl", hash = "sha256:08b310f9e24a9594186fd75b4f73f4a4152069e3853f1ed8bfbf58369f4ad708", size = 114353, upload-time = "2026-03-24T12:59:08.246Z" },
-]
-
-[[package]]
-name = "anyio"
 version = "4.16.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')",
-    "python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev')",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')",
-]
 dependencies = [
-    { name = "idna", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version >= '3.12' and python_full_version < '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "idna" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a1/98/7e457a3b014976887a050561955c0b76e1e7e2d6e27b78ecef2ef80518f2/anyio-4.16.0.tar.gz", hash = "sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb", size = 310971, upload-time = "2026-11-01T11:20:07.282Z" }
 wheels = [
@@ -466,50 +430,12 @@ wheels = [
 
 [[package]]
 name = "boto3"
-version = "1.43.69"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-]
-dependencies = [
-    { name = "botocore", version = "1.43.69", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "jmespath", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "s3transfer", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/45/8f/315e908f5abaab5deb77196117f66c1badc9093b03dc152b0b8231b0112b/boto3-1.43.69.tar.gz", hash = "sha256:76297a0b415849c63575ae08a4f1661b2dc8ee0100f104b86f98aa69b47fa2c7", size = 112666, upload-time = "2026-08-11T19:24:26.281Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/57/67ebb743ab0556c14db656e91e49024f3e1b0585f1a15c2d025176fb3c1e/boto3-1.43.69-py3-none-any.whl", hash = "sha256:4eb494d05b2bd08a7eee61b8ac4c34745c99e9bbce435c91f8d15d372dd8c2db", size = 140024, upload-time = "2026-08-11T19:24:25.022Z" },
-]
-
-[[package]]
-name = "boto3"
 version = "1.44.1"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')",
-    "python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev')",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')",
-]
 dependencies = [
-    { name = "botocore", version = "1.44.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "jmespath", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "s3transfer", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "botocore" },
+    { name = "jmespath" },
+    { name = "s3transfer" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/91/02/d46523af0a933c35604e2bbb33e4ca8f69a00f9990af6d6b29ed84db64aa/boto3-1.44.1.tar.gz", hash = "sha256:c81dfdaab894cbcba78aa3773fe3fb27a13b576f49ff5552b91190072fc7dac0", size = 112740, upload-time = "2026-11-11T21:11:18.611Z" }
 wheels = [
@@ -518,50 +444,12 @@ wheels = [
 
 [[package]]
 name = "botocore"
-version = "1.43.69"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-]
-dependencies = [
-    { name = "jmespath", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "python-dateutil", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "urllib3", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/84/da/726b23443ebc77078387fbf330ef7240bc6a96553e566e45a647cd8f714c/botocore-1.43.69.tar.gz", hash = "sha256:5caa46b740d9a886137146ffbb69edb691f702bfe74c64e85621947ae00181fd", size = 15911844, upload-time = "2026-08-11T19:24:20.778Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/ef/a1effbe4ffabadc38ea9425c54601262eaac8cbb5b6089f8f76536d3c8b1/botocore-1.43.69-py3-none-any.whl", hash = "sha256:b1f0e01c53d6b84ee9c184ebf3636c3b3aef85e0ae8498c74afb8734ff224f87", size = 15596589, upload-time = "2026-08-11T19:24:18.283Z" },
-]
-
-[[package]]
-name = "botocore"
 version = "1.44.1"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')",
-    "python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev')",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')",
-]
 dependencies = [
-    { name = "jmespath", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "python-dateutil", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "urllib3", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "jmespath" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/61/07918ec258ab7131dd601cb1aaffcd7fa008fa8bb0143fd195ecc4b4435d/botocore-1.44.1.tar.gz", hash = "sha256:e71f6249be2a7324899ba81c5958ac1809a78498ea2c8f60e00fc0e62262ab83", size = 16596239, upload-time = "2026-11-11T21:11:12.562Z" }
 wheels = [
@@ -869,8 +757,7 @@ name = "claude-agent-sdk"
 version = "0.2.178"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "sniffio" },
@@ -1343,16 +1230,14 @@ name = "dspy"
 version = "3.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "cachetools" },
     { name = "cloudpickle" },
     { name = "diskcache" },
     { name = "gepa", marker = "python_full_version < '3.15'" },
     { name = "json-repair" },
     { name = "jsonschema" },
-    { name = "litellm", version = "1.83.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version == '3.14.*' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "litellm", version = "1.109.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version >= '3.12' and python_full_version < '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "litellm", marker = "python_full_version < '3.15'" },
     { name = "openai" },
     { name = "orjson" },
     { name = "pydantic" },
@@ -1683,8 +1568,7 @@ name = "google-genai"
 version = "2.31.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "anyio" },
     { name = "distro" },
     { name = "google-auth", extra = ["requests"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
     { name = "httpx" },
@@ -1803,8 +1687,7 @@ name = "groq"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "distro" },
     { name = "httpx" },
     { name = "pydantic" },
@@ -1830,8 +1713,8 @@ name = "h2"
 version = "4.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "hpack", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "hyperframe", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "hpack", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "hyperframe", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e7/85/7c366e69d84c17bb778fe41419e1fbcce3033d5b7ce29bbffff0a98b859f/h2-4.4.1.tar.gz", hash = "sha256:4e866ffb1a869ae14dd9b5e6beb5c24a13da0495ad72b65925ded182521c1516", size = 2157281, upload-time = "2026-08-03T11:45:09.509Z" }
 wheels = [
@@ -1850,7 +1733,7 @@ dependencies = [
     { name = "httpx", marker = "python_full_version >= '3.12'" },
     { name = "jinja2", marker = "python_full_version >= '3.12'" },
     { name = "jsonschema", marker = "python_full_version >= '3.12'" },
-    { name = "litellm", version = "1.109.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "litellm", marker = "python_full_version >= '3.12'" },
     { name = "packaging", marker = "python_full_version >= '3.12'" },
     { name = "pathspec", marker = "python_full_version >= '3.12'" },
     { name = "platformdirs", marker = "python_full_version >= '3.12'" },
@@ -1950,8 +1833,7 @@ name = "httpx"
 version = "0.28.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "certifi" },
     { name = "httpcore" },
     { name = "idna" },
@@ -1963,7 +1845,7 @@ wheels = [
 
 [package.optional-dependencies]
 http2 = [
-    { name = "h2", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "h2", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 
 [[package]]
@@ -1980,7 +1862,7 @@ name = "httpx-ws"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "anyio", marker = "python_full_version >= '3.12'" },
     { name = "httpcore", marker = "python_full_version >= '3.12'" },
     { name = "httpx", marker = "python_full_version >= '3.12'" },
     { name = "wsproto", marker = "python_full_version >= '3.12'" },
@@ -1995,8 +1877,7 @@ name = "httpx2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.14' and sys_platform != 'emscripten' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.14' and sys_platform != 'emscripten') or (sys_platform != 'emscripten' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "anyio", marker = "sys_platform != 'emscripten'" },
     { name = "httpcore2", marker = "sys_platform != 'emscripten'" },
     { name = "httpx2-jsfetch", marker = "python_full_version >= '3.12' and sys_platform == 'emscripten'" },
     { name = "idna" },
@@ -2022,15 +1903,15 @@ name = "huggingface-hub"
 version = "1.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
-    { name = "httpx" },
-    { name = "packaging" },
-    { name = "pyyaml" },
-    { name = "tqdm" },
-    { name = "typer" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "fsspec", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "hf-xet", marker = "(python_full_version < '3.15' and platform_machine == 'AMD64') or (python_full_version < '3.15' and platform_machine == 'aarch64') or (python_full_version < '3.15' and platform_machine == 'amd64') or (python_full_version < '3.15' and platform_machine == 'arm64') or (python_full_version < '3.15' and platform_machine == 'x86_64') or (platform_machine == 'AMD64' and extra == 'extra-4-kedi-terminal-bench') or (platform_machine == 'AMD64' and extra == 'group-4-kedi-dev') or (platform_machine == 'aarch64' and extra == 'extra-4-kedi-terminal-bench') or (platform_machine == 'aarch64' and extra == 'group-4-kedi-dev') or (platform_machine == 'amd64' and extra == 'extra-4-kedi-terminal-bench') or (platform_machine == 'amd64' and extra == 'group-4-kedi-dev') or (platform_machine == 'arm64' and extra == 'extra-4-kedi-terminal-bench') or (platform_machine == 'arm64' and extra == 'group-4-kedi-dev') or (platform_machine == 'x86_64' and extra == 'extra-4-kedi-terminal-bench') or (platform_machine == 'x86_64' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "httpx", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "packaging", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "pyyaml", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "tqdm", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "typer", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/b6/e22bd20a25299c34b8c5922c1545a6320825b13906eb0f7298edfd034a0b/huggingface_hub-1.15.0.tar.gz", hash = "sha256:28abfdddda3927fd4de6a63cf26ab012498a2c24dae52baf150c5c6edf98a1d5", size = 784100, upload-time = "2026-05-15T11:42:52.149Z" }
 wheels = [
@@ -2069,7 +1950,7 @@ name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
@@ -2135,7 +2016,7 @@ name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe" },
+    { name = "markupsafe", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c72f3e33cef02e048281fec7ecec5f032d4aac52226b/jinja2-3.1.6.tar.gz", hash = "sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d", size = 245115, upload-time = "2025-03-05T20:05:02.478Z" }
 wheels = [
@@ -2444,7 +2325,7 @@ requires-dist = [
     { name = "harbor", extras = ["daytona"], marker = "python_full_version >= '3.12' and extra == 'terminal-bench'", specifier = "==0.25.0" },
     { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "kedi-notebook", marker = "extra == 'notebook'", editable = "notebook" },
-    { name = "kedi-typesafe", marker = "extra == 'typesafe'", specifier = ">=0.3.3,<0.4" },
+    { name = "kedi-typesafe", marker = "extra == 'typesafe'", specifier = ">=0.3.4,<0.4" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = "==1.4.9" },
     { name = "langchain", marker = "extra == 'langchain-aws'", specifier = "==1.4.9" },
     { name = "langchain-aws", marker = "extra == 'langchain-aws'", specifier = "==1.9.1" },
@@ -2481,9 +2362,9 @@ dev = [
     { name = "coverage", specifier = "==7.17.2" },
     { name = "dspy", specifier = "==3.4.1" },
     { name = "groq", specifier = "==1.7.0" },
-    { name = "kedi-decisions", specifier = "==0.1.3" },
+    { name = "kedi-decisions", specifier = "==0.1.5" },
     { name = "kedi-laya", extras = ["pydantic", "langchain"], specifier = "==0.1.1" },
-    { name = "kedi-typesafe", extras = ["all"], specifier = "==0.3.3" },
+    { name = "kedi-typesafe", extras = ["all"], specifier = "==0.3.4" },
     { name = "langchain", specifier = "==1.4.9" },
     { name = "langchain-aws", specifier = "==1.9.1" },
     { name = "langchain-mcp-adapters", specifier = "==0.3.2" },
@@ -2501,15 +2382,15 @@ dev = [
 
 [[package]]
 name = "kedi-decisions"
-version = "0.1.3"
+version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/28/135c588ce946a94de99c9cdf316f1026ceb60013309d2cffadf06c5184c9/kedi_decisions-0.1.3.tar.gz", hash = "sha256:37715f6835fb4df789f86cb6bdeec22c605c640b664d3fe467ebcf2a271cf21c", size = 262834, upload-time = "2026-11-05T19:44:59.339Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/cb/d8744bd94219e505f6229c10bae05041818fa85ff53d7435f449da79e06c/kedi_decisions-0.1.5.tar.gz", hash = "sha256:40468f83fce36df07d89e34dcf6a0f00bd7d2d68a110811f21c6ef1b3003a2d0", size = 265735, upload-time = "2026-11-12T22:08:45.545Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8e/17/bf2143ff052b2d8549a202551221280bd786fcb4895408f721ea23bf63c2/kedi_decisions-0.1.3-py3-none-any.whl", hash = "sha256:b2a3cf8f52da375a9946e1022b7ae1d458b0d2693f72b8753bd5890e8bec7093", size = 26844, upload-time = "2026-11-05T19:44:56.536Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/28/89d86ceb249432140d93cb1315949eee781ab88af6b4f3df306c33abb617/kedi_decisions-0.1.5-py3-none-any.whl", hash = "sha256:6ca7c85a5e083a5e8bbce353c9e8afd1e465fcdbf7c1cf44bd80af04ede57d9e", size = 26980, upload-time = "2026-11-12T22:08:42.684Z" },
 ]
 
 [package.optional-dependencies]
@@ -2572,16 +2453,16 @@ dev = [
 
 [[package]]
 name = "kedi-typesafe"
-version = "0.3.3"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "kedi-decisions" },
     { name = "pydantic-ai-slim", extra = ["typesafe"], marker = "extra == 'extra-4-kedi-typesafe' or extra == 'group-4-kedi-dev' or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench')" },
     { name = "typesafe-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/db/5d05d4fd7582b49c619db1d3225d2fa0926e413319891f7930cd6d957b27/kedi_typesafe-0.3.3.tar.gz", hash = "sha256:fcf1a085880f03a06cea339688e822a3c2073ed17e99ed8252ad734412ec0b60", size = 48760, upload-time = "2026-11-05T19:45:00.341Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/0f/2f1d1a6bb3089f2c92c980e5ffeb0d6b50afd6b88fbb1d1382e867725a77/kedi_typesafe-0.3.4.tar.gz", hash = "sha256:c8685bf9a9b99de3159ddb11c8a860f2f1fae20aee05c9822934f533f7ad2d07", size = 51426, upload-time = "2026-11-12T22:08:46.758Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/7a/79c43741964abb8804bc6b0828f7079f3a93294bf7b0b5bb29846ea60f52/kedi_typesafe-0.3.3-py3-none-any.whl", hash = "sha256:8692f840a985b6aa467cc8627c657150609172aa9ea5088fc24e5e758c9110e4", size = 21719, upload-time = "2026-11-05T19:44:57.828Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/10/09026d20f8d72fd8893e3ff098b5d0e16f1fd947ba4b9585d4587f5ae0e7/kedi_typesafe-0.3.4-py3-none-any.whl", hash = "sha256:eba6402bee3eb803d7fb2990a5e370578206d204d786bf409f1a25dc4cf03fb4", size = 23479, upload-time = "2026-11-12T22:08:43.913Z" },
 ]
 
 [package.optional-dependencies]
@@ -2630,8 +2511,7 @@ name = "langchain-aws"
 version = "1.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "boto3", version = "1.43.69", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "boto3", version = "1.44.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "boto3" },
     { name = "langchain-core" },
     { name = "numpy" },
     { name = "pydantic" },
@@ -2685,8 +2565,8 @@ dependencies = [
     { name = "certifi" },
     { name = "langchain-core" },
     { name = "openai" },
-    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
-    { name = "tiktoken", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
+    { name = "tiktoken", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/71/3c/10adfa3dcf1e7b93230b406a4c1db51cea59122a3eb70fed8109487beace/langchain_openai-1.7.4.tar.gz", hash = "sha256:8fd90e41588526d990f32262447adf8e130d7ce28ed66cefa315e64cc9dd12ce", size = 3410755, upload-time = "2026-11-04T16:55:37.274Z" }
 wheels = [
@@ -2795,8 +2675,7 @@ name = "langsmith"
 version = "0.14.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "distro" },
     { name = "httpx2" },
     { name = "orjson", marker = "platform_python_implementation != 'PyPy'" },
@@ -2818,74 +2697,31 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.83.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-]
-dependencies = [
-    { name = "aiohttp", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "click", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "fastuuid", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "httpx", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "importlib-metadata", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "jinja2", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "jsonschema", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "openai", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "pydantic", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "python-dotenv", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "tokenizers", marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/22/92/6ce9737554994ca8e536e5f4f6a87cc7c4774b656c9eb9add071caf7d54b/litellm-1.83.0.tar.gz", hash = "sha256:860bebc76c4bb27b4cf90b4a77acd66dba25aced37e3db98750de8a1766bfb7a", size = 17333062, upload-time = "2026-03-31T05:08:25.331Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/2c/a670cc050fcd6f45c6199eb99e259c73aea92edba8d5c2fc1b3686d36217/litellm-1.83.0-py3-none-any.whl", hash = "sha256:88c536d339248f3987571493015784671ba3f193a328e1ea6780dbebaa2094a8", size = 15610306, upload-time = "2026-03-31T05:08:21.987Z" },
-]
-
-[[package]]
-name = "litellm"
 version = "1.109.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')",
-    "python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev')",
-    "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')",
-]
 dependencies = [
-    { name = "aiohttp", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "boto3", version = "1.44.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "certifi", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "click", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "fastuuid", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version >= '3.12' and python_full_version < '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "filelock", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "httpx", extra = ["http2"], marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "huggingface-hub", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "importlib-metadata", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "jinja2", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "jsonschema", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "openai", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "packaging", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "pydantic", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "pydantic-settings", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "python-dotenv", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "pyyaml", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version >= '3.12' and python_full_version < '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "tiktoken", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "tokenizers", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "aiohttp", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "anyio", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "boto3", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "certifi", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "click", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "fastuuid", marker = "python_full_version < '3.15'" },
+    { name = "filelock", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "httpx", extra = ["http2"], marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "huggingface-hub", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "importlib-metadata", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "jinja2", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "jsonschema", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "openai", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "packaging", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "pydantic", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "pydantic-settings", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "python-dotenv", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "pyyaml", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
+    { name = "tiktoken", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.15' and extra == 'extra-4-kedi-terminal-bench') or (python_full_version >= '3.15' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "tokenizers", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/41/05/9457d211ce2c112d7b770ec3871638aa4419d6c88d5e922f048eb1fd638d/litellm-1.109.0.tar.gz", hash = "sha256:267639caedf188b4b9417132c3778ec322e774f8a24b836d12d8843e5b2d5e14", size = 25568741, upload-time = "2026-11-11T00:53:38.193Z" }
 wheels = [
@@ -3034,8 +2870,7 @@ name = "mcp"
 version = "1.27.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "httpx" },
     { name = "httpx-sse" },
     { name = "jsonschema" },
@@ -3361,8 +3196,7 @@ name = "openai"
 version = "3.31.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "httpx2" },
     { name = "jiter" },
     { name = "pydantic" },
@@ -3889,8 +3723,7 @@ wheels = [
 [package.optional-dependencies]
 filetree = [
     { name = "aiofile" },
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "anyio" },
 ]
 keyring = [
     { name = "keyring" },
@@ -3966,8 +3799,7 @@ name = "pydantic-ai-slim"
 version = "2.66.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "genai-prices" },
     { name = "griffelib" },
     { name = "httpx2" },
@@ -4007,8 +3839,8 @@ mcp = [
 ]
 openai = [
     { name = "openai" },
-    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
-    { name = "tiktoken", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "tiktoken", version = "0.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
+    { name = "tiktoken", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
 ]
 typesafe = [
     { name = "typesafe-sdk" },
@@ -4159,8 +3991,7 @@ name = "pydantic-evals"
 version = "2.66.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "anyio" },
     { name = "logfire-api" },
     { name = "pydantic" },
     { name = "pydantic-ai-slim" },
@@ -4190,8 +4021,7 @@ name = "pydantic-graph"
 version = "2.66.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "logfire-api" },
     { name = "pydantic" },
     { name = "typing-inspection" },
@@ -4914,8 +4744,7 @@ name = "s3transfer"
 version = "0.19.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "botocore", version = "1.43.69", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "botocore", version = "1.44.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "botocore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/43/35e4d8aa320bffe8287fe8f65f578fa2d2db0a64212f0e710dce58267854/s3transfer-0.19.2.tar.gz", hash = "sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993", size = 165592, upload-time = "2026-07-22T19:30:44.432Z" }
 wheels = [
@@ -5101,8 +4930,7 @@ name = "sse-starlette"
 version = "3.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "starlette" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f7/2b/58abc2d1fd397e7dde08e947e05c884d8ef2f78d5e2588c17a12d42d6994/sse_starlette-3.4.4.tar.gz", hash = "sha256:07e0fa0460138baf25cdd5fb28683472c3995dc1642225191b3832d62526bcb0", size = 31819, upload-time = "2026-05-12T17:37:17.019Z" }
@@ -5115,8 +4943,7 @@ name = "starlette"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten') or extra == 'extra-4-kedi-codex-model' or extra == 'extra-4-kedi-terminal-bench' or extra != 'group-4-kedi-dev'" },
+    { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b5/b4/205b0d5241d934e8add0c38aa924c4f9fb7330834ff11e5444db964ec3f9/starlette-1.6.0.tar.gz", hash = "sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b", size = 2716969, upload-time = "2026-08-08T18:27:57.512Z" }
@@ -5208,8 +5035,8 @@ name = "tiktoken"
 version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
     "python_full_version == '3.14.*' and extra != 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
     "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
@@ -5225,8 +5052,8 @@ resolution-markers = [
     "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (python_full_version < '3.12' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')",
 ]
 dependencies = [
-    { name = "regex", marker = "python_full_version < '3.15' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
-    { name = "requests", marker = "python_full_version < '3.15' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "regex" },
+    { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/e5/5f3cb2159769d0f4324c0e9e87f9de3c4b1cd45848a96b2eb3566ad5ca77/tiktoken-0.13.0.tar.gz", hash = "sha256:c9435714c3a84c2319499de9a300c0e604449dd0799ff246458b3bb6a7f433c1", size = 38986, upload-time = "2026-05-15T04:51:27.153Z" }
 wheels = [
@@ -5284,10 +5111,12 @@ resolution-markers = [
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra == 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
+    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
 ]
 dependencies = [
-    { name = "regex", marker = "(python_full_version >= '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "requests", marker = "(python_full_version >= '3.15' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "regex" },
+    { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/62/167a842aa0429d45f5e797354fd4343a96f6043d67d0513c675c7b8d36e6/tiktoken-0.14.0.tar.gz", hash = "sha256:231dec90efcdccf1b565a1416107736f1e09b1a08fe736ef9d6363e626d03874", size = 38898, upload-time = "2026-08-17T19:49:49.514Z" }
 wheels = [
@@ -5347,7 +5176,7 @@ name = "tokenizers"
 version = "0.23.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c1/60/21f715d9faba5f5407ff759472ade058ec4a507ad62bcea47cb847239a73/tokenizers-0.23.1.tar.gz", hash = "sha256:1feeeadf865a7915adc25445dea30e9933e593c31bb96c277cee36de227c8bfa", size = 365748, upload-time = "2026-04-27T14:43:25.606Z" }
 wheels = [
@@ -5496,10 +5325,10 @@ name = "typer"
 version = "0.25.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-doc" },
-    { name = "click" },
-    { name = "rich" },
-    { name = "shellingham" },
+    { name = "annotated-doc", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "click", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "rich", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "shellingham", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/51/9aed62104cea109b820bbd6c14245af756112017d309da813ef107d42e7e/typer-0.25.1.tar.gz", hash = "sha256:9616eb8853a09ffeabab1698952f33c6f29ffdbceb4eaeecf571880e8d7664cc", size = 122276, upload-time = "2026-04-30T19:32:16.964Z" }
 wheels = [
@@ -5511,8 +5340,7 @@ name = "typesafe-sdk"
 version = "0.7.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.14' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
-    { name = "anyio", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra == 'group-4-kedi-dev') or (python_full_version < '3.12' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-typesafe' and extra != 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')" },
+    { name = "anyio" },
     { name = "httpx2" },
     { name = "packaging" },
     { name = "pydantic" },
@@ -5946,9 +5774,9 @@ name = "yarl"
 version = "1.25.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "idna" },
-    { name = "multidict" },
-    { name = "propcache" },
+    { name = "idna", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "multidict", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "propcache", marker = "python_full_version < '3.15' or extra == 'extra-4-kedi-terminal-bench' or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/75/16/e8be8e2fb175bbf41a0680381a319f1199fae256588241a2ac8677eafb49/yarl-1.25.1.tar.gz", hash = "sha256:03dd38de09bc213e9a8b29761eec33ee1d5318dac0e49d8af36e4d27830e23a7", size = 246245, upload-time = "2026-09-15T19:35:02.264Z" }
 wheels = [

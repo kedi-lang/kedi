@@ -147,7 +147,7 @@ def test_laya_kedi_settings_control_claims_and_captures(adapter_type, threshold,
         def predict(self, state, questions):
             return {"answers": {key: {"type": "noul", "noul": 0.9} for key in questions}}
 
-    source = f"> settings:\n  decision_threshold: {threshold}\n"
+    source = f"> settings:\n  decision_boolean_threshold: {threshold}\n"
     if claim:
         source += "> if: This request is approved\n  = `True`\n> else:\n  = `False`\n"
     else:

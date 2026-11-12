@@ -13,7 +13,7 @@ Urgency = Annotated[
 > adapter: pydantic
 > model: typesafe/jev-latest
 > settings:
-    typesafe_threshold: 0.9
+    decision_boolean_threshold: 0.9
 [ticket] = Production writes are failing without a workaround.
 >> Evaluate <ticket>. Immediate intervention: [urgent: `Urgency`].
 > if: `urgent`:

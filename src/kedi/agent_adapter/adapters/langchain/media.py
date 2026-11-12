@@ -39,6 +39,8 @@ _CLIENT_PROVIDERS: Mapping[str, MediaProvider] = {
     "ChatVertexAI": "google",
     "ChatBedrockConverse": "bedrock",
     "ChatBedrock": "bedrock",
+    "TypeSafeChatModel": "typesafe",
+    "LayaChatModel": "laya",
 }
 _INLINE_FILE = re.compile(
     r'-----BEGIN FILE id="([^"]+)" type="([^"]+)"-----\n(.*?)\n-----END FILE id="\1"-----',

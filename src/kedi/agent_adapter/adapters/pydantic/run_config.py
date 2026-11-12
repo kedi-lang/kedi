@@ -74,7 +74,7 @@ def _run_kwargs(
             selected, "supports_decision_threshold", False
         ):
             raise ValueError(
-                "Kedi Jev claims require kedi_typesafe.TypeSafeModel to enforce typesafe_threshold; "
+                "Kedi Jev claims require kedi_typesafe.TypeSafeModel to enforce decision_boolean_threshold; "
                 "the upstream TypeSafeModel uses a fixed decision policy"
             )
     self._apply_default_usage_limits(run_kwargs)

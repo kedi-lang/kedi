@@ -20,7 +20,7 @@ email. Model availability is a provider prerequisite, not a compiler guarantee.
 @check_reply(reply: str, policy: str) -> bool:
   > model: typesafe/jev-latest
   > settings:
-    typesafe_threshold: 0.9
+    decision_boolean_threshold: 0.9
   >> Given policy <policy>, does reply <reply> avoid unsupported commitments?
   It is [supported: bool] that the reply is supported by the policy.
   = `supported`

@@ -12,10 +12,8 @@ KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset({"tool_reason"})
 
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
-        "decision_threshold",
+        "decision_boolean_threshold",
         "decision_tool_call_threshold",
-        "typesafe_threshold",
-        "typesafe_tool_call_threshold",
         "max_tokens",
         "temperature",
         "top_p",
@@ -39,10 +37,8 @@ PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
 
 LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
-        "decision_threshold",
+        "decision_boolean_threshold",
         "decision_tool_call_threshold",
-        "typesafe_threshold",
-        "typesafe_tool_call_threshold",
         "api_key",
         "base_url",
         "callbacks",

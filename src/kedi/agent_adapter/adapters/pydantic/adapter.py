@@ -759,7 +759,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     ) -> Any:
         conversation = self._subagent_conversation_var.get()
         self._apply_conversation_history(run_kwargs, conversation)
-        user_prompt = self._user_prompt(agent, prompt, run_kwargs, conversation)
+        user_prompt = await self._user_prompt(agent, prompt, run_kwargs, conversation)
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
         with (
@@ -853,7 +853,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 event_resolver.complete_run(final_text=str(result.output) if emit_final else None)
             return result
 
-    def _user_prompt(
+    async def _user_prompt(
         self,
         agent: Agent[Any, Any],
         prompt: str,
@@ -877,7 +877,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             archive=self._history_archive,
             compaction=self.active_profile.compaction,
         )
-        return user_prompt(
+        return await user_prompt(
             prompt,
             media,
             history=cast("Sequence[Any]", history) if reusable and history else None,

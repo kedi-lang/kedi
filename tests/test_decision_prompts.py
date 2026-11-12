@@ -205,7 +205,7 @@ def test_decision_prompt_reaches_hooks_history_and_model_without_losing_criteria
         parse_program(
             "> history: enabled\n"
             "> settings:\n"
-            "  typesafe_threshold: 0.90\n"
+            "  decision_boolean_threshold: 0.90\n"
             '>> The private account payment was approved. The review is [approved: Annotated[bool, "Was the payment approved?"]].\n'
             "= <approved>\n"
         ),

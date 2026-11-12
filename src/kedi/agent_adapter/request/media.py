@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from kedi.media import Media, MediaError, MediaKind, MediaMention, format_inline_text
 
 MediaSource = Literal["data", "url", "file_id"]
-MediaProvider = Literal["openai", "anthropic", "google", "bedrock"]
+MediaProvider = Literal["openai", "anthropic", "google", "bedrock", "typesafe", "laya"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +207,10 @@ def media_provider(system: str | None) -> MediaProvider | None:
         return "google"
     if normalized.startswith("bedrock") or normalized == "aws":
         return "bedrock"
+    if normalized == "typesafe":
+        return "typesafe"
+    if normalized == "laya":
+        return "laya"
     return None
 
 
@@ -229,6 +233,12 @@ def check_media_support(
             )
         if provider is None:
             continue
+        if provider == "laya" or (provider == "typesafe" and media.kind != "image"):
+            accepted = "text" if provider == "laya" else "images and text documents"
+            raise MediaError(
+                f"{attachment.name}: {_provider_text(provider)} decision models read only "
+                f"{accepted}; {_model_text(model)} cannot read {media.label}"
+            )
         if media.kind == "video" and provider in {"openai", "anthropic"}:
             raise MediaError(
                 f"{attachment.name}: {_provider_text(provider)} models do not accept video; "
@@ -306,6 +316,8 @@ def _provider_text(provider: MediaProvider) -> str:
         "anthropic": "Anthropic",
         "google": "Gemini",
         "bedrock": "Bedrock",
+        "typesafe": "Jev",
+        "laya": "Laya",
     }[provider]
 
 
