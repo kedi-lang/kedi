@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -37,7 +38,9 @@ def test_resolved_type_helpers_cover_typing_aliases() -> None:
     assert as_resolved_kedi_type(str) is str
     assert resolved_type_name(str) == "str"
     assert resolved_type_name(list[str]) == "list"
-    assert resolved_type_name(int | str) == "int | str"
+    # Python 3.14 unifies types.UnionType with typing.Union.
+    expected_union_name = "Union" if sys.version_info >= (3, 14) else "int | str"
+    assert resolved_type_name(int | str) == expected_union_name
     assert runtime_isinstance("x", str)
     # Generic args are validated fail-closed now: a str is not a list[str].
     assert runtime_isinstance("x", list[str]) is False
