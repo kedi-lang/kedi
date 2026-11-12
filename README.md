@@ -226,16 +226,17 @@ into a procedure as a typed parameter.
 
 @read_receipt(photo: Image) -> Receipt:
   >> Read the receipt in <photo>.
-  Its merchant, total, and currency are [receipt: Receipt].
+  The receipt details are [receipt: Receipt].
   = `receipt`
 
 = `read_receipt(image("receipt.png"))`
 ```
 
-The model receives the image as an attachment labeled `photo`, the name the
-program uses; file names never reach the model. Media works with the Pydantic AI
-and LangChain adapters on OpenAI, Anthropic, Google Gemini, and AWS Bedrock.
-Kedi rejects an attachment the provider cannot take before calling the model.
+The model receives the local image as an attachment labeled `photo`, the name the
+program uses, rather than `receipt.png`. URL attachments retain their source URLs.
+Media works with the Pydantic AI and LangChain adapters on OpenAI, Anthropic,
+Google Gemini, and AWS Bedrock. Kedi rejects an attachment the provider cannot
+take before calling the model.
 
 [Media input](https://docs.kedi-lang.org/core-language/media-input/)
 
