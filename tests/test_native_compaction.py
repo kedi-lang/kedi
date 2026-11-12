@@ -609,14 +609,14 @@ def test_langchain_disabled_compaction_leaves_settings_unchanged() -> None:
 
 
 def test_unsupported_adapter_rejects_native_compaction_at_runtime_and_in_lsp() -> None:
-    from kedi.agent_adapter.adapters.dspy import DSPyAdapter
+    from kedi.agent_adapter.adapters.acp import ACPAdapter
 
     profile = AgentProfile(history=True, compaction=CompactionSettings())
-    adapter = object.__new__(DSPyAdapter)
-    with pytest.raises(CompactionSettingsError, match="adapter 'dspy'"):
+    adapter = object.__new__(ACPAdapter)
+    with pytest.raises(CompactionSettingsError, match="adapter 'acp'"):
         KediRuntime._assert_profile_override_supported(profile, adapter)
 
-    source = """> adapter: dspy
+    source = """> agent: acp
 > history:
     enabled: true
     compaction_mode: native
@@ -628,7 +628,7 @@ def test_unsupported_adapter_rejects_native_compaction_at_runtime_and_in_lsp() -
     ]
 
     profile_source = """> profile: unsupported:
-    > adapter: dspy
+    > agent: acp
     > history:
         enabled: true
         compaction_threshold: 1000
@@ -641,13 +641,13 @@ def test_unsupported_adapter_rejects_native_compaction_at_runtime_and_in_lsp() -
 
 
 def test_disabled_compaction_is_accepted_by_unsupported_adapter() -> None:
-    from kedi.agent_adapter.adapters.dspy import DSPyAdapter
+    from kedi.agent_adapter.adapters.acp import ACPAdapter
 
     profile = AgentProfile(history=True, compaction=CompactionSettings(mode="disabled"))
-    adapter = object.__new__(DSPyAdapter)
+    adapter = object.__new__(ACPAdapter)
     KediRuntime._assert_profile_override_supported(profile, adapter)
 
-    source = """> adapter: dspy
+    source = """> agent: acp
 > history:
     enabled: true
     compaction_mode: disabled
@@ -656,7 +656,7 @@ def test_disabled_compaction_is_accepted_by_unsupported_adapter() -> None:
         "K-ADAPTER-HISTORY"
     ]
 
-    dynamic_source = """> adapter: dspy
+    dynamic_source = """> agent: acp
 > history:
     enabled: true
     compaction_mode: `selected_mode`

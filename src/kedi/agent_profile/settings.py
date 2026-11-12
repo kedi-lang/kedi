@@ -36,22 +36,6 @@ PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-DSPY_LM_SETTING_KEYS: Final[frozenset[str]] = frozenset(
-    {
-        "model_type",
-        "temperature",
-        "max_tokens",
-        "cache",
-        "callbacks",
-        "num_retries",
-        "provider",
-        "finetuning_model",
-        "launch_kwargs",
-        "train_kwargs",
-        "use_developer_role",
-        "reasoning_effort",
-    }
-)
 
 LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -133,7 +117,6 @@ ACP_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
 MODEL_SETTING_KEYS: Final[frozenset[str]] = (
     KEDI_RUNTIME_SETTING_KEYS
     | PYDANTIC_MODEL_SETTING_KEYS
-    | DSPY_LM_SETTING_KEYS
     | LANGCHAIN_MODEL_SETTING_KEYS
     | CLAUDE_AGENT_SETTING_KEYS
     | CODEX_AGENT_SETTING_KEYS
@@ -160,10 +143,6 @@ def parse_plain_setting_value(raw: str) -> SettingValue:
 
 def pydantic_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
     return _model_settings(settings, PYDANTIC_MODEL_SETTING_KEYS, "pydantic")
-
-
-def dspy_lm_settings(settings: SettingsMap) -> dict[str, SettingValue]:
-    return _model_settings(settings, DSPY_LM_SETTING_KEYS, "dspy")
 
 
 def langchain_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:

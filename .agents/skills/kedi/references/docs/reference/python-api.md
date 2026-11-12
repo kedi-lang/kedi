@@ -10,7 +10,7 @@ sketches, not executable programs.
 ## Public Selection Types
 
 - `FrameworkAdapterName` is
-  `Literal["pydantic", "dspy", "langchain"]`.
+  `Literal["pydantic", "langchain"]`.
 - `AgentName` is `Literal["claude", "codex", "acp", "a2a"]`.
 - `AdapterLike` is `AgentAdapter[Any] | LazyAdapter`.
 - `ApprovalMode` is `Literal["allow", "deny"]`.
@@ -149,7 +149,7 @@ typed = await adapter.produce(
 The first `Annotated` argument is the field type and the second string is its
 model-facing description. `output_schema` dynamically defines named result
 fields; `output_type` returns the supplied prebuilt type. If both are supplied,
-the field schema takes precedence. Pydantic AI, LangChain, DSPy, Claude, Codex,
+the field schema takes precedence. Pydantic AI, LangChain, Claude, Codex,
 and WebGPU support both forms. ACP does not currently support structured output
 and raises `NotImplementedError` from `produce()`.
 

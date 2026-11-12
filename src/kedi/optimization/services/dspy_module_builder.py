@@ -9,7 +9,6 @@ from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
 from ...resolved_types import ResolvedKediType
 from ..utils import extract_input_fields, extract_output_fields
-from .type_handler import StructuredTypeHandler
 
 
 class _KediRuntimeRef:
@@ -39,7 +38,7 @@ class DSPyModuleBuilder:
         Args:
             runtime: Kedi runtime for structured type handling
         """
-        self.type_handler = StructuredTypeHandler(runtime)
+        self.runtime = runtime
 
     def build_module(
         self,
@@ -76,7 +75,7 @@ class DSPyModuleBuilder:
         instruction = span_to_instruction(span)
 
         # Create module with Predict
-        rt = self.type_handler.runtime
+        rt = self.runtime
 
         class SingleSpanModule(dspy.Module):
             def __init__(self, sig: type[dspy.Signature]):
@@ -143,5 +142,5 @@ class DSPyModuleBuilder:
         # An annotation is present here (the caller only resolves typed fields);
         # a written-but-unresolvable annotation raises rather than silently
         # falling back to str.
-        resolved_type = KediType(type_anno).resolve_required(self.type_handler.runtime, None)
+        resolved_type = KediType(type_anno).resolve_required(self.runtime, None)
         return resolved_type if resolved_type is not None else str

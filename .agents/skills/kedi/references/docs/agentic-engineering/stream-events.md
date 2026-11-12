@@ -196,7 +196,6 @@ Semantic message boundaries are capability-driven:
 | Claude Agent SDK | yes |
 | Codex App Server | yes |
 | ACP | yes |
-| DSPy | no |
 | WebGPU | no |
 
 `LazyAdapter` reports the resolved adapter's capability. Unsupported adapters

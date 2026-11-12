@@ -4,7 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import kedi.agent_adapter.adapters as adapters_module
+import pytest
+
 from kedi import app
 from kedi.lang.ast import (
     EvalDataset,
@@ -91,13 +92,13 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
 
     code, out = app.run_tests_cli(
         str(src),
-        adapter="dspy",
+        adapter="langchain",
         model="openrouter/google/gemini-3-flash-preview",
     )
 
     assert code == 0
     assert "Tests:" in out
-    assert seen["adapter"] == "dspy"
+    assert seen["adapter"] == "langchain"
     assert seen["model"] == "openrouter/google/gemini-3-flash-preview"
     assert isinstance(seen["run_adapter"], app.LazyAdapter)
     assert seen["invoked"] is True
@@ -105,13 +106,6 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
 
 def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
     seen: list[tuple[str, str]] = []
-
-    class FakeDSPyAdapter:
-        def __init__(self, *, model: str) -> None:
-            seen.append(("dspy", model))
-
-        def produce_sync(self) -> None:
-            return None
 
     class FakePydanticAdapter:
         def __init__(self, *, model: str, defer_model_check: bool) -> None:
@@ -128,16 +122,13 @@ def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
         def produce_sync(self) -> None:
             return None
 
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setattr(app, "PydanticAdapter", FakePydanticAdapter)
     monkeypatch.setattr(app, "LangChainAdapter", FakeLangChainAdapter)
 
-    app._build_runtime_adapter("dspy", None)
     app._build_runtime_adapter("pydantic", None)
     app._build_runtime_adapter("langchain", None)
 
     assert seen == [
-        ("dspy", "openai/gpt-6-luna"),
         ("pydantic", "openai/gpt-6-luna"),
         ("langchain", "openai/gpt-6-luna"),
     ]
@@ -382,20 +373,6 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
         "Unknown optimizer: unknown",
     )
 
-    class FailingDSPyAdapter:
-        def __init__(self, *, model: str) -> None:
-            raise ImportError("dspy unavailable")
-
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FailingDSPyAdapter)
-    _patch_optimizer_services(monkeypatch)
-    assert (
-        "DSPy is required for dspy adapter"
-        in app.run_optimization_cli(
-            str(source),
-            adapter="dspy",
-        )[1]
-    )
-
     class RaisingDSPyConfigurationService:
         def __init__(self, config: object) -> None:
             raise ImportError("missing dspy")
@@ -449,103 +426,88 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
     assert app.run_optimization_cli(str(source))[0] == 0
 
 
-def test_dspy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
+def test_gepa_reports_missing_dspy_dependency(tmp_path: Path, monkeypatch: Any) -> None:
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
 
-    class FailingDSPyAdapter:
-        def __init__(self, *, model: str) -> None:
-            raise ImportError("dspy unavailable")
-
-    class FakeDSPyConfigurationService:
+    class MissingDSPyConfigurationService:
         def __init__(self, config: object) -> None:
-            self.config = config
-
-        def configure_main_lm(self, model: str) -> None:
-            assert model == "openai/gpt-6-luna"
+            raise ImportError("dspy unavailable")
 
     import kedi.optimization.services.dspy_config as dspy_config_module
 
     _patch_optimizer_services(monkeypatch)
     monkeypatch.setattr(
-        dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
+        dspy_config_module, "DSPyConfigurationService", MissingDSPyConfigurationService
     )
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FailingDSPyAdapter)
     assert (
         "DSPy is required for GEPA optimizer"
         in app.run_optimization_cli(str(source), optimizer="gepa")[1]
     )
 
-    _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FailingDSPyAdapter)
-    assert (
-        "DSPy is required for dspy adapter"
-        in app.run_optimization_cli(str(source), optimizer="mock", adapter="dspy")[1]
-    )
 
-
-def test_run_optimization_cli_gepa_and_dspy_success_edges(
-    tmp_path: Path,
-    monkeypatch: Any,
+@pytest.mark.parametrize("backend", ["pydantic", "langchain"])
+def test_gepa_preserves_optimizer_lm_and_uses_selected_runtime(
+    tmp_path: Path, monkeypatch: Any, backend: str
 ) -> None:
+    from pydantic_ai.models.test import TestModel
+
     import kedi.optimization.services.dspy_config as dspy_config_module
+    from kedi.agent_adapter import PydanticAdapter
 
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
+    selected_runtime = PydanticAdapter(TestModel())
+    built = []
+    configured = []
+    compiled = []
+    original_compile = app.compile_program
+
+    def build_runtime(adapter, model):
+        built.append((adapter, model))
+        return selected_runtime
+
+    def compile_runtime(program, *, adapter, **kwargs):
+        compiled.append(adapter)
+        return original_compile(program, adapter=adapter, **kwargs)
 
     class FakeDSPyConfigurationService:
-        def __init__(self, config: object) -> None:
+        def __init__(self, config):
             self.config = config
 
-        def configure_main_lm(self, model: str) -> None:
-            assert model == "openai/gpt-6-luna"
-
-    class FakeDSPyAdapter:
-        def __init__(self, *, model: str) -> None:
-            assert model in {"openai/gpt-6-luna", "custom-dspy-model"}
+        def configure_main_lm(self, model):
+            configured.append(model)
 
     class FakeGEPAOptimizer:
-        def __init__(
-            self,
-            *,
-            config: object,
-            runtime: object,
-            source_path: Path,
-            reporter: object | None = None,
-        ) -> None:
-            self.config = config
-            self.runtime = runtime
-            self.source_path = source_path
-            self.reporter = reporter
+        def __init__(self, *, config, runtime, source_path, reporter=None):
+            assert config.optimizer_model == "openai/gpt-6.1-sol"
 
-        def optimize_procedure(self, **kwargs: Any) -> tuple[str, float]:
+        def optimize_procedure(self, **kwargs):
             return "gepa prompt", 0.75
 
     _patch_optimizer_services(monkeypatch)
+    monkeypatch.setattr(app, "_build_runtime_adapter", build_runtime)
+    monkeypatch.setattr(app, "compile_program", compile_runtime)
     monkeypatch.setattr(
         dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
     )
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setitem(
         __import__("sys").modules,
         "kedi.optimization.gepa",
         SimpleNamespace(GEPAOptimizer=FakeGEPAOptimizer),
     )
-
-    code, msg = app.run_optimization_cli(str(source), optimizer="gepa")
-    assert code == 0
-    assert "gepa prompt" in msg
-
-    _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
-    code, msg = app.run_optimization_cli(
+    code, message = app.run_optimization_cli(
         str(source),
-        optimizer="mock",
-        adapter="dspy",
-        adapter_model="custom-dspy-model",
+        optimizer="gepa",
+        adapter=backend,
+        adapter_model="openai/gpt-6-luna",
+        optimizer_model="openai/gpt-6.1-sol",
     )
     assert code == 0
-    assert "better prompt" in msg
+    assert "gepa prompt" in message
+    assert configured == ["openai/gpt-6.1-sol"]
+    assert built == [(backend, "openai/gpt-6-luna")]
+    assert compiled == [selected_runtime]
 
 
 def test_run_optimization_cli_missing_dataset_after_truthy_validation(

@@ -129,7 +129,7 @@ The inner call retains `temperature: 0.2` and uses `timeout: 120`.
 
 Kedi validates setting names against its known public setting inventory, then
 filters the merged mapping at the adapter boundary. Pydantic receives supported
-`ModelSettings`; DSPy receives supported `dspy.LM` kwargs; LangChain receives
+`ModelSettings`; LangChain receives
 its chat-model fields; harnesses receive their own process/runtime settings.
 
 ## Common Framework Settings

@@ -23,7 +23,6 @@ separate conversation and capability boundary, not merely a different prompt.
 Framework adapters embed Kedi's prompt and tool contracts in an agent framework:
 
 - `pydantic`
-- `dspy`
 - `langchain`
 
 Agent harnesses drive a complete external coding/agent runtime:

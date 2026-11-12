@@ -43,6 +43,12 @@ Environment equivalents are `KEDI_OPTIMIZER_MODEL` and
 `KEDI_OPTIMIZER_REFLECTION_MODEL`. These are optimizer models, not necessarily
 the normal runtime `--adapter-model`.
 
+GEPA does not select a DSPy runtime adapter. Calls outside the optimized span,
+including model-backed metrics, use `--adapter` and `--adapter-model`, just as
+normal execution does. `--optimizer-model` continues to drive GEPA's own DSPy
+module; reflection remains DSPy-backed. A metric procedure can use `> agent:`
+or `> model:` to select its own backend or model.
+
 Without an explicit reflection model, GEPA reuses the configured main DSPy LM,
 including its provider and model settings. A main LM must therefore be configured.
 To give reflection a separate model or token limit, set the reflection model

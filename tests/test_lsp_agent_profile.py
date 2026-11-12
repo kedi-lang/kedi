@@ -171,7 +171,7 @@ def test_hover_on_model_profile_and_use_directives() -> None:
         Prefer <tone> answers.
     > settings:
         temperature: 0.2
-        num_retries: 2
+        max_retries: 2
 > mcp:
     transport: stdio
     command: vsh
@@ -210,9 +210,8 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     )
     temperature_hover = hover_text_at(src, "profile.kedi", "temperature")
     assert "Pydantic AI `ModelSettings`" in temperature_hover
-    assert "DSPy `LM`" in temperature_hover
     assert "LangChain model settings" in temperature_hover
-    assert "DSPy `LM` only" in hover_text_at(src, "profile.kedi", "num_retries")
+    assert "LangChain model settings" in hover_text_at(src, "profile.kedi", "max_retries")
     assert "> mcp:" in hover_text_at(src, "profile.kedi", "mcp", occurrence=3)
     transport_hover = hover_text_at(src, "profile.kedi", "transport")
     assert "Connection transport for this MCP server" in transport_hover

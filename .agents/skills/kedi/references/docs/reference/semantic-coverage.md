@@ -92,7 +92,7 @@ It is not a claim that every adapter implements every capability. Use the
 
 - Run, command, parse, test, eval, optimize, install, and add CLI surfaces
 - Environment variables and generated artifacts
-- Pydantic AI, DSPy, LangChain, custom adapters, Codex, Claude, and ACP
+- Pydantic AI, LangChain, custom adapters, Codex, Claude, and ACP
 - Language server, VS Code, Zed, browser, and playground execution
 
 ## Guarantees and Limits {#reference-maintenance-rules}

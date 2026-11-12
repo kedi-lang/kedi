@@ -12,28 +12,28 @@ part of the base adapter protocol rather than an optional capability.
 <!-- BEGIN GENERATED ADAPTER CAPABILITIES -->
 ## Framework Adapters
 
-| Capability | Pydantic AI | DSPy | LangChain |
-| --- | :---: | :---: | :---: |
-| Capability composition | yes | no | yes |
-| On-demand capability tools | yes | no | no |
-| Structured output | yes | yes | yes |
-| Kedi tool registration | yes | yes | yes |
-| Kedi-declared MCP | yes | yes | yes |
-| Profile override | yes | yes | yes |
-| Model override | yes | yes | yes |
-| Effort | yes | yes | yes |
-| Settings | yes | yes | yes |
-| Code mode | yes | no | yes |
-| Native approvals | yes | no | yes |
-| Dynamic native approval handler | yes | no | yes |
-| Foreground subagents | yes | yes | yes |
-| Background subagents | yes | no | yes |
-| Live subagent input | yes | no | yes |
-| Subagent interruption | yes | no | yes |
-| Semantic stream events | yes | no | yes |
-| Native history processing | yes | no | yes |
-| Media input | yes | no | yes |
-| Agent lifecycle hooks | yes | no | yes |
+| Capability | Pydantic AI | LangChain |
+| --- | :---: | :---: |
+| Capability composition | yes | yes |
+| On-demand capability tools | yes | no |
+| Structured output | yes | yes |
+| Kedi tool registration | yes | yes |
+| Kedi-declared MCP | yes | yes |
+| Profile override | yes | yes |
+| Model override | yes | yes |
+| Effort | yes | yes |
+| Settings | yes | yes |
+| Code mode | yes | yes |
+| Native approvals | yes | yes |
+| Dynamic native approval handler | yes | yes |
+| Foreground subagents | yes | yes |
+| Background subagents | yes | yes |
+| Live subagent input | yes | yes |
+| Subagent interruption | yes | yes |
+| Semantic stream events | yes | yes |
+| Native history processing | yes | yes |
+| Media input | yes | yes |
+| Agent lifecycle hooks | yes | yes |
 
 ## Agent Harnesses
 
@@ -117,8 +117,8 @@ search, schema hydration, and bounded code execution. Pydantic AI, LangChain,
 Claude Agent SDK, and Codex App Server implement the Kedi-owned surface; Kedi
 does not infer it from ordinary tool registration.
 
-Hook support is event-specific. ACP exposes only `user_prompt_submit`; DSPy
-exposes no hook events. Pydantic AI, LangChain, Claude, Codex, and WebGPU expose
+Hook support is event-specific. ACP exposes only `user_prompt_submit`.
+Pydantic AI, LangChain, Claude, Codex, and WebGPU expose
 the event matrix documented in
 [Agent Lifecycle Hooks](../agentic-engineering/hooks.md). A generic `yes` in the
 generated table means at least one hook event is supported.

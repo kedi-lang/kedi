@@ -11,7 +11,6 @@ from kedi.agent_profile.settings import (
     acp_agent_settings,
     claude_agent_settings,
     codex_agent_settings,
-    dspy_lm_settings,
     langchain_model_settings,
     pydantic_model_settings,
 )
@@ -104,7 +103,6 @@ import os
     [
         pydantic_model_settings,
         langchain_model_settings,
-        dspy_lm_settings,
         claude_agent_settings,
         codex_agent_settings,
         acp_agent_settings,

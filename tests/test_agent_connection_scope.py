@@ -46,14 +46,14 @@ def test_model_and_settings_expressions_see_prelude(profile: bool) -> None:
         "retry_limit = 3\n"
         "```\n\n"
     )
-    directives = "> model: `model_name`\n> settings:\n    num_retries: `retry_limit`\n"
+    directives = "> model: `model_name`\n> settings:\n    max_retries: `retry_limit`\n"
     if profile:
         source += "> profile: worker:\n"
         source += "".join("    " + line + "\n" for line in directives.splitlines())
         source += "\n> use: worker\n"
     else:
         source += directives
-    source += "= `(current_block_agent_profile().model, current_block_agent_profile().settings['num_retries'])`\n"
+    source += "= `(current_block_agent_profile().model, current_block_agent_profile().settings['max_retries'])`\n"
     runtime = compile_program(parse_program(source))
     try:
         assert runtime.run_main() == ("test:model", 3)

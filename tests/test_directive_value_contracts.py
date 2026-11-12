@@ -507,7 +507,7 @@ def test_procedure_use_takes_precedence_over_a_profile_with_the_same_name():
 @pytest.mark.parametrize("nested", [False, True])
 def test_computed_activation_does_not_report_an_unsupported_static_feature(directive, nested):
     activation = f"> {directive}: `False`\n"
-    source = "> adapter: dspy\n" + (
+    source = "> agent: acp\n" + (
         "> profile: local:\n  " + activation + "> use: local\n" if nested else activation
     )
     assert not [

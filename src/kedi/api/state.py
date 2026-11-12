@@ -28,7 +28,7 @@ R = TypeVar("R")
 ClassT = TypeVar("ClassT", bound=builtins.type[Any])
 
 
-FrameworkAdapterName = Literal["pydantic", "dspy", "langchain"]
+FrameworkAdapterName = Literal["pydantic", "langchain"]
 
 
 AgentName = Literal["claude", "codex", "acp"]

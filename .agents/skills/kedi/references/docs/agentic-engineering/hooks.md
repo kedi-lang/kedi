@@ -204,7 +204,6 @@ module can be restored; lambdas, local functions, closures, bound methods, and
 | Codex App Server | yes | yes | yes | yes | Kedi projected tools |
 | WebGPU | yes | yes | yes | yes | Kedi, MCP |
 | ACP | yes | no | no | no | none |
-| DSPy | no | no | no | no | none |
 
 Kedi validates support per event. A configuration that requests an unsupported
 event fails before model transport and is reported by the LSP. Dynamic adapter

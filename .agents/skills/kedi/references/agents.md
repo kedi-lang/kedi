@@ -12,7 +12,7 @@
 
 | Surface | Selections | Read before use |
 | --- | --- | --- |
-| Framework `> adapter:` / Python `adapter=` | `pydantic`, `langchain`, `dspy` | [Pydantic](docs/agent-adapters/pydantic-ai.md), [LangChain](docs/agent-adapters/langchain.md), [DSPy](docs/agent-adapters/dspy.md) |
+| Framework `> adapter:` / Python `adapter=` | `pydantic`, `langchain` | [Pydantic](docs/agent-adapters/pydantic-ai.md), [LangChain](docs/agent-adapters/langchain.md) |
 | Harness `> agent:` / Python `agent=` | `codex`, `claude`, `acp`, `a2a` | [Codex](docs/agent-adapters/codex.md), [Claude](docs/agent-adapters/claude.md), [ACP](docs/agent-adapters/acp.md), [A2A](docs/agent-adapters/a2a.md) |
 | Codex-authenticated framework model | `codex_responses_model(...)` | [Codex models](docs/agent-adapters/codex-models.md); distinct from the Codex harness |
 

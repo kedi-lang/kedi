@@ -79,7 +79,7 @@ The parent must call `wait_subagent` before consuming the result or returning a
 final answer. Merely checking status or cancelling does not count as successful
 observation. Unobserved background work causes the parent to fail closed.
 
-DSPy supports foreground delegation only. ACP does not expose the child
+ACP does not expose the child
 execution seam.
 
 ## Continue a Child Conversation

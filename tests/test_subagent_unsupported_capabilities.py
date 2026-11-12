@@ -7,7 +7,6 @@ import pytest
 
 from kedi.agent_adapter.adapters.a2a import A2AAdapter
 from kedi.agent_adapter.adapters.acp import ACPAdapter
-from kedi.agent_adapter.dspy_metadata import DSPY_ADAPTER
 from kedi.agent_adapter.subagents.communication import control_for_run
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -18,9 +17,8 @@ from kedi.lang import compile_program, parse_program
     [
         A2AAdapter.capabilities,
         ACPAdapter.capabilities,
-        DSPY_ADAPTER.capabilities,
     ],
-    ids=["a2a", "acp", "dspy"],
+    ids=["a2a", "acp"],
 )
 @pytest.mark.parametrize("interrupt", [False, True])
 def test_actual_unsupported_lane_rejects_input_without_queue_or_revision(capabilities, interrupt):

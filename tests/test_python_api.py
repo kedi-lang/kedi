@@ -34,7 +34,6 @@ from kedi.agent_adapter import (
     AgentAdapter,
     MissingAdapterCapabilityError,
 )
-from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION, KediTemplatePromptBuilder
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
@@ -1321,9 +1320,9 @@ def test_configure_uses_adapter_env_when_not_explicit(
         seen.append((model, kwargs))
         return adapter
 
-    monkeypatch.setenv("KEDI_ADAPTER", "dspy")
+    monkeypatch.setenv("KEDI_ADAPTER", "langchain")
     monkeypatch.setenv("KEDI_ADAPTER_MODEL", "openrouter:env-model")
-    monkeypatch.setattr(dspy_adapter_module, "DSPyAdapter", fake_adapter)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.langchain.LangChainAdapter", fake_adapter)
     monkeypatch.setattr(
         api_configuration_module,
         "adapter_capabilities",
@@ -1375,34 +1374,6 @@ def test_configure_explicit_model_overrides_env(
     assert seen_models == [None]
 
 
-def test_configure_builds_dspy_adapter_lazily(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = ApiAdapter()
-    seen: list[tuple[str, dict[str, Any]]] = []
-
-    def fake_adapter(model: str, **kwargs: Any) -> ApiAdapter:
-        seen.append((model, kwargs))
-        return adapter
-
-    monkeypatch.setattr(dspy_adapter_module, "DSPyAdapter", fake_adapter)
-    monkeypatch.setattr(
-        api_configuration_module,
-        "adapter_capabilities",
-        lambda _shortname: AdapterCapabilities(),
-    )
-    configure(model="openrouter:test-model", adapter="dspy", temperature=0.3)
-
-    @query
-    def answer() -> str:
-        """kedi
-        >> Return [answer].
-        = <answer>
-        """
-
-    assert seen == []
-    assert answer() == "ok"
-    assert seen == [("openrouter:test-model", {"temperature": 0.3})]
-
-
 def test_configure_builds_langchain_adapter_lazily(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1433,24 +1404,12 @@ def test_configure_builds_langchain_adapter_lazily(
     assert seen == [("openrouter:test-model", {"temperature": 0.3})]
 
 
-def test_configure_dspy_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_rejects_removed_dspy_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
-    configure(adapter="dspy")
-
-    @query
-    def answer() -> str:
-        """kedi
-        >> Return [answer].
-        = <answer>
-        """
-
-    try:
-        with pytest.raises(ValueError, match="DSPy adapter requires"):
-            answer()
-    finally:
-        configure(adapter=ApiAdapter())
+    with pytest.raises(ValueError, match="unknown adapter"):
+        configure(adapter="dspy")
 
 
 def test_configure_rejects_unknown_adapter_name() -> None:

@@ -5,7 +5,6 @@ from kedi.agent_profile.settings import (
     ACP_AGENT_SETTING_KEYS,
     CLAUDE_AGENT_SETTING_KEYS,
     CODEX_AGENT_SETTING_KEYS,
-    DSPY_LM_SETTING_KEYS,
     LANGCHAIN_MODEL_SETTING_KEYS,
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
@@ -644,8 +643,6 @@ def _setting_adapter_label(name: str) -> str:
     labels: list[str] = []
     if name in PYDANTIC_MODEL_SETTING_KEYS:
         labels.append("Pydantic AI `ModelSettings`")
-    if name in DSPY_LM_SETTING_KEYS:
-        labels.append("DSPy `LM`")
     if name in LANGCHAIN_MODEL_SETTING_KEYS:
         labels.append("LangChain model settings")
     if name in CLAUDE_AGENT_SETTING_KEYS:

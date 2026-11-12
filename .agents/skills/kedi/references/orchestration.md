@@ -34,7 +34,7 @@ A task body is exactly one `>>` block, with optional same-indent continuation ro
 
 Do not combine task captures with child `> output:`. Explicit delegated `final_schema` overrides the profile default. Validate shape before indexing a dynamic/delegated dictionary.
 
-Unawaited work fails closed and is cancelled when the invocation ends. Await every admitted task. Failures/timeouts/schema errors raise at wait; catching an error does not refund admission. A cancelled waiter does not itself prove the child was cancelled or observed. DSPy lacks the asynchronous background contract.
+Unawaited work fails closed and is cancelled when the invocation ends. Await every admitted task. Failures/timeouts/schema errors raise at wait; catching an error does not refund admission. A cancelled waiter does not itself prove the child was cancelled or observed.
 
 ## Process ready results
 

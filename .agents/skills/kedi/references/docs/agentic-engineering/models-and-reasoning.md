@@ -67,7 +67,7 @@ A backtick expression may choose the value dynamically:
 ```
 
 Not every provider implements every effort level. Pydantic maps `max` to
-`xhigh`; DSPy receives the value as `reasoning_effort`; harness adapters map or
+`xhigh`; harness adapters map or
 validate according to their runtime.
 
 ## Inheritance and Overrides
