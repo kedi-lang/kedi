@@ -510,8 +510,8 @@ def run_sync(awaitable: Awaitable[_T]) -> _T:
             finally:
                 _SHARED_LOOP.release(shared)
         # Sync code waiting on this call blocks that loop, so waiting on it would deadlock:
-        # the call keeps its own loop in a worker thread. Copy the caller's context so a
-        # dspy.context(lm=...) override reaches the worker.
+        # the call keeps its own loop in a worker thread. Copy the caller's context so its
+        # context variables reach the worker.
         ctx = contextvars.copy_context()
         with ThreadPoolExecutor(max_workers=1) as executor:
             # cast: Context.run's TypeVar doesn't unify with run_sync's via submit().

@@ -8,7 +8,7 @@ A claim asks for a decision, not generated prose. Its acceptance threshold is ap
 > adapter: pydantic
 > model: typesafe/jev-latest
 > settings:
-  typesafe_threshold: 0.9
+  decision_boolean_threshold: 0.9
 
 > if: Ankara is the capital of Turkey
   = established

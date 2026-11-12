@@ -242,10 +242,8 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "top_p",
                 "presence_penalty",
                 "frequency_penalty",
-                "decision_threshold",
+                "decision_boolean_threshold",
                 "decision_tool_call_threshold",
-                "typesafe_threshold",
-                "typesafe_tool_call_threshold",
             )
         },
         **{

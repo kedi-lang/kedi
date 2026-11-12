@@ -35,7 +35,7 @@ Python callers still use explicit imports from `kedi.decisions`.
 is a Boolean with positive and negative `BooleanCriteria`. Both are requested
 in one template; the result is a string literal and a Python bool, respectively.
 
-`typesafe_threshold: 0.85` controls the Boolean decision, not the category choice.
+`decision_boolean_threshold: 0.85` controls the Boolean decision, not the category choice.
 Displaying `<urgent>` first resolves the capture. `decision_info("urgent")`
 then exposes the provider's probability and the effective threshold without
 another inference. Metadata may not exist while a capture is still pending.

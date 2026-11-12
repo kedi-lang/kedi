@@ -176,8 +176,10 @@ def test_pydantic_parts_for_urls_and_uploaded_files() -> None:
             "stored", Media.from_file_id("file-1", provider="openai", media_type="application/pdf")
         ),
     ]
-    content = pydantic_media.user_prompt(
-        "Compare them.", attachments, history=None, model=SimpleNamespace()
+    content = asyncio.run(
+        pydantic_media.user_prompt(
+            "Compare them.", attachments, history=None, model=SimpleNamespace()
+        )
     )
     assert content[0::2] == ["typed:", "untyped:", "paper:", "stored:", "Compare them."]
     typed, untyped, paper, stored = content[1::2]

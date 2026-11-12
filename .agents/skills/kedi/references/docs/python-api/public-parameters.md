@@ -38,7 +38,7 @@ It is separate from the `history` conversation-continuity setting. See
 `configure` rebuilds current-context defaults. `context` overlays and restores
 them. `query`/`bind` override at the callable boundary; lexical Kedi directives
 still take effect inside the program. Settings such as `tool_reason` and
-`typesafe_threshold` belong inside `settings`, not arbitrary top-level kwargs.
+`decision_boolean_threshold` belong inside `settings`, not arbitrary top-level kwargs.
 
 ## Execution Parameters
 

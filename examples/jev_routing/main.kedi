@@ -27,7 +27,7 @@ Urgent = Annotated[
 
 > model: typesafe/jev-latest
 > settings:
-  typesafe_threshold: 0.85
+  decision_boolean_threshold: 0.85
 
 @route_ticket(ticket: str) -> str:
   >> The support team responsible for <ticket> is [team: Team].

@@ -254,7 +254,7 @@ then use those values in the same program.
 > import: decisions
 > model: typesafe/jev-latest
 > settings:
-  typesafe_threshold: 0.85
+  decision_boolean_threshold: 0.85
 
 ~Triage(
   team: Literal["billing", "access", "general"],

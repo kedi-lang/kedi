@@ -14,6 +14,7 @@ from typing import Any, cast
 from kedi.agent_adapter.request.media import (
     MediaAttachment,
     check_media_support,
+    download_image_urls,
     media_provider,
     unsent_attachments,
 )
@@ -25,7 +26,7 @@ _INLINE_FILE = re.compile(
 )
 
 
-def user_prompt(
+async def user_prompt(
     prompt: str,
     attachments: Sequence[MediaAttachment],
     *,
@@ -38,11 +39,10 @@ def user_prompt(
     attachments it already holds under the same name and content are not sent again.
     """
 
-    check_media_support(
-        attachments,
-        provider=media_provider(getattr(model, "system", None)),
-        model=getattr(model, "model_name", None),
-    )
+    provider = media_provider(getattr(model, "system", None))
+    if provider == "typesafe":
+        attachments = await download_image_urls(attachments)
+    check_media_support(attachments, provider=provider, model=getattr(model, "model_name", None))
     pending = unsent_attachments(
         attachments, None if history is None else sent_attachments(history)
     )

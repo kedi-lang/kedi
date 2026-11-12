@@ -186,7 +186,7 @@ def test_claim_profile_threshold_overrides_constructor(adapter_name, threshold, 
     runtime = compile_program(
         parse_program("> if: Supported claim\n  = yes\n> else:\n  = no\n"),
         adapter=adapter,
-        default_agent_profile=AgentProfile(settings={"typesafe_threshold": threshold}),
+        default_agent_profile=AgentProfile(settings={"decision_boolean_threshold": threshold}),
     )
     assert runtime.run_main() == expected
     assert len(client.calls) == 1
@@ -248,7 +248,7 @@ def test_plain_upstream_model_cannot_silently_use_its_claim_threshold(monkeypatc
         parse_program("> if: A claim\n  = yes\n> else:\n  = no\n"),
         adapter=PydanticAdapter(UpstreamModel("jev-latest")),
     )
-    with pytest.raises(RuntimeError, match="enforce typesafe_threshold"):
+    with pytest.raises(RuntimeError, match="enforce decision_boolean_threshold"):
         runtime.run_main()
 
 

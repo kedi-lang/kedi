@@ -30,7 +30,7 @@ checkpoint. An existing local checkpoint directory avoids network downloads.
 > model: laya/aac6fef/laya-multilingual-mlx
 
 > settings:
-  decision_threshold: 0.85
+  decision_boolean_threshold: 0.85
 
 >> A customer reports a duplicate charge and asks for a refund.
 The responsible team is [team: Literal["billing", "technical"]].
@@ -74,7 +74,7 @@ either framework. Framework integrations are optional dependencies.
 
 ## Decision Policy and Evidence
 
-Booleans use the strict rule `probability > decision_threshold`, default `0.85`.
+Booleans use the strict rule `probability > decision_boolean_threshold`, default `0.85`.
 `decision_tool_call_threshold`, default `0.6`, controls finite tool selection.
 Parameterized tool selections require an explicit argument-producing handler;
 the model does not fabricate arbitrary tool arguments. Kedi's implicit artifact
