@@ -274,7 +274,9 @@ def test_referenced_content_is_never_turned_into_an_artifact_by_its_size(workspa
 
 
 def _stored_log_program(extra: str) -> tuple[list[list[str]], list[str]]:
-    """A template output stored as an artifact, then used again in a prompt."""
+    """A value an agent session stored as an artifact, then used in a prompt."""
+    from kedi.artifacts import ArtifactPolicy
+
     seen: list[list[str]] = []
     texts: list[str] = []
 
@@ -282,20 +284,28 @@ def _stored_log_program(extra: str) -> tuple[list[list[str]], list[str]]:
         part = next(p for p in messages[-1].parts if isinstance(p, UserPromptPart))
         content = [part.content] if isinstance(part.content, str) else list(part.content)
         seen.append([_pydantic_item(item) for item in content])
-        if info.output_tools:
-            tool = info.output_tools[0]
-            return ModelResponse(parts=[ToolCallPart(tool.name, {"log": "line\n" * 400})])
         texts.append(content[-1])
         return ModelResponse(parts=[TextPart("ok")])
 
     source = f"""> artifacts:
     threshold: 1kb
 
->> Write the build log as [log].
 {extra}
 = done
 """
-    _run(source, PydanticAdapter(FunctionModel(respond)), None)
+    engine = SequentialEngine()
+    runtime = compile_program(
+        parse_program(source), adapter=PydanticAdapter(FunctionModel(respond)), engine=engine
+    )
+    policy = ArtifactPolicy.patch({"threshold": "1kb"})
+    runtime._initial_globals_env["log"] = runtime.artifacts.artifactize(
+        "line\n" * 400, policy=policy, source="tool:read_log"
+    )
+    try:
+        runtime.run_main()
+    finally:
+        asyncio.run(runtime.aclose())
+        engine.shutdown()
     return seen, texts
 
 
@@ -303,10 +313,10 @@ def test_stored_values_go_by_reference_only_through_double_angles(workspace: Pat
     seen, _ = _stored_log_program(
         '[note: str] = `"short"`\n[summary] << Summarize <<log>> with <<note>>.'
     )
-    (content,) = seen[1]
+    (content,) = seen[0]
     opening, reference, closing = content.split("\n", 3)[1:]
     assert opening == '<artifact id="log">'
-    assert json.loads(reference)["ref_id"] == "template_output_1"
+    assert json.loads(reference)["ref_id"] == "tool_call_result_1"
     assert closing == (
         '</artifact>\n<document id="note" type="text/plain">\nshort\n</document>\n'
         "</attachments>\nSummarize log with note."
@@ -314,7 +324,7 @@ def test_stored_values_go_by_reference_only_through_double_angles(workspace: Pat
 
     # <log> is the template text itself: the whole log, never an artifact reference.
     seen, _ = _stored_log_program("[summary] << Summarize <log>.")
-    assert seen[1] == ["Summarize " + "line\n" * 400 + "."]
+    assert seen[0] == ["Summarize " + "line\n" * 400 + "."]
 
 
 def test_stored_values_are_sent_in_full_when_the_model_cannot_read_artifacts(
@@ -323,7 +333,7 @@ def test_stored_values_are_sent_in_full_when_the_model_cannot_read_artifacts(
     seen, _ = _stored_log_program(
         "> artifacts:\n    enabled: false\n[summary] << Summarize <<log>>."
     )
-    (content,) = seen[1]
+    (content,) = seen[0]
     assert content.startswith('<attachments>\n<document id="log" type="text/plain">\nline\n')
 
 

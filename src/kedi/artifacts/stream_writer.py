@@ -205,7 +205,7 @@ class _StreamingWrite:
 def _artifact_kind(source: str | None) -> str:
     if source is not None and source.startswith("tool:"):
         return "tool_call_result"
-    if source is not None and source.startswith(("template", "output:")):
+    if source is not None and source.startswith("template"):
         return "template_output"
     if source is not None and source.startswith("artifact_code"):
         return "artifact_code_result"

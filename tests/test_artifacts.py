@@ -167,7 +167,8 @@ def test_artifacts_are_enabled_by_default_with_cache_stable_contract() -> None:
 
     assert ArtifactPolicy().enabled is True
     assert result == "x" * 100_000
-    assert runtime.artifacts.has_active_artifacts()
+    # A capture is the program's value: it is never stored as an artifact.
+    assert not runtime.artifacts.has_active_artifacts()
     assert adapter.tool_calls == [
         ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
     ]
@@ -288,17 +289,12 @@ def test_artifact_directives_apply_inside_procedures_and_profiles() -> None:
     adapter = ArtifactRecordingAdapter()
     runtime = compile_program(
         parse_program(
-            "> artifacts:\n"
-            "  enabled: true\n"
-            "  threshold: 1b\n"
-            "\n"
-            "> profile: compact:\n"
+            "> profile: plain:\n"
             "  > artifacts:\n"
-            "    enabled: true\n"
-            "    threshold: `1`\n"
+            "    enabled: false\n"
             "\n"
             "@profiled():\n"
-            "  > use: compact\n"
+            "  > use: plain\n"
             "  >> Give [profile_value].\n"
             "  = `profile_value`\n"
             "\n"
@@ -315,7 +311,10 @@ def test_artifact_directives_apply_inside_procedures_and_profiles() -> None:
     )
 
     assert runtime.run_main() == ("profile_value-value", "local_value-value")
-    assert runtime.artifacts.stats()["active_artifacts"] == 2
+    # The profile turns the artifact contract off for its call; the procedure scope keeps it.
+    contracts = ["<ArtifactInstructions>" in (call or "") for call in adapter.instruction_calls]
+    assert contracts == [False, True]
+    assert runtime.artifacts.stats()["active_artifacts"] == 0
     runtime.artifacts.close()
 
 
@@ -493,8 +492,7 @@ def test_runtime_returns_native_output_and_substitutes_its_text() -> None:
     assert result == "payload-value"
     # <payload> is template text: the stored value's text, never its artifact reference.
     assert "Describe payload-value as" in adapter.templates[1]
-    assert "template_output_1" not in adapter.templates[1]
-    assert runtime.artifacts.stats()["active_artifacts"] == 2
+    assert runtime.artifacts.stats()["active_artifacts"] == 0
     runtime.artifacts.close()
 
 
@@ -537,7 +535,7 @@ def test_adapter_output_is_validated_before_artifact_storage() -> None:
     runtime.artifacts.close()
 
 
-def test_parallel_outputs_are_artifacted_once_each() -> None:
+def test_parallel_outputs_stay_native_values() -> None:
     runtime = compile_program(
         parse_program(
             "> artifacts:\n"
@@ -554,7 +552,7 @@ def test_parallel_outputs_are_artifacted_once_each() -> None:
     )
 
     assert runtime.run_main() == "second-value"
-    assert runtime.artifacts.stats()["active_artifacts"] == 2
+    assert runtime.artifacts.stats()["active_artifacts"] == 0
     runtime.artifacts.close()
 
 
@@ -1489,3 +1487,14 @@ def test_closed_conversation_rejects_new_turns() -> None:
     with pytest.raises(RuntimeError, match="conversation state is closed"):
         with state.adapter_turn("test"):
             pass
+
+
+def test_disabled_policy_returns_the_value_unchanged() -> None:
+    manager = ArtifactManager(session_id="disabled")
+    try:
+        value = {"rows": list(range(1_000))}
+        stored = manager.artifactize(value, policy=ArtifactPolicy.patch({"enabled": False}))
+        assert stored is value
+        assert manager.stats()["active_artifacts"] == 0
+    finally:
+        manager.close()

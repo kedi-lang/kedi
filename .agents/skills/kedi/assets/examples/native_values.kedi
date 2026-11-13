@@ -5,5 +5,5 @@
   = `Invoice(total=sum(line.units * line.unit_price for line in lines), labels=[line.label for line in lines])`
 
 [lines: list[Line]] = `[Line(label="book", units=2, unit_price=15), Line(label="pen", units=3, unit_price=2)]`
-[result: Invoice] = <invoice(`lines`)>
+[result: Invoice] = `invoice(lines)`
 = `result`

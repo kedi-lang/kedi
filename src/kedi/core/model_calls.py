@@ -202,13 +202,10 @@ def _invoke_text_parts(
                 return str(lower_request_sync(adapter, request))
 
             def produce_request(request: AgentRunRequest) -> Any:
-                value = self._validate_adapter_output(
+                # A capture is the program's value, never an artifact: artifacts are what an
+                # agent session creates for its own tool results.
+                return self._validate_adapter_output(
                     lower_request_sync(adapter, request), output_type, explicit_type=True
-                )
-                if profile.artifacts is None:
-                    return value
-                return self.artifacts.artifactize(
-                    value, policy=profile.artifacts, source=f"output:{capture_key}"
                 )
 
             attachments = _prepare_attachments(
@@ -523,24 +520,15 @@ def _kedi_run(
                 result = lower_request_sync(adapter, request)
             captured_evidence.extend(evidence)
             out_map: Dict[str, Any] = {}
-            artifact_policy = profile.artifacts
             for key in required:
                 value = output_value(result, key, NotFound)
                 if value is NotFound:
                     raise ValueError(f"LLM did not return required key: {key}")
-                validated = self._validate_adapter_output(
+                # Captures are the program's values, never artifacts (see produce_request).
+                out_map[key] = self._validate_adapter_output(
                     value,
                     typed_fields[key],
                     explicit_type=key in explicit_typed_fields,
-                )
-                out_map[key] = (
-                    self.artifacts.artifactize(
-                        validated,
-                        policy=artifact_policy,
-                        source=f"output:{key}",
-                    )
-                    if artifact_policy is not None
-                    else validated
                 )
             return out_map
 
