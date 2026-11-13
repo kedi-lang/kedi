@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import builtins
 import dataclasses
-import json
 import keyword
 import linecache
 import re
@@ -606,11 +605,6 @@ def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
     return native_value(raw_lookup_value(rt, name, local_env))
 
 
-def model_lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
-    """Look up a value for a model prompt without opening artifact payloads."""
-    return model_value(raw_lookup_value(rt, name, local_env))
-
-
 def native_value(value: Any, *, _memo: dict[int, Any] | None = None) -> Any:
     """Resolve promises and artifacts recursively into their logical Python values."""
     from ...artifacts import ArtifactHandle
@@ -639,36 +633,60 @@ def model_value(value: Any, *, _memo: dict[int, Any] | None = None) -> Any:
     return _map_nested(value, model=True, memo={} if _memo is None else _memo)
 
 
-def model_text(value: Any) -> str:
-    """Render a model-facing value, using stable JSON for artifact references."""
-    _, text = model_value_and_text(value)
-    return text
+def substitution_text(value: Any, subject: str) -> str:
+    """Render one ``<...>`` substitution: ``<>`` always produces text.
 
-
-def prompt_part(value: Any, binding: str | None = None) -> Any:
-    """Render one prompt substitution: media become a mention, other values model text.
-
-    ``binding`` names the substituted value (``<cat_image>``); media without an explicit
-    name are shown to the model under it.
+    Only ``str``, ``int``, ``float``, ``bool`` and lists of them are text. Anything else, and
+    ``None``, is a type error: it would otherwise reach the text through its ``repr``, which can
+    hold anything (an API key in a client object, for example). ``subject`` is what the error
+    shows inside ``<...>``. A value stored as an artifact is opened: a substitution is the
+    template text itself, never an artifact reference (pass a reference with ``<<x>>``).
     """
-    from ...media import MediaMention, prompt_media
 
-    items = prompt_media(value)
-    if items is None:
-        return model_text(value)
-    return MediaMention(items=items, binding=binding, is_list=isinstance(value, (list, tuple)))
+    return substitution_value_and_text(value, subject)[1]
 
 
-def model_value_and_text(value: Any) -> tuple[Any, str]:
-    """Resolve and render once so request text and decision identity share a snapshot."""
-    contains_artifact = _contains_artifact_ref(value)
-    resolved = model_value(value)
-    if contains_artifact:
-        try:
-            return resolved, json.dumps(resolved, ensure_ascii=False, sort_keys=True)
-        except (TypeError, ValueError, RecursionError):
-            return resolved, repr(resolved)
-    return resolved, str(resolved)
+def substitution_value_and_text(value: Any, subject: str) -> tuple[Any, str]:
+    """:func:`substitution_text` with the model-facing value, for decision identity.
+
+    ``value`` is already resolved: callers map promises before rendering.
+    """
+
+    value = native_value(value)
+    problem = _non_text_value(value)
+    if problem is not None:
+        by_reference = (
+            "bind it to a name and pass it by reference with <<name>>"
+            if subject.startswith("`")
+            else f"pass it by reference with <<{subject}>>"
+        )
+        raise TypeError(
+            f"<{subject}> renders text, but {problem}. In a model prompt {by_reference}; to keep "
+            "the value use single-backtick Python; for text convert it explicitly, for example "
+            "<`str(...)`>."
+        )
+    return value, str(value)
+
+
+def _non_text_value(value: Any, *, depth: int = 0) -> str | None:
+    """Describe why a value has no text form, or ``None`` when it has one."""
+
+    if value is None:
+        return "the value is None"
+    if isinstance(value, (str, int, float, bool)):
+        return None
+    if isinstance(value, list) and depth < 32:
+        for item in value:
+            problem = _non_text_value(item, depth=depth + 1)
+            if problem is not None:
+                return f"{problem} (in a list)" if depth == 0 else problem
+        return None
+    from ...media import as_media
+
+    media = as_media(value)
+    if media is not None:
+        return f"the value is {media.label}"
+    return f"the value is of type {type(value).__name__}"
 
 
 def _raw_mapping_value(mapping: dict[str, Any], key: str) -> Any:
@@ -731,36 +749,6 @@ def validate_owned_value(
         raise TypeError(
             f"Python write-back for {name!r} does not match its annotated type"
         ) from exc
-
-
-def _contains_artifact_ref(value: Any, *, seen: set[int] | None = None) -> bool:
-    from ...artifacts import ArtifactHandle
-    from ...promise import KediPromise
-
-    if isinstance(value, ArtifactHandle):
-        return True
-    if isinstance(value, KediPromise):
-        return _contains_artifact_ref(value.resolve(), seen=seen)
-    seen = set() if seen is None else seen
-    identity = id(value)
-    if identity in seen:
-        return False
-    seen.add(identity)
-    if isinstance(value, Mapping):
-        return any(
-            _contains_artifact_ref(key, seen=seen) or _contains_artifact_ref(item, seen=seen)
-            for key, item in value.items()
-        )
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_contains_artifact_ref(item, seen=seen) for item in value)
-    if isinstance(value, BaseModel):
-        return _contains_artifact_ref(value.__dict__, seen=seen)
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return any(
-            _contains_artifact_ref(getattr(value, item.name), seen=seen)
-            for item in dataclasses.fields(value)
-        )
-    return False
 
 
 def _contains_lazy_value(value: Any, *, seen: set[int] | None = None) -> bool:

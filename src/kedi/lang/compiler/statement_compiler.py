@@ -98,7 +98,7 @@ from .evaluation import (
     prepare_segments,
     render_expression,
 )
-from .type_system import KediType, detect_rhs_kind, initialize_value_from_native
+from .type_system import KediType, initialize_value_from_native, mismatch_message
 
 _NO_RETURN = object()
 
@@ -356,7 +356,9 @@ class StatementCompiler:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except ValidationError as exc:
                     raise TypeError(
-                        "Assigned value does not match the binding's annotated type"
+                        mismatch_message(
+                            "Assigned value does not match the binding's annotated type", exc
+                        )
                     ) from exc
             self._assign_value(stmt.name, value, closure_env)
 
@@ -378,7 +380,9 @@ class StatementCompiler:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except ValidationError as exc:
                     raise TypeError(
-                        "Assigned value does not match the binding's annotated type"
+                        mismatch_message(
+                            "Assigned value does not match the binding's annotated type", exc
+                        )
                     ) from exc
             self._assign_value(stmt.name, value, closure_env)
 
@@ -389,28 +393,16 @@ class StatementCompiler:
         closure_env: dict[str, Any],
     ) -> Any:
         native, rendered = evaluate_binding_rhs(self.rt, segments, closure_env)
-        is_backtick, is_angle, is_call = detect_rhs_kind(segments)
         if native is not NO_NATIVE_VALUE:
-            if is_backtick:
-                return initialize_value_from_native(
-                    native, kedi_type, self.rt, closure_env, strict_native=True
-                )
-            if is_angle:
-                return initialize_value_from_native(
-                    native, kedi_type, self.rt, closure_env, strict_native=False
-                )
-            if is_call:
-                return (
-                    kedi_type.validate(self.rt, closure_env, native)
-                    if not kedi_type.is_none()
-                    else native
-                )
+            return initialize_value_from_native(native, kedi_type, self.rt, closure_env)
         if kedi_type.is_none():
             return rendered
         try:
             return kedi_type.validate(self.rt, closure_env, rendered)
         except ValidationError as exc:
-            raise TypeError("Native initialization value does not match annotated type") from exc
+            raise TypeError(
+                mismatch_message("Native initialization value does not match annotated type", exc)
+            ) from exc
 
     def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:
         """Execute a Python block for side effects."""

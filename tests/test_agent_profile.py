@@ -1158,7 +1158,7 @@ def test_runtime_globals_are_available_during_profile_capture() -> None:
 
 
 def test_runtime_globals_are_available_in_top_level_templates() -> None:
-    src = ">> Hello <args> [x]\n= <x>\n"
+    src = ">> Hello <`args.name`> [x]\n= <x>\n"
     adapter = _adapter()
     rt = compile_program(
         parse_program(src),

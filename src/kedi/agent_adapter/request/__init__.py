@@ -4,7 +4,6 @@ from .diagnostics import RequestDiagnostics, request_diagnostics
 from .lowering import RequestLoweringAdapter, lower_request_sync
 from .media import (
     MediaAttachment,
-    MediaMention,
     MediaSummary,
     compose_prompt,
     media_summaries,
@@ -43,7 +42,6 @@ __all__ = [
     "InstructionPart",
     "KediTemplatePromptBuilder",
     "MediaAttachment",
-    "MediaMention",
     "MediaSummary",
     "OutputContract",
     "PromptDraft",

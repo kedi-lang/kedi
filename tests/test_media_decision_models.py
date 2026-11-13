@@ -56,7 +56,7 @@ SOURCE = """\
   legible: Annotated[bool, "Is the receipt legible?", `BooleanCriteria(true="Legible", false="Blurry")`]
 )
 
->> The receipt in <{image}>.
+>> The receipt in <<{image}>>.
 The check is [check: Check].
 = `check.legible`
 """

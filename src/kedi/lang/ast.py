@@ -19,7 +19,7 @@ field and the ``type_expr`` field for every annotation it observes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Iterator, List, Literal, Optional, Tuple, Union
 
 if TYPE_CHECKING:
@@ -161,6 +161,33 @@ class OutputSegment(Segment):
     type_annotation: Optional[str] = None
     # Structured form populated by the CST→AST walker.
     type_expr: Optional[TypeExpr] = None
+
+
+@dataclass
+class InputReference(InputSegment):
+    """``<<name>>``: pass a binding to the model by reference.
+
+    The prompt text gets the value's ID and the value is attached to the model context under
+    that ID. It is an ``InputSegment``, so name lookups, renames and hovers see it; ``loc``
+    starts at the second ``<`` so the name sits one byte in, as in ``<name>``.
+    """
+
+
+@dataclass
+class CallReference(CallSegment):
+    """``<<proc(...)>>``: pass a procedure call's result by reference (see ``InputReference``)."""
+
+
+REFERENCE_SEGMENTS = (InputReference, CallReference)
+
+
+def reference_span(segment: InputReference | CallReference) -> Optional[Span]:
+    """The whole ``<<...>>`` span of a reference."""
+
+    loc = segment.loc
+    if loc is None:
+        return None
+    return replace(loc, start_byte=loc.start_byte - 1, start_col=loc.start_col - 1)
 
 
 @dataclass

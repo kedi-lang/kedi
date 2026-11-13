@@ -118,25 +118,42 @@ def test_show_allows_explicit_model_procedure_and_existing_capture(capsys):
 
 
 @pytest.mark.parametrize("value", [None, 0, False, ""])
-def test_typed_template_call_return_preserves_native_falsy_values(value):
+def test_typed_backtick_call_return_preserves_native_falsy_values(value):
     annotation = "str | bool | int | None"
     result = run(
         f"@empty() -> {annotation}:\n  = `{value!r}`\n"
-        f"@outer() -> {annotation}:\n  = <empty()>\n"
+        f"@outer() -> {annotation}:\n  = `empty()`\n"
         "= `outer()`\n"
     )
     assert result == value
     assert type(result) is type(value)
 
 
+@pytest.mark.parametrize("value", [0, False, ""])
+def test_typed_template_call_return_is_text(value):
+    result = run(
+        f"@empty() -> str | bool | int:\n  = `{value!r}`\n"
+        "@outer() -> str:\n  = <empty()>\n"
+        "= `outer()`\n"
+    )
+    assert result == str(value)
+
+
+def test_template_call_returning_none_is_a_type_error():
+    with pytest.raises(
+        KediExecutionError, match=r"<empty\(\)> renders text, but the value is None"
+    ):
+        run("@empty() -> int | None:\n  = `None`\n[value: int | None] = <empty()>\n")
+
+
 def test_nullable_call_initialization_and_assignment_preserve_none():
     assert (
         run(
             "@empty() -> int | None:\n  = `None`\n"
-            "[value: int | None] = <empty()>\n"
+            "[value: int | None] = `empty()`\n"
             "`assert value is None`\n"
             "[value] := `1`\n"
-            "[value] := <empty()>\n"
+            "[value] := `empty()`\n"
             "= `value`\n"
         )
         is None

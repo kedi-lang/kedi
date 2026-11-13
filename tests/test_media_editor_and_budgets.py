@@ -1,4 +1,4 @@
-"""Media in the editor, request budgets, history codecs and notebook snapshots."""
+"""References in the editor, request budgets, history codecs and notebook snapshots."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from kedi.agent_adapter.request_budget import (
     estimate_media_tokens,
     project_media_payloads,
 )
-from kedi.media import Document, Image, MediaMention, Video
+from kedi.media import Document, Image, Reference, Video
 from tests.lsp_helpers import diagnostics_for, hover_text_at
 from tests.test_media_values import png_bytes
 
@@ -25,11 +25,11 @@ def _codes(source: str) -> list[tuple[str, int]]:
     return [
         (str(diagnostic.code), diagnostic.range.start.line)
         for diagnostic in diagnostics_for(source, "/tmp/media.kedi")
-        if str(diagnostic.code).startswith(("K-MEDIA", "K-ADAPTER"))
+        if str(diagnostic.code).startswith(("K-SUBSTITUTION", "K-ADAPTER"))
     ]
 
 
-def test_editor_reports_media_rendered_into_text() -> None:
+def test_editor_reports_media_substituted_as_text() -> None:
     source = """> import: media
 > import: decisions
 
@@ -43,24 +43,24 @@ def test_editor_reports_media_rendered_into_text() -> None:
 > use: lead
 
 @caption(photo: Image, style: str) -> str:
-  [text] << Describe <photo> in a <style> style.
+  [text] << Describe <<photo>> in a <style> style.
   = <text>
 
 @bad(photo: Image) -> str:
   = See <photo>
 
 @pick() -> Image:
-  = <image(cat.png)>
+  = `image("cat.png")`
 
 @plain(text: str) -> str:
   = <text>
 
-[cat_image] = <image(cat.png)>
-[picked] = <pick()>
+[cat_image: Image] = `image("cat.png")`
+[picked: Image] = `pick()`
 [title: str] = Cats
 [ok] = <caption(`cat_image`, plain)>
 [wrong] = <caption(<cat_image>, plain)>
->> What is <cat_image>? Compare <caption(<picked>, plain)> [what]
+>> What is <<cat_image>>? Compare <caption(<picked>, plain)> [what]
 [reply] << Describe <caption(<cat_image>, plain)>.
 [label] = See <cat_image>
 [label] := Again <picked>
@@ -72,21 +72,24 @@ def test_editor_reports_media_rendered_into_text() -> None:
     >> Review <cat_image>.
 > send: job:
     >> Also check <picked>.
+>> Look at <image(cat.png)> and <<image(dog.png)>> [seen]
 """
     assert sorted(_codes(source)) == [
-        ("K-MEDIA-TEXT", 17),  # text return in a procedure
-        ("K-MEDIA-TEXT", 29),  # string argument in an assignment
-        ("K-MEDIA-TEXT", 30),  # string argument inside a template
-        ("K-MEDIA-TEXT", 31),  # string argument inside a raw invoke
-        ("K-MEDIA-TEXT", 32),  # text assignment
-        ("K-MEDIA-TEXT", 33),  # text reassignment
-        ("K-MEDIA-TEXT", 37),  # instructions
-        ("K-MEDIA-TEXT", 39),  # subagent task
-        ("K-MEDIA-TEXT", 41),  # agent input
+        ("K-SUBSTITUTION-TYPE", 17),  # text return in a procedure
+        ("K-SUBSTITUTION-TYPE", 29),  # argument in an assignment
+        ("K-SUBSTITUTION-TYPE", 30),  # argument inside a template
+        ("K-SUBSTITUTION-TYPE", 31),  # argument inside a raw invoke
+        ("K-SUBSTITUTION-TYPE", 32),  # text assignment
+        ("K-SUBSTITUTION-TYPE", 33),  # text reassignment
+        ("K-SUBSTITUTION-TYPE", 35),  # show
+        ("K-SUBSTITUTION-TYPE", 37),  # instructions
+        ("K-SUBSTITUTION-TYPE", 39),  # subagent task
+        ("K-SUBSTITUTION-TYPE", 41),  # agent input
+        ("K-SUBSTITUTION-TYPE", 42),  # a media call as text in a prompt
     ]
     messages = [d.message for d in diagnostics_for(source, "/tmp/media.kedi")]
-    assert any("instructions are text only" in message for message in messages)
-    assert any("subagent tasks do not take media yet" in message for message in messages)
+    assert "<cat_image> renders text, but cat_image is media" in "\n".join(messages)
+    assert "pass it by reference with <<image(...)>>" in "\n".join(messages)
 
 
 def test_editor_ignores_media_names_without_the_media_import() -> None:
@@ -100,7 +103,7 @@ def test_editor_ignores_media_names_without_the_media_import() -> None:
 
 > agent: claude
 [cat_image] = <image(cat.png)>
-[reply] << Describe <cat_image> and <image(dog.png)>.
+[reply] << Describe <<cat_image>> and <<image(dog.png)>> with <image(dog.png)>.
 """
     assert _codes(source) == []
 
@@ -110,12 +113,12 @@ def test_editor_reports_media_prompts_on_adapters_without_media_input() -> None:
 > agent: claude
 
 @pick() -> Image:
-  = <image(cat.png)>
+  = `image("cat.png")`
 
-[cat_image] = <image(cat.png)>
->> What is <cat_image>? [what]
-[reply] << Describe <image(dog.png)> and <pick()>.
-> if: <cat_image> shows a cat
+[cat_image: Image] = `image("cat.png")`
+>> What is <<cat_image>>? [what]
+[reply] << Describe <<image(dog.png)>> and <<pick()>>.
+> if: <<cat_image>> shows a cat
   [mode] = cat
 """
     assert _codes(source) == [
@@ -138,7 +141,10 @@ def test_budget_estimates_media_by_kind_not_base64() -> None:
     assert estimate_media_tokens("video", 100) == 258
     image = MediaAttachment(name="cat", media=Image.from_bytes(LARGE, "image/png"))
     notes = MediaAttachment(name="notes", media=Document.from_bytes(b"ship", "text/plain"))
-    assert estimate_attachment_tokens([image]) == len("cat:") + 1_600
+    assert (
+        estimate_attachment_tokens([image])
+        == len('<image id="cat" type="image/png"></image>') + 1_600
+    )
     assert estimate_attachment_tokens([notes]) == len(notes.inline_text().encode())
 
     encoded = base64.b64encode(LARGE).decode()
@@ -193,11 +199,11 @@ def test_request_names_and_history_reuse_rules() -> None:
     text, attachments = compose_prompt(
         [
             "A ",
-            MediaMention((dog,)),
+            Reference((dog,)),
             " B ",
-            MediaMention((named,), "cat"),
+            Reference((named,), "cat"),
             " C ",
-            MediaMention((cat,), "again"),
+            Reference((cat,), "again"),
         ]
     )
     # Unnamed media are numbered; explicit names win; the same content keeps its first name.
@@ -205,7 +211,7 @@ def test_request_names_and_history_reuse_rules() -> None:
     assert [attachment.name for attachment in attachments] == ["image_1", "kedi"]
 
     clash_text, clash = compose_prompt(
-        [MediaMention((cat.with_name("photo"),)), " ", MediaMention((dog.with_name("photo"),))]
+        [Reference((cat.with_name("photo"),)), " ", Reference((dog.with_name("photo"),))]
     )
     assert clash_text == "photo photo_2" and len(clash) == 2
 

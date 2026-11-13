@@ -46,7 +46,7 @@ def test_call_assignment_validates_lhs() -> None:
 
 
 def test_call_assignment_passes_matching_type() -> None:
-    src = "@returns_int() -> int:\n  = `7`\n\n[x: int] = <returns_int()>\n= <`str(x + 1)`>\n"
+    src = "@returns_int() -> int:\n  = `7`\n\n[x: int] = `returns_int()`\n= <`str(x + 1)`>\n"
     assert run_without_llm(src) == "8"
 
 

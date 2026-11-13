@@ -9,6 +9,7 @@ import pytest
 from kedi.core import KediRuntime
 from kedi.lang.ast import (
     CallSegment,
+    InputReference,
     InputSegment,
     LiteralArg,
     OutputSegment,
@@ -94,13 +95,14 @@ def test_optimization_utils_render_and_normalize_edges() -> None:
     line = TemplateLine(
         segments=[
             TextSegment(text="A "),
+            InputReference(name="photo"),
             OutputSegment(name="raw"),
             PythonExprSegment(code="x + 1"),
             cast(Any, object()),
             PythonExprNativeSegment(),
         ]
     )
-    assert template_line_to_string(line) == "A [raw]<`x + 1`><expr>"
+    assert template_line_to_string(line) == "A <<photo>>[raw]<`x + 1`><expr>"
 
     empty_span = make_optimize_span("empty", [])
     assert normalize_optimized_prompt_prefix(empty_span, None) == ""
@@ -120,6 +122,8 @@ def test_optimization_utils_render_and_normalize_edges() -> None:
         [
             TextSegment(text="Name "),
             InputSegment(name="name"),
+            TextSegment(text=" ref "),
+            InputReference(name="name"),
             TextSegment(text=" missing "),
             InputSegment(name="missing"),
             TextSegment(text=" call "),
@@ -139,7 +143,7 @@ def test_optimization_utils_render_and_normalize_edges() -> None:
     )
 
     assert render_instruction_lines(rendered_span, rt, {"name": "Ada"}) == (
-        "Name Ada missing <missing> call 4 badcall <missing()> out [answer] typed [count: int] "
+        "Name Ada ref <<name>> missing <missing> call 4 badcall <missing()> out [answer] typed [count: int] "
         "py 3 bad <`1 / 0`>"
     )
 

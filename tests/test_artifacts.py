@@ -471,7 +471,7 @@ class ConversationAdapter(MockAdapter):
                 self.active_calls -= 1
 
 
-def test_runtime_returns_native_output_but_reuses_compact_model_reference() -> None:
+def test_runtime_returns_native_output_and_substitutes_its_text() -> None:
     adapter = ArtifactRecordingAdapter()
     runtime = compile_program(
         parse_program(
@@ -491,9 +491,9 @@ def test_runtime_returns_native_output_but_reuses_compact_model_reference() -> N
     result = runtime.run_main()
 
     assert result == "payload-value"
-    assert "payload-value" not in adapter.templates[1]
-    assert '"ref_id": "template_output_1"' in adapter.templates[1]
-    assert '"preview": "payload…"' in adapter.templates[1]
+    # <payload> is template text: the stored value's text, never its artifact reference.
+    assert "Describe payload-value as" in adapter.templates[1]
+    assert "template_output_1" not in adapter.templates[1]
     assert runtime.artifacts.stats()["active_artifacts"] == 2
     runtime.artifacts.close()
 

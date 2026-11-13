@@ -59,13 +59,15 @@ class ComputedExpr:
 
 
 @dataclass(frozen=True, slots=True)
-class MediaExpr:
-    """Media a prompt call or inline Python produced; the request names and attaches it."""
+class ReferenceExpr:
+    """A ``<<...>>`` reference: a binding looked up when the prompt is built (``key``), or the
+    already-evaluated reference of a procedure call (``reference``)."""
 
-    mention: Any
+    key: str | None = None
+    reference: Any = None
 
 
-Expression = Union[str, InputExpr, OutputExpr, CallExpr, ComputedExpr, MediaExpr]
+Expression = Union[str, InputExpr, OutputExpr, CallExpr, ComputedExpr, ReferenceExpr]
 
 
 def i(key: str) -> InputExpr:
@@ -124,41 +126,50 @@ def _evaluate_expression(
     if isinstance(expr, str):
         return expr, None
     if isinstance(expr, InputExpr):
-        from kedi.lang.compiler.environment import prompt_part
+        from kedi.lang.compiler.environment import substitution_text
 
         value = self._lookup_value(expr.key, env)
         # Defer: a promise input becomes a dependency edge; the prompt is built (in the
-        # produce job) only after it resolves. The deferred value resolves to the same prompt
-        # part as the sequential path's eager rendering (text, or a media mention), so a
-        # non-str typed output chained into a prompt renders identically in both modes.
+        # produce job) only after it resolves, with the same text as the sequential path.
         if isinstance(value, KediPromise):
-            return value.map(lambda item, key=expr.key: prompt_part(item, key)), None
-        return prompt_part(value, expr.key), None
+            return value.map(lambda item, key=expr.key: substitution_text(item, key)), None
+        return substitution_text(value, expr.key), None
+    if isinstance(expr, ReferenceExpr):
+        if expr.key is None:
+            return expr.reference, None
+        value = self._lookup_value(expr.key, env)
+        if isinstance(value, KediPromise):
+            return value.map(lambda item, key=expr.key: binding_reference(key, item)), None
+        return binding_reference(expr.key, value), None
     if isinstance(expr, CallExpr):
+        from kedi.lang.compiler.environment import substitution_text
+
         evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
         callee = self._get_proc(expr.func_name)
         # _invoke_procedure force-joins its result, so a cross-procedure call never yields a
         # promise here. If one ever does, str() raising KediPromiseLeak is the correct loud
         # failure — better than silently deferring an unsupported cross-proc dataflow.
         result = self._invoke_procedure(callee, evaluated_args)
-        return computed_prompt_part(result), None
+        return substitution_text(result, f"{expr.func_name}(...)"), None
     if isinstance(expr, ComputedExpr):
         return expr.text, None
-    if isinstance(expr, MediaExpr):
-        return expr.mention, None
     if isinstance(expr, OutputExpr):
         return f"[{expr.key}]", expr
     return str(expr), None
 
 
-def computed_prompt_part(value: Any, binding: str | None = None) -> Any:
-    """Render a value into a prompt as text, or as a mention the request attaches."""
-    from kedi.media import MediaMention, prompt_media
+def binding_reference(key: str, value: Any) -> Any:
+    """What ``<<key>>`` attaches for a looked-up value.
 
-    items = prompt_media(value)
-    if items is None:
-        return str(value)
-    return MediaMention(items=items, binding=binding, is_list=isinstance(value, (list, tuple)))
+    A value already stored as an artifact keeps its reference; anything else is resolved.
+    """
+    from kedi.artifacts import ArtifactHandle
+    from kedi.lang.compiler.environment import native_value
+    from kedi.media import reference
+
+    return reference(
+        value if isinstance(value, ArtifactHandle) else native_value(value), binding=key
+    )
 
 
 def _evaluate_value(self: KediRuntime, value: Any, env: ValueEnv) -> Any:

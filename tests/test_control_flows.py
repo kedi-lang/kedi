@@ -1017,7 +1017,7 @@ def test_procedure_if_else_and_nested_if() -> None:
       `result = "both"`
   = <result>
 
-= <choose(<`True`>, <`True`>)>
+= <choose(`True`, `True`)>
 """.lstrip()
         )
     )

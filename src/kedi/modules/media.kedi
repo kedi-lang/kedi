@@ -1,10 +1,12 @@
 ###
 Media values for multimodal prompts: images, audio, video and documents.
 
-A media value substituted into a model prompt (>>, <<, a typed capture or a > if: claim) is
-attached before the prompt text, and the text shows only its name: the binding name, or
-image_1, audio_1, ... for an unnamed value. Paths start at the working directory and follow
-KEDI_WORKSPACE_POLICY like the filesystem module; .env files are refused.
+A model prompt (>>, [x] <<, a typed capture or a > if: claim) passes media by reference:
+<<cat>> or <<image(cat.png)>>. The value is attached before the prompt text and the text shows
+only its ID: the binding name, or image_result_1, ... for a call. <cat> is a type error, because
+<...> renders text. Keep a value with single-backtick Python: [cat: Image] = `image("cat.png")`.
+Paths start at the working directory and follow KEDI_WORKSPACE_POLICY like the filesystem
+module; .env files are refused.
 ###
 
 ```
@@ -21,7 +23,7 @@ from kedi.media import Audio, Document, Image, Media, Video
         source (Any): A path relative to the working directory, a URL, a data URI or an image.
 
     Returns:
-        Image: A PNG, JPEG, GIF or WebP image. Prompts attach it and show its name.
+        Image: A PNG, JPEG, GIF or WebP image. <<...>> attaches it and shows its ID.
     ###
     = `Image.coerce(source)`
 
@@ -59,7 +61,7 @@ from kedi.media import Audio, Document, Image, Media, Video
 
     Returns:
         Document: A PDF, read by the provider, or a text document (text, Markdown, CSV, HTML,
-            JSON, XML, YAML, TOML), which reaches the model as delimited text.
+            JSON, XML, YAML, TOML), which reaches the model as text in a <document> tag.
     ###
     = `Document.coerce(source)`
 

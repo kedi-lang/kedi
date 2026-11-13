@@ -308,7 +308,10 @@ def test_python_query_and_file_binding_pass_the_native_incident(monkeypatch, cap
         if "incident" in fields:
             value = {"incident": {"service": "checkout", "symptom": "timeouts", "resolved": False}}
         else:
-            assert "checkout" in str(messages) and "False" in str(messages)
+            # The incident is attached by reference as a JSON document.
+            attached = messages[-1].parts[-1].content[0]
+            assert '<document id="incident" type="application/json">' in attached
+            assert '"service":"checkout"' in attached and '"resolved":false' in attached
             value = {"notice": "Checkout requests are timing out. Recovery has not been confirmed."}
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, value)])
 

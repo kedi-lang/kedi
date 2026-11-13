@@ -125,7 +125,7 @@ def test_eval_uses_validation_cases_without_running_demo():
     assert results[0].metrics[0].name == "optimality"
     assert results[0].metrics[0].score == 1.0
     assert len(requests) == 2
-    assert "'G': (5, 10)" in str(requests[0])
+    assert '{"G":[5,10]' in requests[0][-1].parts[0].content[0]
     assert "The selected item names are [selected" in str(requests[0])
 
 

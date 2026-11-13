@@ -516,56 +516,40 @@ def _is_immutable_default(value: Any) -> bool:
     return False
 
 
+def mismatch_message(message: str, exc: BaseException) -> str:
+    """A type mismatch message with the media reason, when a media value caused it."""
+    from ...media import media_error_detail
+
+    detail = media_error_detail(exc)
+    return message if detail is None else f"{message}: {detail}"
+
+
 def initialize_value_from_native(
     native: Any,
     kedi_type: KediType,
     rt: KediRuntime,
     env: dict[str, Any] | None,
-    *,
-    strict_native: bool,
 ) -> Any:
-    if strict_native:
-        if kedi_type.is_none():
-            if isinstance(native, str):
-                return native
+    """Initialize a binding from a single-backtick value under its annotation."""
+    if kedi_type.is_none():
+        if isinstance(native, str):
+            return native
+        raise KediTypeExecutionError(
+            "Native non-string initialization requires explicit type annotation"
+        )
+    # Resolve up front: an unknown name or an invalid type expression is reported as
+    # such, never as a mismatched value.
+    kedi_type.resolve_required(rt, env)
+    try:
+        return kedi_type.validate(rt, env, native)
+    except ValidationError as exc:
+        if isinstance(native, str):
             raise KediTypeExecutionError(
-                "Native non-string initialization requires explicit type annotation"
-            )
-        # Resolve up front: an unknown name or an invalid type expression is reported as
-        # such, never as a mismatched value.
-        kedi_type.resolve_required(rt, env)
-        try:
-            return kedi_type.validate(rt, env, native)
-        except ValidationError:
-            if isinstance(native, str):
-                raise KediTypeExecutionError("Annotation type mismatch: got str value")
-            raise KediTypeExecutionError(
-                "Native initialization value does not match annotated type"
-            )
-    else:
-        if not kedi_type.is_none():
-            raise KediTypeExecutionError(
-                "Angle-inline pure python cannot have a non-str annotation"
-            )
-        return str(native)
-
-
-def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
-    """Detect the kind of RHS expression."""
-    from ..ast import (
-        CallSegment,
-        PythonExprNativeSegment,
-        PythonExprSegment,
-        TextSegment,
-    )
-
-    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
-
-    is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
-    is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
-    is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
-
-    return is_backtick_native, is_angle_pure, is_call_only
+                mismatch_message("Annotation type mismatch: got str value", exc)
+            ) from None
+        raise KediTypeExecutionError(
+            mismatch_message("Native initialization value does not match annotated type", exc)
+        ) from None
 
 
 def _convert_basic_literal(raw: str, typ: Any) -> Any:

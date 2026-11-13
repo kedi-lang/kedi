@@ -870,6 +870,7 @@ def _walk_variable_init_stmt(self: _Walker, node: Node) -> VariableInitStmt:
         )
     # template_expr
     segs = self._walk_template_expr(rhs_node) if rhs_node is not None else []
+    self._reject_references(segs, node, "initializations")
     return VariableInitStmt(
         name=name,
         expr=segs,
@@ -909,6 +910,7 @@ def _walk_assignment_stmt(self: _Walker, node: Node) -> AssignmentStmt:
         segments: List[Segment] = [PythonExprNativeSegment(code=code, loc=self._span(native_expr))]
     else:
         segments = self._walk_template_expr(rhs_node) if rhs_node is not None else []
+        self._reject_references(segments, node, "assignments")
     return AssignmentStmt(name=name, expr=segments, loc=self._span(node))
 
 
@@ -1011,6 +1013,8 @@ def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt | Sen
         )
     template = self._walk_template_block_stmt(template_node)
     self._validate_template_block_scope(template.lines)
+    for line in template.lines:
+        self._reject_references(line.segments, template_node, "subagent tasks and messages")
     if node.type == "send_stmt":
         if any(contains_output_captures(line.segments) for line in template.lines):
             self._error(
@@ -1049,6 +1053,7 @@ def _walk_show_stmt(self: _Walker, node: Node) -> ShowStmt:
         ]
     else:
         segments = self._walk_template_expr(value_node) if value_node is not None else []
+        self._reject_references(segments, node, "> show:")
     if contains_output_captures(segments):
         self._error(node, "Show cannot declare output captures", code="kedi.show_capture")
     return ShowStmt(segments=segments, loc=self._span(node))
@@ -1068,6 +1073,7 @@ def _walk_return_stmt(self: _Walker, node: Node) -> Union[ReturnStmt, ReturnBloc
         code = self._walk_inline_python_expr(native_expr)
         return ReturnBlockStmt(code=code, loc=self._span(node))
     segs = self._walk_template_expr(value_node) if value_node is not None else []
+    self._reject_references(segs, node, "returns")
     return ReturnStmt(segments=segs, loc=self._span(node))
 
 

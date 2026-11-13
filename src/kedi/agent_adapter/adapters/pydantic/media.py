@@ -1,29 +1,25 @@
-"""Pydantic AI user content for prompts with media attachments.
+"""Pydantic AI user content for prompts with attachments.
 
-One user message carries ``[label, media]* + [prompt text]``: each binary attachment is
-introduced by a ``name:`` text item, and text documents arrive as inlined-file text.
+One user message carries the ``<attachments>`` element (see ``kedi.agent_adapter.request.media``)
+and then the prompt text; each binary attachment is a native item inside its tag.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Sequence
 from typing import Any, cast
 
 from kedi.agent_adapter.request.media import (
     MediaAttachment,
+    attachment_content,
     check_media_support,
     download_image_urls,
     media_provider,
+    scan_sent_content,
     unsent_attachments,
 )
 from kedi.media import media_kind
-
-_INLINE_FILE = re.compile(
-    r'-----BEGIN FILE id="([^"]+)" type="([^"]+)"-----\n(.*?)\n-----END FILE id="\1"-----',
-    re.DOTALL,
-)
 
 
 async def user_prompt(
@@ -48,15 +44,10 @@ async def user_prompt(
     )
     if not pending:
         return prompt
-    content: list[Any] = []
-    for attachment in pending:
-        if attachment.is_text:
-            content.append(attachment.inline_text())
-            continue
-        content.append(attachment.label())
-        content.append(_native_content(attachment))
-    content.append(prompt)
-    return content
+    return [
+        piece if isinstance(piece, str) else _native_content(piece)
+        for piece in attachment_content(prompt, pending)
+    ]
 
 
 def sent_attachments(messages: Sequence[Any]) -> dict[str, tuple[str, ...]]:
@@ -79,20 +70,13 @@ def sent_attachments(messages: Sequence[Any]) -> dict[str, tuple[str, ...]]:
             continue
         for part in message.parts:
             if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
-                _scan_content(list(part.content), index)
+                scan_sent_content(
+                    list(part.content),
+                    index,
+                    text_of=lambda item: item if isinstance(item, str) else None,
+                    identity_of=_content_identity,
+                )
     return index
-
-
-def _scan_content(items: list[Any], index: dict[str, tuple[str, ...]]) -> None:
-    for position, item in enumerate(items):
-        if not isinstance(item, str):
-            continue
-        for name, _media_type, text in _INLINE_FILE.findall(item):
-            index[name] = (name, "document", "sha256", _sha256(text.encode("utf-8")))
-        following = items[position + 1] if position + 1 < len(items) else None
-        identity = None if following is None else _content_identity(following)
-        if identity is not None and item.endswith(":") and item[:-1].isidentifier():
-            index[item[:-1]] = (item[:-1], *identity)
 
 
 def _content_identity(item: Any) -> tuple[str, ...] | None:

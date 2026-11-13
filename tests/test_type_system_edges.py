@@ -26,7 +26,6 @@ from kedi.lang.compiler.type_system import (
     _parse_model_repr,
     _typeexpr_to_str,
     coerce_model_value,
-    detect_rhs_kind,
     initialize_value_from_native,
     is_value_compatible,
     pop_type_env,
@@ -61,7 +60,7 @@ class UnknownTypeExpr(TypeExpr):
 )
 def test_native_string_initialization_validates_composite_annotations(annotation, value):
     result = initialize_value_from_native(
-        value, KediType("Value"), KediRuntime(), {"Value": annotation}, strict_native=True
+        value, KediType("Value"), KediRuntime(), {"Value": annotation}
     )
     assert result == value
     assert type(result) is type(value)
@@ -78,9 +77,7 @@ def test_native_string_initialization_validates_composite_annotations(annotation
 )
 def test_native_string_initialization_remains_strict(annotation, value):
     with pytest.raises(TypeError, match="Annotation type mismatch"):
-        initialize_value_from_native(
-            value, KediType("Value"), KediRuntime(), {"Value": annotation}, strict_native=True
-        )
+        initialize_value_from_native(value, KediType("Value"), KediRuntime(), {"Value": annotation})
 
 
 def test_structured_type_resolution_and_rendering_edges() -> None:
@@ -288,20 +285,15 @@ def test_literal_model_repr_default_and_native_initialization_helpers() -> None:
         "active": True,
     }
 
-    assert initialize_value_from_native("x", KediType(None), rt, {}, strict_native=True) == "x"
+    assert initialize_value_from_native("x", KediType(None), rt, {}) == "x"
     with pytest.raises(TypeError, match="requires explicit type annotation"):
-        initialize_value_from_native(1, KediType(None), rt, {}, strict_native=True)
+        initialize_value_from_native(1, KediType(None), rt, {})
     with pytest.raises(TypeError, match="Annotation type mismatch"):
-        initialize_value_from_native("1", KediType("int"), rt, {}, strict_native=True)
-    assert initialize_value_from_native("x", KediType("str"), rt, {}, strict_native=True) == "x"
-    assert initialize_value_from_native(1, KediType("int"), rt, {}, strict_native=True) == 1
+        initialize_value_from_native("1", KediType("int"), rt, {})
+    assert initialize_value_from_native("x", KediType("str"), rt, {}) == "x"
+    assert initialize_value_from_native(1, KediType("int"), rt, {}) == 1
     with pytest.raises(TypeError, match="Native initialization value"):
-        initialize_value_from_native([1], KediType("int"), rt, {}, strict_native=True)
-    with pytest.raises(TypeError, match="cannot have a non-str annotation"):
-        initialize_value_from_native(1, KediType("int"), rt, {}, strict_native=False)
-    assert initialize_value_from_native(1, KediType(None), rt, {}, strict_native=False) == "1"
-
-    assert detect_rhs_kind([]) == (False, False, False)
+        initialize_value_from_native([1], KediType("int"), rt, {})
     pop_type_env(KediRuntime())
 
     rt = KediRuntime()

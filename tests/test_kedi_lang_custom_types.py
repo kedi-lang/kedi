@@ -122,7 +122,7 @@ def test_type_parameter_annotation_call():
         "  ```\n\n"
         "@describe(p: Person):\n"
         "  = <`p.name + ':' + p.city`>\n\n"
-        "= <describe(<`make()`>)>\n"
+        "= <describe(`make()`)>\n"
     )
     out = _run(src)
     assert out == "Bob:NY"
@@ -276,7 +276,7 @@ def test_procedure_parameters_use_scoped_type():
         "  ~Inner(name)\n"
         "  @inner(x: Inner):\n"
         "    = <`x.name`>\n"
-        "  = <inner(<`Inner(name='scoped')`>)>\n\n"
+        "  = <inner(`Inner(name='scoped')`)>\n\n"
         "= <outer()>\n"
     )
     out = _run(src)

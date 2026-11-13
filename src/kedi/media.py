@@ -11,6 +11,7 @@ import base64
 import binascii
 import hashlib
 import io
+import json
 import mimetypes
 import os
 import re
@@ -197,22 +198,6 @@ def format_size(size: int) -> str:
     if size < 1024 * 1024:
         return f"{round(size / 1024)} KB"
     return f"{size / (1024 * 1024):.1f} MB"
-
-
-def format_inline_text(text: str, *, name: str, media_type: str) -> str:
-    """Render a text document the way it reaches the model: a delimited block named ``name``.
-
-    This is the inlined-file format Pydantic AI uses for providers without text-file input,
-    so a document reads the same on every adapter and provider.
-    """
-
-    return "\n".join(
-        (
-            f'-----BEGIN FILE id="{name}" type="{media_type}"-----',
-            text,
-            f'-----END FILE id="{name}"-----',
-        )
-    )
 
 
 def workspace_path(raw: str | os.PathLike[str]) -> Path:
@@ -573,10 +558,11 @@ class Media:
 
     @classmethod
     def coerce(cls: type[MediaT], value: Any) -> MediaT:
-        """Convert a supported value, as typed parameters and validation do.
+        """Load a value explicitly, as ``image()``, ``audio()``, ``video()`` and ``document()`` do.
 
         Accepts media values, Pydantic AI media objects, PIL images, data URIs, URLs and
-        workspace paths (see :func:`workspace_path`).
+        workspace paths (see :func:`workspace_path`). Typed bindings and parameters never call
+        this: they accept media values only.
         """
 
         media = as_media(value)
@@ -603,14 +589,51 @@ class Media:
         return getattr(cls, "_type_label", "a media value")
 
     @classmethod
+    def _validate_python(cls: type[MediaT], value: Any) -> MediaT:
+        """Accept media values and their native equivalents only, never a path or URL string.
+
+        Loading a file or a URL is explicit: ``image("cat.png")`` or ``Image.from_path(...)``.
+        """
+
+        media = as_media(value)
+        if media is None:
+            raise MediaError(
+                f"Expected {cls._label()}, got {type(value).__name__}; strings are never "
+                'converted to media: load it explicitly, for example image("cat.png")'
+            )
+        if not isinstance(media, cls):
+            raise MediaError(f"Expected {cls._label()}, got {media.label}")
+        return media
+
+    @classmethod
+    def _validate_json(cls: type[MediaT], value: Any) -> MediaT:
+        """Read back what JSON serialization writes: a data URI, a URL or a file id."""
+
+        if isinstance(value, str) and value.startswith("data:"):
+            media: Media = cls.from_data_uri(value)
+        elif isinstance(value, str) and urlparse(value).scheme.lower() in _URL_SCHEMES:
+            media = cls.from_url(value)
+        elif isinstance(value, dict) and {"file_id", "provider", "media_type"} <= value.keys():
+            media = cls.from_file_id(
+                value["file_id"], provider=value["provider"], media_type=value["media_type"]
+            )
+        else:
+            raise MediaError(f"Expected {cls._label()} as a data URI, a URL or a file id")
+        # A concrete class (Image, ...) builds only its own kind and rejects any other.
+        return cast("MediaT", media)
+
+    @classmethod
     def __get_pydantic_core_schema__(
         cls,
         source: Any,
         handler: GetCoreSchemaHandler,
     ) -> core_schema.CoreSchema:
-        return core_schema.no_info_plain_validator_function(
-            cls.coerce,
-            json_schema_input_schema=core_schema.str_schema(),
+        return core_schema.json_or_python_schema(
+            json_schema=core_schema.no_info_plain_validator_function(
+                cls._validate_json,
+                json_schema_input_schema=core_schema.str_schema(),
+            ),
+            python_schema=core_schema.no_info_plain_validator_function(cls._validate_python),
             serialization=core_schema.plain_serializer_function_ser_schema(
                 _serialize, info_arg=True
             ),
@@ -690,12 +713,20 @@ _KIND_CLASSES: dict[MediaKind, type[Media]] = {
 
 
 @dataclass(frozen=True, slots=True)
-class MediaMention:
-    """Media substituted into a prompt, before the request assigns names."""
+class Reference:
+    """A value a prompt passes by reference (``<<x>>``), before the request names it.
+
+    ``items`` are attached to the model context once each; the prompt text gets their names.
+    ``binding`` is the referenced name, ``call`` the procedure of ``<<proc(...)>>``. ``stored`` is
+    the artifact handle when the value is already stored as an artifact: the request then sends
+    its reference instead of its content when the model can read artifacts.
+    """
 
     items: tuple[Media, ...]
     binding: str | None = None
+    call: str | None = None
     is_list: bool = False
+    stored: Any = None
 
     def preferred_name(self, index: int) -> str | None:
         if self.binding is None:
@@ -705,6 +736,64 @@ class MediaMention:
         if base[:1].isdigit():
             base = f"_{base}"
         return f"{base}_{index}" if self.is_list else base
+
+    @property
+    def generated_base(self) -> str | None:
+        """The stem of generated names: ``image_result`` for ``<<image(...)>>``."""
+
+        return None if self.call is None else f"{self.call}_result"
+
+
+def reference(value: Any, *, binding: str | None = None, call: str | None = None) -> Reference:
+    """Build what ``<<value>>`` attaches: media natively, any other value as a text document.
+
+    A list of media attaches each item. Text stays text; numbers and booleans are written as
+    text; lists, dicts and models are JSON. Media nested in other values cannot be referenced.
+    """
+
+    from kedi.artifacts import ArtifactHandle
+
+    if isinstance(value, ArtifactHandle):
+        # The reference identifies the stored value; the request decides how it is sent.
+        ref = json.dumps(value.as_ref().model_dump(mode="json"), sort_keys=True)
+        item = Document(media_type="application/json", data=ref.encode("utf-8"))
+        return Reference(items=(item,), binding=binding, call=call, stored=value)
+    subject = f"<<{binding or f'{call}(...)'}>>"
+    media = as_media(value)
+    if media is not None:
+        return Reference(items=(media,), binding=binding, call=call)
+    if isinstance(value, (list, tuple)) and value:
+        items = [as_media(item) for item in value]
+        if all(item is not None for item in items):
+            return Reference(
+                items=tuple(item for item in items if item is not None),
+                binding=binding,
+                call=call,
+                is_list=True,
+            )
+    if value is None:
+        raise MediaError(f"{subject} is None; there is nothing to attach")
+    if _contains_media(value):
+        raise MediaError(
+            f"{subject}: media inside a dict, a model or a mixed list cannot be referenced; "
+            "reference each media value directly"
+        )
+    if isinstance(value, str):
+        text, media_type = value, "text/plain"
+    elif isinstance(value, (bool, int, float)):
+        text, media_type = str(value), "text/plain"
+    else:
+        from pydantic_core import PydanticSerializationError, to_json
+
+        try:
+            text = to_json(value).decode("utf-8")
+        except PydanticSerializationError as exc:
+            raise MediaError(
+                f"{subject}: a {type(value).__name__} value has no JSON form to attach"
+            ) from exc
+        media_type = "application/json"
+    document = Document(media_type=media_type, data=text.encode("utf-8"))
+    return Reference(items=(document,), binding=binding, call=call)
 
 
 def as_media(value: Any) -> Media | None:
@@ -722,30 +811,7 @@ def as_media(value: Any) -> Media | None:
     return None
 
 
-def prompt_media(value: Any) -> tuple[Media, ...] | None:
-    """Return the media a prompt substitution attaches, or ``None`` for an ordinary value.
-
-    A media value or a non-empty list or tuple of media values is attached. Media anywhere
-    else in a value (in a dict, a model or a mixed list) is an error: it would otherwise reach
-    the model as its label only.
-    """
-
-    media = as_media(value)
-    if media is not None:
-        return (media,)
-    if isinstance(value, (list, tuple)) and value:
-        items = [as_media(item) for item in value]
-        if all(item is not None for item in items):
-            return tuple(item for item in items if item is not None)
-    if contains_media(value):
-        raise MediaError(
-            "Media inside a list, dict or model cannot be used in a prompt yet; "
-            "substitute each media value directly"
-        )
-    return None
-
-
-def contains_media(value: Any, *, _depth: int = 0) -> bool:
+def _contains_media(value: Any, *, _depth: int = 0) -> bool:
     """Return whether a container holds a media value (bounded depth)."""
 
     if _depth > 8 or isinstance(value, (str, bytes, int, float, bool)) or value is None:
@@ -753,14 +819,14 @@ def contains_media(value: Any, *, _depth: int = 0) -> bool:
     if as_media(value) is not None:
         return True
     if isinstance(value, dict):
-        return any(contains_media(item, _depth=_depth + 1) for item in value.values())
+        return any(_contains_media(item, _depth=_depth + 1) for item in value.values())
     if isinstance(value, (list, tuple, set, frozenset)):
-        return any(contains_media(item, _depth=_depth + 1) for item in value)
+        return any(_contains_media(item, _depth=_depth + 1) for item in value)
     from pydantic import BaseModel
 
     if isinstance(value, BaseModel):
         return any(
-            contains_media(item, _depth=_depth + 1)
+            _contains_media(item, _depth=_depth + 1)
             for item in object.__getattribute__(value, "__dict__").values()
         )
     return False
@@ -779,18 +845,6 @@ def media_error_detail(exc: BaseException) -> str | None:
             if isinstance(cause, MediaError):
                 return str(cause)
     return None
-
-
-def text_embedding_error(value: Any, *, hint: str | None = None) -> MediaError:
-    """The error for media rendered into text outside a model prompt."""
-
-    media = as_media(value)
-    subject = media.label if media is not None else "A media value"
-    message = (
-        f"{subject} cannot be embedded in text: use it directly in a model prompt "
-        "(>>, <<, a typed capture or a > if: claim)"
-    )
-    return MediaError(message if hint is None else f"{message}; {hint}")
 
 
 def _from_pydantic_ai(value: Any) -> Media | None:
@@ -859,12 +913,10 @@ __all__ = [
     "Media",
     "MediaError",
     "MediaKind",
-    "MediaMention",
     "Video",
     "as_media",
-    "contains_media",
-    "format_inline_text",
+    "reference",
     "is_text_media_type",
-    "prompt_media",
+    "Reference",
     "workspace_path",
 ]

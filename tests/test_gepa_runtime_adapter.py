@@ -43,8 +43,10 @@ def test_gepa_keeps_media_calls_on_the_selected_runtime(
         "```\n"
         "from pydantic_ai.messages import ImageUrl\n"
         "```\n\n"
+        "@photo() -> ImageUrl:\n"
+        '  = `ImageUrl("https://example.com/cat.png")`\n\n'
         "@solve(seed: str) -> int:\n"
-        '  >> The animal in <`ImageUrl("https://example.com/cat.png")`> is [animal: str].\n'
+        "  >> The animal in <<photo()>> is [animal: str].\n"
         "  > optimize: number:\n"
         "    >> The value for <seed> is [count: int].\n"
         '  = `count if animal == "cat" else 0`\n\n'

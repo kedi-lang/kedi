@@ -125,7 +125,7 @@ def test_import_exposes_only_exported_procedure_value_and_type(tmp_path: Path) -
     main.write_text(
         "> import: profiles\n"
         "\n"
-        '[profile: Profile] = <get_profile(`"Ada"`)>\n'
+        '[profile: Profile] = `get_profile("Ada")`\n'
         "= <`profile.name`>:<`profile.id`>:<`profile_id + 1`>\n",
         encoding="utf-8",
     )

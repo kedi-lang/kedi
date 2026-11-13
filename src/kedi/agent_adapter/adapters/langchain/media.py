@@ -1,8 +1,8 @@
-"""LangChain standard content blocks for prompts with media attachments.
+"""LangChain standard content blocks for prompts with attachments.
 
-One human message carries ``[label, media]* + [prompt text]`` as standard blocks: each binary
-attachment is introduced by a ``name:`` text block, and text documents arrive as
-inlined-file text blocks.
+One human message carries the ``<attachments>`` element (see ``kedi.agent_adapter.request.media``)
+and then the prompt text as standard blocks; each binary attachment is a media block inside its
+tag.
 """
 
 from __future__ import annotations
@@ -17,9 +17,11 @@ from urllib.parse import urlparse
 from kedi.agent_adapter.request.media import (
     MediaAttachment,
     MediaProvider,
+    attachment_content,
     check_media_support,
     download_image_urls,
     download_media,
+    scan_sent_content,
     unsent_attachments,
 )
 from kedi.media import Media, MediaError, media_kind
@@ -43,10 +45,6 @@ _CLIENT_PROVIDERS: Mapping[str, MediaProvider] = {
     "TypeSafeChatModel": "typesafe",
     "LayaChatModel": "laya",
 }
-_INLINE_FILE = re.compile(
-    r'-----BEGIN FILE id="([^"]+)" type="([^"]+)"-----\n(.*?)\n-----END FILE id="\1"-----',
-    re.DOTALL,
-)
 
 
 async def user_content(
@@ -73,15 +71,12 @@ async def user_content(
     )
     if not pending:
         return prompt
-    blocks: list[dict[str, Any]] = []
-    for attachment in pending:
-        if attachment.is_text:
-            blocks.append({"type": "text", "text": attachment.inline_text()})
-            continue
-        blocks.append({"type": "text", "text": attachment.label()})
-        blocks.append(await _media_block(attachment, model))
-    blocks.append({"type": "text", "text": prompt})
-    return blocks
+    return [
+        {"type": "text", "text": piece}
+        if isinstance(piece, str)
+        else await _media_block(piece, model)
+        for piece in attachment_content(prompt, pending)
+    ]
 
 
 def langchain_media_provider(model: Any) -> MediaProvider | None:
@@ -115,17 +110,9 @@ def sent_attachments(messages: Sequence[Any]) -> dict[str, tuple[str, ...]]:
     for message in messages:
         if not isinstance(message, HumanMessage) or not isinstance(message.content, list):
             continue
-        blocks = list(message.content)
-        for position, block in enumerate(blocks):
-            text = _block_text(block)
-            if text is None:
-                continue
-            for name, _media_type, inline in _INLINE_FILE.findall(text):
-                index[name] = (name, "document", "sha256", _sha256(inline.encode("utf-8")))
-            following = blocks[position + 1] if position + 1 < len(blocks) else None
-            identity = None if following is None else _block_identity(following)
-            if identity is not None and text.endswith(":") and text[:-1].isidentifier():
-                index[text[:-1]] = (text[:-1], *identity)
+        scan_sent_content(
+            list(message.content), index, text_of=_block_text, identity_of=_block_identity
+        )
     return index
 
 
