@@ -1,6 +1,6 @@
 @solve_knapsack(items: `dict[str, tuple[int, int]]`, capacity: int) -> list[str]:
   > optimize: selection:
-    >> Pack a 0/1 knapsack from <items>, where each item maps to (weight, value).
+    >> Pack a 0/1 knapsack from <<items>>, where each item maps to (weight, value).
     Choose each item at most once and keep total weight within <capacity>.
     Maximize total value; any optimal selection is acceptable.
     Use one exact item name per list entry.

@@ -212,8 +212,9 @@ to start and collect child work explicitly, without a coordinator model call.
 ## Images, Audio, and Documents Are Values
 
 `image`, `audio`, `video`, and `document` load a local file, an `http(s)` URL,
-or a `data:` URI. A media value goes into a sentence like any other value, and
-into a procedure as a typed parameter.
+or a `data:` URI. A prompt passes a value by reference with `<<name>>`: the text
+gets the name and the value is attached to the model's context. `<name>` always
+renders text, so `<photo>` is a type error for an image.
 
 **Kedi** &middot; read a receipt photo into a typed value
 
@@ -225,15 +226,17 @@ into a procedure as a typed parameter.
 ~Receipt(merchant: str, total: float, currency: str)
 
 @read_receipt(photo: Image) -> Receipt:
-  >> Read the receipt in <photo>.
+  >> Read the receipt in <<photo>>.
   The receipt details are [receipt: Receipt].
   = `receipt`
 
 = `read_receipt(image("receipt.png"))`
 ```
 
-The model receives the local image as an attachment labeled `photo`, the name the
-program uses, rather than `receipt.png`. URL attachments retain their source URLs.
+The model receives the image inside `<image id="photo" type="image/png">`, under
+the name the program uses rather than `receipt.png`, and the sentence reads
+"Read the receipt in photo." Text, lists and models referenced the same way
+arrive as `<document>` elements. URL attachments retain their source URLs.
 Media works with the Pydantic AI and LangChain adapters on OpenAI, Anthropic,
 Google Gemini, and AWS Bedrock. Kedi rejects an attachment the provider cannot
 take before calling the model.

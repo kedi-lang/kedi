@@ -48,6 +48,7 @@ from kedi.lang.compiler.environment import (
     write_owned_value,
 )
 from kedi.lang.compiler.evaluation import (
+    NO_NATIVE_VALUE,
     _evaluate_arg,
     _stringify_segments,
     evaluate_binding_rhs,
@@ -504,12 +505,13 @@ def test_prepare_segments_binding_rhs_and_argument_variants() -> None:
     assert native == 3
     assert rendered_native == "3"
 
+    # A sole call is a template: it renders text and keeps no native value.
     called, rendered_called = evaluate_binding_rhs(
         rt,
         [CallSegment(name="echo", args=[LiteralArg(value="Ada")])],
         {},
     )
-    assert called == "echo:Ada"
+    assert called is NO_NATIVE_VALUE
     assert rendered_called == "echo:Ada"
 
     native_arg = LiteralArg(value="")
@@ -532,7 +534,7 @@ def test_prepare_segments_binding_rhs_and_argument_variants() -> None:
     assert _evaluate_arg(rt, native_arg, {"x": 1}) == 3
     assert _evaluate_arg(rt, render_arg, {"name": "Ada"}) == "Ada"
     assert _evaluate_arg(rt, call_arg, {}) == "echo:nested"
-    assert _evaluate_arg(rt, python_arg, {"x": 1}) == 4
+    assert _evaluate_arg(rt, python_arg, {"x": 1}) == "4"  # <`...`> renders text
     assert _evaluate_arg(rt, VarArg(name="name"), {"name": "Ada"}) == "Ada"
     with pytest.raises(ValueError, match="Unknown argument type"):
         _evaluate_arg(rt, CallArg(), {})
@@ -881,33 +883,7 @@ def test_statement_compiler_initialization_template_and_single_statement_edges(
     monkeypatch.setattr(
         statement_compiler_module,
         "evaluate_binding_rhs",
-        lambda rt_arg, segments, env_arg: (2, "2"),
-    )
-    monkeypatch.setattr(
-        statement_compiler_module,
-        "detect_rhs_kind",
-        lambda segments: (False, True, False),
-    )
-    compiler.execute_variable_init(VariableInitStmt(name="native_angle", expr=[]), closure)
-    assert closure["native_angle"] == "2"
-
-    monkeypatch.setattr(
-        statement_compiler_module,
-        "detect_rhs_kind",
-        lambda segments: (False, False, False),
-    )
-    compiler.execute_variable_init(VariableInitStmt(name="native_rendered", expr=[]), closure)
-    assert closure["native_rendered"] == "2"
-
-    monkeypatch.setattr(
-        statement_compiler_module,
-        "evaluate_binding_rhs",
-        lambda rt_arg, segments, env_arg: (1, "not-int"),
-    )
-    monkeypatch.setattr(
-        statement_compiler_module,
-        "detect_rhs_kind",
-        lambda segments: (False, False, False),
+        lambda rt_arg, segments, env_arg: (NO_NATIVE_VALUE, "not-int"),
     )
     with pytest.raises(
         TypeError, match="Native initialization value does not match annotated type"

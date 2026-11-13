@@ -8,7 +8,9 @@ Materialized values are serialized once to determine their logical type,
 media type, byte size, summary, preview, persistence support, and optional
 content digest.
 
-For generated fields and ordinary values, admission is equivalent to:
+Template and invoke captures are never admitted: a capture is the program's
+value, and artifacts are what an agent session creates. For other ordinary
+values, admission is equivalent to:
 
 ```text
 if artifacts are disabled:
@@ -163,7 +165,6 @@ In Python, use `ArtifactPolicy(exclude_tools=("read_status",))` or the equivalen
 Reference IDs are ordered per artifact kind within a session:
 
 - `tool_call_result_N` for tool results
-- `template_output_N` for generated fields
 - `artifact_code_result_N` for derived code-mode results
 - `artifact_N` for other sources
 

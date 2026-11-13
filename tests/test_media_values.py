@@ -18,12 +18,11 @@ from kedi.media import (
     Image,
     Media,
     MediaError,
-    MediaMention,
+    Reference,
     Video,
     as_media,
-    format_inline_text,
     media_error_detail,
-    prompt_media,
+    reference,
     workspace_path,
 )
 
@@ -136,24 +135,38 @@ def test_data_uris_and_file_ids() -> None:
     assert uploaded.content_key == ("file_id", "openai", "file-1")
 
 
-def test_validation_accepts_paths_urls_and_values_with_workspace_rules(workspace: Path) -> None:
+def test_validation_accepts_media_values_only(workspace: Path) -> None:
+    from pydantic_ai.messages import BinaryContent
+
     adapter = TypeAdapter(Image)
-    assert adapter.validate_python("cat.png").filename == "cat.png"
-    assert adapter.validate_python("https://example.com/cat.png").url is not None
+    image = Image.from_path("cat.png")
+    assert adapter.validate_python(image) is image
+    assert adapter.validate_python(BinaryContent(png_bytes(), media_type="image/png")) == image
     assert adapter.json_schema() == {"type": "string"}
-    with pytest.raises(PermissionError, match="escapes the working directory"):
-        adapter.validate_python("../outside.png")
-    (workspace / ".env").write_text("SECRET=1")
-    with pytest.raises(PermissionError, match="secret file"):
-        workspace_path(".env")
-    with pytest.raises(FileNotFoundError, match="Media file not found: missing.png"):
-        adapter.validate_python("missing.png")
+    # A string is never a path or a URL to load: loading is explicit.
+    for value in ("cat.png", "https://example.com/cat.png", 3):
+        with pytest.raises(ValidationError, match="load it explicitly"):
+            adapter.validate_python(value)
     with pytest.raises(ValidationError) as excinfo:
         adapter.validate_python(Document.from_path("notes.md"))
     assert (
         media_error_detail(excinfo.value)
         == "Expected an image, got <document notes.md · text/markdown · 22 B>"
     )
+    # JSON reads back what serialization writes, never a path.
+    assert adapter.validate_json('"https://example.com/cat.png"').url is not None
+    with pytest.raises(ValidationError, match="as a data URI, a URL or a file id"):
+        adapter.validate_json('"cat.png"')
+    with pytest.raises(ValidationError, match="is audio/mpeg, not an image"):
+        adapter.validate_json('"https://example.com/a.mp3"')
+    # Explicit loading keeps the workspace rules.
+    with pytest.raises(PermissionError, match="escapes the working directory"):
+        Image.coerce("../outside.png")
+    (workspace / ".env").write_text("SECRET=1")
+    with pytest.raises(PermissionError, match="secret file"):
+        workspace_path(".env")
+    with pytest.raises(FileNotFoundError, match="Media file not found: missing.png"):
+        Image.coerce("missing.png")
 
 
 def test_workspace_policy_none_allows_outside_paths(
@@ -177,7 +190,7 @@ def test_json_serialization_round_trips_through_validation(workspace: Path) -> N
     image = Image.from_path("cat.png")
     dumped = adapter.dump_python(image, mode="json")
     assert dumped.startswith("data:image/png;base64,")
-    assert adapter.validate_python(json.loads(json.dumps(dumped))) == image
+    assert adapter.validate_json(json.dumps(dumped)) == image
     assert adapter.dump_python(image) is image
 
 
@@ -201,30 +214,63 @@ def test_pydantic_ai_and_pil_values_convert() -> None:
     assert converted is not None and converted.media_type == "image/png"
 
 
-def test_prompt_media_accepts_values_and_lists_but_not_nested_media(workspace: Path) -> None:
+def test_references_attach_media_and_documents_for_other_values(workspace: Path) -> None:
+    from pydantic import BaseModel
+
+    class Owner(BaseModel):
+        name: str
+
     image = Image.from_path("cat.png")
-    assert prompt_media(image) == (image,)
-    assert prompt_media([image, image]) == (image, image)
-    assert prompt_media("text") is None and prompt_media([]) is None
-    with pytest.raises(MediaError, match="inside a list, dict or model"):
-        prompt_media({"photo": image})
-    with pytest.raises(MediaError, match="inside a list, dict or model"):
-        prompt_media([image, "caption"])
+    assert reference(image, binding="cat") == Reference((image,), binding="cat")
+    assert reference([image, image], binding="cats") == Reference(
+        (image, image), binding="cats", is_list=True
+    )
+
+    def document(value: object) -> tuple[str | None, str]:
+        (item,) = reference(value, call="f").items
+        return item.media_type, item.text
+
+    assert document("plain text") == ("text/plain", "plain text")
+    assert document(3) == ("text/plain", "3")
+    assert document(True) == ("text/plain", "True")
+    assert document(["a", 1]) == ("application/json", '["a",1]')
+    assert document([]) == ("application/json", "[]")
+    assert document({"k": [1]}) == ("application/json", '{"k":[1]}')
+    assert document(Owner(name="Ada")) == ("application/json", '{"name":"Ada"}')
+    with pytest.raises(MediaError, match="<<x>> is None"):
+        reference(None, binding="x")
+    with pytest.raises(MediaError, match=r"<<f\(...\)>>: media inside"):
+        reference({"photo": image}, call="f")
+    with pytest.raises(MediaError, match="media inside a dict, a model or a mixed list"):
+        reference([image, "caption"], binding="x")
+    with pytest.raises(MediaError, match="a object value has no JSON form"):
+        reference(object(), binding="x")
 
 
-def test_mention_names_come_from_bindings() -> None:
+def test_reference_ids_come_from_bindings_and_calls() -> None:
     image = Image.from_bytes(png_bytes(), "image/png")
-    assert MediaMention((image,), "cat_image").preferred_name(1) == "cat_image"
-    assert MediaMention((image, image), "photos", is_list=True).preferred_name(2) == "photos_2"
-    assert MediaMention((image,), "args.invoice").preferred_name(1) == "args_invoice"
-    assert MediaMention((image,)).preferred_name(1) is None
+    assert Reference((image,), "cat_image").preferred_name(1) == "cat_image"
+    assert Reference((image, image), "photos", is_list=True).preferred_name(2) == "photos_2"
+    assert Reference((image,), "args.invoice").preferred_name(1) == "args_invoice"
+    assert Reference((image,)).preferred_name(1) is None
+    assert Reference((image,), call="image").generated_base == "image_result"
+    assert Reference((image,), "cat").generated_base is None
 
 
-def test_inline_text_format_matches_pydantic_ai() -> None:
-    from pydantic_ai._utils import format_inlined_text_file
+def test_attachment_elements_carry_the_id_and_type(workspace: Path) -> None:
+    from kedi.agent_adapter.request.media import MediaAttachment, attachment_content
 
-    expected = format_inlined_text_file("body", media_type="text/plain", identifier="notes")
-    assert format_inline_text("body", name="notes", media_type="text/plain") == expected
+    notes = MediaAttachment("notes", Document.from_bytes(b"body", "text/plain"))
+    cat = MediaAttachment("cat", Image.from_path("cat.png"))
+    stored = MediaAttachment("log", notes.media, artifact_ref={"ref_id": "artifact_1"})
+    assert notes.inline_text() == '<document id="notes" type="text/plain">\nbody\n</document>'
+    assert stored.inline_text() == '<artifact id="log">\n{"ref_id": "artifact_1"}\n</artifact>'
+    assert attachment_content("Ask.", []) == ["Ask."]
+    assert attachment_content("Ask.", [notes, cat]) == [
+        "<attachments>\n" + notes.inline_text() + '\n<image id="cat" type="image/png">\n',
+        cat,
+        "\n</image>\n</attachments>\nAsk.",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -340,19 +386,18 @@ def test_pydantic_ai_values_without_a_kedi_equivalent_or_type() -> None:
 def test_nested_media_is_found_in_models_and_ignored_in_plain_values(workspace: Path) -> None:
     from pydantic import BaseModel, ConfigDict
 
-    from kedi.media import contains_media
-
     class Report(BaseModel):
         model_config = ConfigDict(arbitrary_types_allowed=True)
         title: str
-        photo: Image
+        photo: Image | None
 
     image = Image.from_path("cat.png")
-    assert contains_media(Report(title="cat", photo=image))
-    assert contains_media({"photos": {image}})
-    assert not contains_media(Report.model_construct(title="cat", photo=None))
-    assert not contains_media(object())
-    assert MediaMention((image,), "1st").preferred_name(1) == "_1st"
+    for value in (Report(title="cat", photo=image), {"photos": {image}}):
+        with pytest.raises(MediaError, match="media inside"):
+            reference(value, binding="r")
+    (document,) = reference(Report(title="cat", photo=None), binding="r").items
+    assert document.text == '{"title":"cat","photo":null}'
+    assert Reference((image,), "1st").preferred_name(1) == "_1st"
 
 
 def test_error_details_come_only_from_media_failures() -> None:
@@ -374,3 +419,63 @@ def test_json_serialization_of_urls_and_file_ids() -> None:
         "provider": "openai",
         "media_type": "application/pdf",
     }
+
+
+def test_explicit_loading_and_json_round_trips_cover_every_source(workspace: Path) -> None:
+    image = Image.from_path("cat.png")
+    uri = TypeAdapter(Image).dump_python(image, mode="json")
+    assert Image.coerce(image) is image
+    assert Image.coerce(uri) == image
+    with pytest.raises(MediaError, match="Expected an image, got <document"):
+        Image.coerce(Document.from_path("notes.md"))
+    media = TypeAdapter(Media)
+    assert media.validate_json(json.dumps(uri)) == image
+    uploaded = Media.from_file_id("file-1", provider="openai", media_type="application/pdf")
+    assert media.validate_json(json.dumps(media.dump_python(uploaded, mode="json"))) == uploaded
+
+
+def test_substitutions_open_stored_values_and_references_keep_them() -> None:
+    from types import SimpleNamespace
+
+    from kedi.artifacts import ArtifactHandle
+    from kedi.lang.compiler.environment import substitution_text
+
+    def stored(value: object) -> ArtifactHandle:
+        ref = SimpleNamespace(ref_id="a1", model_dump=lambda **_: {"ref_id": "a1"})
+        manager = SimpleNamespace(get_value=lambda ref_id: value)
+        return ArtifactHandle(ref=ref, manager=manager)  # type: ignore[arg-type]
+
+    assert substitution_text(stored("the whole log"), "log") == "the whole log"
+    with pytest.raises(TypeError, match="<report> renders text, but the value is of type dict"):
+        substitution_text(stored({"k": 1}), "report")
+    handle = stored("the whole log")
+    ref = reference(handle, binding="log")
+    assert ref.stored is handle and ref.items[0].text == '{"ref_id": "a1"}'
+
+
+def test_reference_spans_cover_the_whole_reference() -> None:
+    from kedi.lang.ast import InputReference, Span, reference_span
+
+    assert reference_span(InputReference(name="cat")) is None
+    loc = Span(start_byte=5, end_byte=13, start_line=1, start_col=5, end_line=1, end_col=13)
+    span = reference_span(InputReference(name="cat", loc=loc))
+    assert span is not None and (span.start_byte, span.start_col) == (4, 4)
+
+
+def test_raw_invokes_resolve_binding_references_when_built() -> None:
+    from concurrent.futures import Future
+
+    from kedi.core import KediRuntime
+    from kedi.core.expressions import ReferenceExpr
+    from kedi.promise import KediPromise
+
+    runtime = KediRuntime()
+    ref, output = runtime._evaluate_expression(ReferenceExpr(key="notes"), {"notes": "ship"})
+    assert output is None and ref.binding == "notes" and ref.items[0].text == "ship"
+    # A value still being produced becomes a dependency resolved when the prompt is built.
+    future: Future[dict[str, str]] = Future()
+    pending, _ = runtime._evaluate_expression(
+        ReferenceExpr(key="notes"), {"notes": KediPromise(future, "notes")}
+    )
+    future.set_result({"notes": "later"})
+    assert pending.resolve().items[0].text == "later"

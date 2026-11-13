@@ -80,9 +80,10 @@ Procedures can form pipelines:
   = <classify(<normalized>)>
 ```
 
-A sole call on an initialization or assignment right-hand side preserves the
-called procedure's native return type. Text around the call renders the value
-as `str`.
+An angle call always renders text, also as the whole right-hand side of an
+initialization or assignment, so it suits procedures that return text. To keep
+the called procedure's native return type, call it with single-backtick Python:
+``[profile: Profile] = `get_profile("Ada")` ``.
 
 ## Nested Procedures
 

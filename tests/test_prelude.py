@@ -38,7 +38,7 @@ def test_procedure_params_and_returns_use_prelude_type() -> None:
         "  = `Foo(val)`\n"
         "@consume(item: Foo):\n"
         "  = <`item.val`>\n"
-        "[obj: Foo] = <factory(`7`)>\n"
+        "[obj: Foo] = `factory(7)`\n"
         "= <consume(`obj`)>\n"
     )
     out = _run(src)

@@ -30,8 +30,9 @@ about their total value.
    hold the item data. The backtick-wrapped parameter annotation uses Python's
    `dict[str, tuple[int, int]]` type directly.
 2. `> optimize: selection:` marks one template as an optimization target. Its
-   indented body starts with `>>`. `<items>` and `<capacity>` supply inputs;
-   the sentence ends with the typed capture `[selected: list[str]]`.
+   indented body starts with `>>`. `<<items>>` attaches the item table as a
+   JSON document named `items`, `<capacity>` writes the number into the text,
+   and the sentence ends with the typed capture `[selected: list[str]]`.
 3. `` = `selected` `` returns the captured list. An optimization block also works
    during ordinary execution; it does not start an optimizer by itself.
 4. `@eval: solve_knapsack:` defines the data and executable scoring rule.

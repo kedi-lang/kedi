@@ -24,11 +24,18 @@ MP4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 16
 IMAGE_B64 = base64.b64encode(png_bytes()).decode()
 
 MIXED = """> import: media
-[cat_image] = <image(cat.png)>
-[contract_v2] = <document(nda.pdf)>
-[reply] << Compare <cat_image> with <contract_v2>. <document(notes.md)>
+[cat_image: Image] = `image("cat.png")`
+[contract_v2: Document] = `document("nda.pdf")`
+[reply] << Compare <<cat_image>> with <<contract_v2>>. <<document(notes.md)>>
 = <reply>
 """
+CAT_OPEN = '<attachments>\n<image id="cat_image" type="image/png">\n'
+PDF_OPEN = '\n</image>\n<document id="contract_v2" type="application/pdf">\n'
+TAIL = (
+    '\n</document>\n<document id="document_result_1" type="text/markdown">\n'
+    "decision: ship\n\n</document>\n</attachments>\n"
+    "Compare cat_image with contract_v2. document_result_1"
+)
 
 
 @pytest.fixture
@@ -45,7 +52,12 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _program(name: str, loader: str, prompt: str) -> str:
-    return f"> import: media\n[{name}] = <{loader}>\n[reply] << {prompt}\n= <reply>\n"
+    """Bind ``loader`` (``audio(voice.wav)``) to ``name`` and reference it in ``prompt``."""
+    function, argument = loader[:-1].split("(", 1)
+    return (
+        f'> import: media\n[{name}: Media] = `{function}("{argument}")`\n'
+        f"[reply] << {prompt}\n= <reply>\n"
+    )
 
 
 def _run(source: str, model: Any, adapter_type: type[Any]) -> Any:
@@ -181,45 +193,22 @@ def _run_capture(adapter_type: type[Any], factory: Any, provider: str, source: s
     return bodies
 
 
-def _inline_document(text: str) -> str:
-    return (
-        '-----BEGIN FILE id="document_1" type="text/markdown"-----\n'
-        f"{text}\n"
-        '-----END FILE id="document_1"-----'
-    )
-
-
 def test_pydantic_openai_body(workspace: Path) -> None:
     bodies = _run_capture(PydanticAdapter, pydantic_model, "openai", MIXED)
     content = bodies.last_user()["content"]
-    assert [part["type"] for part in content] == [
-        "text",
-        "image_url",
-        "text",
-        "file",
-        "text",
-        "text",
-    ]
-    assert content[0]["text"] == "cat_image:"
+    assert [part["type"] for part in content] == ["text", "image_url", "text", "file", "text"]
+    assert content[0]["text"] == CAT_OPEN
     assert content[1]["image_url"]["url"] == f"data:image/png;base64,{IMAGE_B64}"
-    assert content[2]["text"] == "contract_v2:"
+    assert content[2]["text"] == PDF_OPEN
     assert content[3]["file"]["file_data"].startswith("data:application/pdf;base64,")
     assert "nda" not in content[3]["file"]["filename"]  # the real file name stays local
-    assert content[4]["text"] == _inline_document("decision: ship\n")
-    assert content[5]["text"] == "Compare cat_image with contract_v2. document_1"
+    assert content[4]["text"] == TAIL
 
 
 def test_pydantic_anthropic_body(workspace: Path) -> None:
     bodies = _run_capture(PydanticAdapter, pydantic_model, "anthropic", MIXED)
     content = bodies.last_user()["content"]
-    assert [part["type"] for part in content] == [
-        "text",
-        "image",
-        "text",
-        "document",
-        "text",
-        "text",
-    ]
+    assert [part["type"] for part in content] == ["text", "image", "text", "document", "text"]
     assert content[1]["source"] == {"type": "base64", "media_type": "image/png", "data": IMAGE_B64}
     assert content[3]["source"]["media_type"] == "application/pdf"
 
@@ -227,16 +216,16 @@ def test_pydantic_anthropic_body(workspace: Path) -> None:
 def test_pydantic_google_body(workspace: Path) -> None:
     bodies = _run_capture(PydanticAdapter, pydantic_model, "google", MIXED)
     parts = bodies.last_user()["parts"]
-    assert parts[0] == {"text": "cat_image:"}
+    assert parts[0] == {"text": CAT_OPEN}
     assert parts[1]["inlineData"] == {"data": IMAGE_B64, "mime_type": "image/png"}
     assert parts[3]["inlineData"]["mime_type"] == "application/pdf"
-    assert parts[-1] == {"text": "Compare cat_image with contract_v2. document_1"}
+    assert parts[-1] == {"text": TAIL}
 
 
 def test_pydantic_bedrock_body(workspace: Path) -> None:
     bodies = _run_capture(PydanticAdapter, pydantic_model, "bedrock", MIXED)
     content = bodies.last_user()["content"]
-    assert content[0] == {"text": "cat_image:"}
+    assert content[0] == {"text": CAT_OPEN}
     assert content[1]["image"] == {"format": "png", "source": {"bytes": png_bytes()}}
     assert content[3]["document"]["format"] == "pdf"
 
@@ -244,16 +233,9 @@ def test_pydantic_bedrock_body(workspace: Path) -> None:
 def test_langchain_openai_body_names_files_after_the_kedi_name(workspace: Path) -> None:
     bodies = _run_capture(LangChainAdapter, langchain_model, "openai", MIXED)
     content = bodies.last_user()["content"]
-    assert [part["type"] for part in content] == [
-        "text",
-        "image_url",
-        "text",
-        "file",
-        "text",
-        "text",
-    ]
+    assert [part["type"] for part in content] == ["text", "image_url", "text", "file", "text"]
     assert content[3]["file"]["filename"] == "contract_v2.pdf"
-    assert content[4]["text"] == _inline_document("decision: ship\n")
+    assert content[4]["text"] == TAIL
 
 
 def test_langchain_bedrock_body_cleans_document_names(workspace: Path) -> None:
@@ -327,7 +309,7 @@ def test_unsupported_media_fails_before_the_request(
     message: str,
 ) -> None:
     bodies = Bodies()
-    source = _program(name, loader, f"Describe <{name}>.")
+    source = _program(name, loader, f"Describe <<{name}>>.")
     with pytest.raises(KediExecutionError, match=message):
         _run(source, factory(provider, bodies), adapter_type)
     assert bodies == []
@@ -340,7 +322,7 @@ def test_unsupported_media_fails_before_the_request(
 def test_openai_audio_models_receive_wav(workspace: Path, adapter_type: Any, factory: Any) -> None:
     bodies = Bodies()
     _run(
-        _program("voice", "audio(voice.wav)", "Summarize <voice>."),
+        _program("voice", "audio(voice.wav)", "Summarize <<voice>>."),
         factory("openai", bodies, "gpt-audio"),
         adapter_type,
     )
@@ -349,7 +331,7 @@ def test_openai_audio_models_receive_wav(workspace: Path, adapter_type: Any, fac
 
 
 def test_video_goes_to_gemini_and_bedrock(workspace: Path) -> None:
-    source = _program("clip", "video(clip.mp4)", "Describe <clip>.")
+    source = _program("clip", "video(clip.mp4)", "Describe <<clip>>.")
     google = _run_capture(PydanticAdapter, pydantic_model, "google", source)
     assert google.last_user()["parts"][1]["inlineData"]["mime_type"] == "video/mp4"
     for adapter_type, factory in (
@@ -361,7 +343,7 @@ def test_video_goes_to_gemini_and_bedrock(workspace: Path) -> None:
 
 
 def test_youtube_urls_reach_only_gemini_as_urls(workspace: Path) -> None:
-    source = "> import: media\n[reply] << Describe <video(https://youtu.be/abc123)>.\n= <reply>\n"
+    source = "> import: media\n[reply] << Describe <<video(https://youtu.be/abc123)>>.\n= <reply>\n"
     google = _run_capture(PydanticAdapter, pydantic_model, "google", source)
     assert google.last_user()["parts"][1]["fileData"]["file_uri"] == "https://youtu.be/abc123"
     with pytest.raises(KediExecutionError, match="YouTube URLs are read only by Gemini"):
@@ -373,7 +355,7 @@ def test_langchain_passes_image_urls_when_the_model_accepts_them(workspace: Path
         LangChainAdapter,
         langchain_model,
         "openai",
-        _program("photo", "image(https://example.com/cat.png)", "Describe <photo>."),
+        _program("photo", "image(https://example.com/cat.png)", "Describe <<photo>>."),
     )
     image = bodies.last_user()["content"][1]
     assert image == {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
@@ -396,7 +378,7 @@ def test_langchain_downloads_urls_the_model_cannot_open(
         LangChainAdapter,
         langchain_model,
         "bedrock",
-        _program("photo", "image(https://example.com/cat.png)", "Describe <photo>."),
+        _program("photo", "image(https://example.com/cat.png)", "Describe <<photo>>."),
     )
     assert requested == ["https://example.com/cat.png"]
     assert bodies.last_user()["content"][1]["image"]["source"]["bytes"] == png_bytes()

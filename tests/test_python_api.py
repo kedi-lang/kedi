@@ -519,7 +519,7 @@ def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -
     @query(cache=True)
     def summarize(topic: AddressReprValue) -> str:
         """kedi
-        >> Summarize <topic>. Return [summary].
+        >> Summarize <`topic.label`>. Return [summary].
         = <summary>
         """
 

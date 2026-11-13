@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from ...core import KediRuntime
-from ...core.expressions import ComputedExpr, MediaExpr, computed_prompt_part
+from ...core.expressions import ComputedExpr, ReferenceExpr, binding_reference
 from ...errors import KediTraceFrame
-from ...media import MediaMention, contains_media, text_embedding_error
+from ...media import Reference, reference
 from ...promise import force
 from ..ast import (
     CallArg,
+    CallReference,
     CallSegment,
+    InputReference,
     InputSegment,
     LiteralArg,
     OutputSegment,
@@ -30,16 +32,10 @@ from ..call_arg_access import (
     call_arg_render_segments,
 )
 from ..parser.escapes import preserve_escaped_whitespace
-from .environment import lookup_value, model_lookup_value, model_text
+from .environment import lookup_value, native_value, raw_lookup_value, substitution_text
 from .type_system import KediType
 
 NO_NATIVE_VALUE = object()
-
-_MEDIA_TEXT_HINTS = {
-    "system": "instructions are text only; mention the media in a >> prompt instead",
-    "task": "subagent tasks do not take media yet",
-    "send": "agent input does not take media yet",
-}
 
 
 def evaluate_call(
@@ -172,22 +168,22 @@ def prepare_segments(
             )
             expr.append(text)
             parts.append(text)
+        elif isinstance(seg, InputReference):
+            expr.append(ReferenceExpr(key=seg.name))
+            parts.append("")
+        elif isinstance(seg, CallReference):
+            value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
+            expr.append(ReferenceExpr(reference=_call_reference(seg, value)))
+            parts.append("")
         elif isinstance(seg, InputSegment):
             if context == "template":
                 expr.append(rt.i(seg.name))
                 parts.append("")
             else:
-                value = (
-                    model_lookup_value(rt, seg.name, kwargs)
-                    if context == "system"
-                    else lookup_value(rt, seg.name, kwargs)
-                )
-                parts.append(
-                    _text_value(value, context=context, name=seg.name, model=context == "system")
-                )
+                parts.append(substitution_text(lookup_value(rt, seg.name, kwargs), seg.name))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            _append_computed(expr, parts, value, context=context)
+            _append_computed(expr, parts, substitution_text(value, _call_subject(seg)), context)
         elif isinstance(seg, OutputSegment):
             kedi_type = KediType.from_node(seg.type_expr, seg.type_annotation)
             # None (no annotation) still defaults to str downstream; a written
@@ -196,47 +192,29 @@ def prepare_segments(
             expr.append(rt.o(seg.name, pytype, binding_contract=kedi_type))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            _append_computed(expr, parts, value, context=context)
+            _append_computed(expr, parts, substitution_text(value, f"`{seg.code}`"), context)
 
     return expr, "".join(parts)
 
 
-def _append_computed(expr: list[Any], parts: list[str], value: Any, *, context: str) -> None:
-    """Add an evaluated call or inline Python result to a prompt being prepared."""
-    if context == "template":
-        part = computed_prompt_part(value)
-        if isinstance(part, MediaMention):
-            expr.append(MediaExpr(part))
-            parts.append("")
-            return
-        expr.append(ComputedExpr(part))
-        parts.append(part)
-        return
-    text = _text_value(value, context=context)
-    expr.append(text)
+def _append_computed(expr: list[Any], parts: list[str], text: str, context: str) -> None:
+    """Add an evaluated call or inline Python text to a prompt being prepared."""
+    expr.append(ComputedExpr(text) if context == "template" else text)
     parts.append(text)
 
 
-def _text_value(
-    value: Any,
-    *,
-    context: str,
-    name: str | None = None,
-    model: bool = False,
-) -> str:
-    """Render a value into text; media there would silently become its label."""
-    if context != "show" and contains_media(value):
-        hint = _MEDIA_TEXT_HINTS.get(context)
-        if hint is None and name is not None:
-            hint = f"to pass it as a value use backticks: `{name}`"
-        raise text_embedding_error(value, hint=hint)
-    return model_text(value) if model else str(value)
+def _call_subject(seg: CallSegment) -> str:
+    return f"{seg.name}(...)" if seg.args else f"{seg.name}()"
+
+
+def _call_reference(seg: CallSegment, value: Any) -> Reference:
+    return reference(native_value(value), call=seg.name)
 
 
 def render_prompt_parts(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> list[Any]:
-    """Render a template condition's claim: text parts and media mentions."""
+    """Render a template condition's claim: text parts and references."""
     return _segment_parts(rt, segments, kwargs, context="condition", prompt=True)
 
 
@@ -265,24 +243,20 @@ def render_expression(
 def evaluate_binding_rhs(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> tuple[Any, str]:
-    """Return a native value (including None), or NO_NATIVE_VALUE with rendered text."""
+    """Return a backtick's native value (including None), or NO_NATIVE_VALUE with text.
+
+    Only a sole single-backtick expression keeps its native value; every template, including a
+    sole ``<proc()>``, renders text.
+    """
     non_ws = [
         s
         for s in segments
         if not (isinstance(s, TextSegment) and not s.escaped_whitespace and s.text.strip() == "")
     ]
-
-    # Single native expression or call
-    if len(non_ws) == 1:
+    if len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment):
         seg = non_ws[0]
-        if isinstance(seg, PythonExprNativeSegment):
-            value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            return value, str(value)
-        if isinstance(seg, CallSegment):
-            value = force(evaluate_call(rt, seg, kwargs))
-            return value, str(value)
-
-    # Fallback to rendered string
+        value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
+        return value, str(value)
     return NO_NATIVE_VALUE, render_expression(rt, segments, kwargs, context="assign")
 
 
@@ -290,22 +264,20 @@ def evaluate_binding_rhs(
 
 
 def _evaluate_arg(rt: KediRuntime, arg: CallArg, local_env: dict[str, Any]) -> Any:
-    """Evaluate a single call argument."""
+    """Evaluate a single call argument: a bare backtick is native, everything else text."""
     if isinstance(arg, LiteralArg):
         native = call_arg_native_backtick(arg)
         if native is not None:
             return evaluate_python_inline(rt, native, local_env, span=arg.loc)
-        render_segments = call_arg_render_segments(arg)
-        if render_segments:
-            return render_expression(rt, render_segments, local_env, context="return")
         call_segment = call_arg_call_segment(arg)
-        if call_segment is not None:
-            return evaluate_call(rt, call_segment, local_env)
         python_segment = call_arg_python_segment(arg)
-        if python_segment is not None:
-            return evaluate_python_inline(
-                rt, python_segment.code, local_env, span=python_segment.loc
-            )
+        segments: list[Segment] = (
+            call_arg_render_segments(arg)
+            or ([call_segment] if call_segment is not None else [])
+            or ([python_segment] if python_segment is not None else [])
+        )
+        if segments:
+            return render_expression(rt, segments, local_env, context="return")
         return arg.value
     elif isinstance(arg, VarArg):
         return lookup_value(rt, arg.name, local_env)
@@ -338,7 +310,7 @@ def _segment_parts(
     call_cache: dict[int, Any] | None = None,
     prompt: bool = False,
 ) -> list[Any]:
-    """Render segments to text parts; in a model prompt media stay mentions."""
+    """Render segments to text parts; a model prompt (a claim) also keeps its references."""
     parts: list[Any] = []
 
     for i, seg in enumerate(segments):
@@ -351,25 +323,19 @@ def _segment_parts(
                     trim_right=i == len(segments) - 1,
                 )
             )
+        elif isinstance(seg, (InputReference, CallReference)):
+            # The parser accepts references only in model prompts.
+            assert prompt, "a reference outside a model prompt"
+            if isinstance(seg, InputReference):
+                parts.append(binding_reference(seg.name, raw_lookup_value(rt, seg.name, kwargs)))
+            else:
+                value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
+                parts.append(_call_reference(seg, value))
         elif isinstance(seg, InputSegment):
-            model = context in {"system", "task"}
-            value = (
-                model_lookup_value(rt, seg.name, kwargs)
-                if model
-                else lookup_value(rt, seg.name, kwargs)
-            )
-            parts.append(
-                computed_prompt_part(value, seg.name)
-                if prompt
-                else _text_value(value, context=context, name=seg.name, model=model)
-            )
+            parts.append(substitution_text(lookup_value(rt, seg.name, kwargs), seg.name))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            parts.append(
-                computed_prompt_part(value)
-                if prompt
-                else _text_value(value, context=context, model=context == "task")
-            )
+            parts.append(substitution_text(value, _call_subject(seg)))
         elif isinstance(seg, OutputSegment):
             if seg.name in kwargs:
                 parts.append(str(force(kwargs[seg.name])))
@@ -379,12 +345,11 @@ def _segment_parts(
                     parts.append(str(force(env[seg.name])))
                 else:
                     parts.append("")
+        elif isinstance(seg, PythonExprNativeSegment) and context == "show":
+            # `> show: `value`` displays any value, the way a single backtick always has.
+            parts.append(str(force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            parts.append(
-                computed_prompt_part(value)
-                if prompt
-                else _text_value(value, context=context, model=context == "task")
-            )
+            parts.append(substitution_text(value, f"`{seg.code}`"))
 
     return parts

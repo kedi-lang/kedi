@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import gc
 import json
 import time
@@ -23,6 +24,7 @@ from kedi.agent_adapter.adapters.pydantic.messages import (
 from kedi.decisions import (
     CapturedDecisionEvidence,
     DecisionInfo,
+    DecisionInput,
     DecisionOutput,
     DecisionRecord,
     DecisionReference,
@@ -493,14 +495,24 @@ def test_session_load_accepts_snapshot_without_decision_schema(tmp_path: Path) -
 
 def test_matches_inputs_rejects_wrong_names_and_unsupported_values() -> None:
     runtime, _ = _run(
-        "[ticket: list] = `[object()]`\n>> Evaluate <ticket> [approved: bool]\n= <approved>\n"
+        '[ticket: str] = `"T-1"`\n>> Evaluate <ticket> [approved: bool]\n= <approved>\n'
     )
     info = decision_info_for_env(runtime._globals_env, "approved")
     assert info is not None
-    with pytest.raises(ValueError, match="does not support stable matching"):
+    with pytest.raises(ValueError, match="Input 'ticket' does not support stable matching"):
         info.matches_inputs(ticket=[object()])
     with pytest.raises(ValueError, match="do not match"):
         info.matches_inputs(other="value")
+
+
+def test_matches_inputs_rejects_a_recorded_input_without_a_fingerprint() -> None:
+    # Records written before text-only substitutions could hold inputs with no fingerprint.
+    info = _info_from_metadata({}, "approved")
+    record = dataclasses.replace(
+        info._record, inputs=(DecisionInput(name="ticket", fingerprint=None, supported=False),)
+    )
+    with pytest.raises(ValueError, match="Decision input 'ticket' does not support stable"):
+        DecisionInfo(record, ("approved",)).matches_inputs(ticket="T-1")
 
 
 def test_matches_inputs_preserves_types_and_sequence_order_without_requests() -> None:
@@ -535,25 +547,20 @@ def test_computed_substitution_refuses_partial_input_match() -> None:
         info.matches_inputs()
 
 
-def test_unsupported_input_matching_does_not_call_repr_again() -> None:
+def test_substituting_an_object_never_calls_its_repr() -> None:
     class ReprCounter:
         calls = 0
 
         def __repr__(self) -> str:
             type(self).calls += 1
-            return "counter"
+            return "secret"
 
     value = ReprCounter()
     session = InteractiveSession(adapter=DecisionAdapter(), engine=SequentialEngine())
     cast(Any, session._env).declare("value", [value])
-    session.execute(">> Evaluate <value> [approved: bool]")
-    info = session.decision_info("approved")
-    assert info is not None
-    calls_after_request = ReprCounter.calls
-
-    with pytest.raises(ValueError, match="does not support stable matching"):
-        info.matches_inputs(value=[value])
-    assert ReprCounter.calls == calls_after_request
+    with pytest.raises(KediExecutionError, match=r"the value is of type ReprCounter \(in a list\)"):
+        session.execute(">> Evaluate <value> [approved: bool]")
+    assert ReprCounter.calls == 0
 
 
 def test_nested_and_multilabel_answers_remain_separate() -> None:
@@ -790,10 +797,10 @@ def test_repeated_input_with_changed_identity_disables_stable_matching(
     original = model_calls._snapshot_prompt_input
     count = 0
 
-    def changing_snapshot(name: str, value: Any) -> Any:
+    def changing_snapshot(name: str, value: Any, **options: Any) -> Any:
         nonlocal count
         count += 1
-        return original(name, value + str(count))
+        return original(name, value + str(count), **options)
 
     monkeypatch.setattr(model_calls, "_snapshot_prompt_input", changing_snapshot)
     runtime, _ = _run(

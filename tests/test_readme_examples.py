@@ -132,10 +132,11 @@ def test_readme_media_reaches_the_model_by_name(run_example, tmp_path, monkeypat
     result = run_example("media", FunctionModel(respond))
 
     assert result.model_dump() == receipt
-    [[label, image, text]] = prompts
-    assert label == "photo:"
+    [[opening, image, text]] = prompts
+    assert opening == '<attachments>\n<image id="photo" type="image/png">\n'
     assert isinstance(image, BinaryContent)
     assert image.media_type == "image/png"
+    assert text.startswith("\n</image>\n</attachments>\n")
     assert "Read the receipt in photo." in text
     assert "receipt.png" not in repr(prompts)
 

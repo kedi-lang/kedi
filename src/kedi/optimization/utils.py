@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 from ..lang.ast import (
+    REFERENCE_SEGMENTS,
     CallSegment,
     InputSegment,
     OptimizeSpan,
@@ -61,6 +62,8 @@ def template_line_to_string(template_line: TemplateLine) -> str:
     for segment in template_line.segments:
         if isinstance(segment, TextSegment):
             parts.append(segment.text)
+        elif isinstance(segment, REFERENCE_SEGMENTS):
+            parts.append(f"<<{segment.name}>>")
         elif isinstance(segment, InputSegment):
             parts.append(f"<{segment.name}>")
         elif isinstance(segment, OutputSegment):
@@ -165,6 +168,9 @@ def render_instruction_lines(
         for segment in template_line.segments:
             if isinstance(segment, TextSegment):
                 parts.append(segment.text)
+            elif isinstance(segment, REFERENCE_SEGMENTS):
+                # A reference reaches the model as an attachment, never as text.
+                parts.append(f"<<{segment.name}>>")
             elif isinstance(segment, InputSegment):
                 try:
                     value = lookup_value(rt, segment.name, kwargs)

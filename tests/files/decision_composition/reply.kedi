@@ -14,23 +14,23 @@ from typing import Literal
 
 @review(reply: Reply) -> bool:
   > use: policy_reviewer
-  >> The authoritative policy is <policy>. The proposed customer reply is <reply>.
+  >> The authoritative policy is <policy>. The proposed customer reply is <<reply>>.
   Its status and message are [supported: Annotated[bool, "Are the reply's status and message supported by the authoritative policy, without claiming an approval that has not happened?"]].
   = `supported`
 
 @revise(reply: Reply) -> Reply:
-  >> Correct this customer reply <reply> using the authoritative policy <policy>.
+  >> Correct this customer reply <<reply>> using the authoritative policy <policy>.
   Do not claim completed approval. The corrected reply is [corrected: Reply].
   = `corrected`
 
 @respond(note: str) -> dict:
-  [first: Reply] = <draft(`note`)>
-  [accepted: bool] = <review(`first`)>
+  [first: Reply] = `draft(note)`
+  [accepted: bool] = `review(first)`
   > if: `accepted`:
     = `dict(first=first.model_dump(), final=first.model_dump(), initial_accepted=accepted, final_accepted=accepted, revisions=0)`
   > else:
-    [corrected: Reply] = <revise(`first`)>
-    [final_accepted: bool] = <review(`corrected`)>
+    [corrected: Reply] = `revise(first)`
+    [final_accepted: bool] = `review(corrected)`
     = `dict(first=first.model_dump(), final=corrected.model_dump(), initial_accepted=accepted, final_accepted=final_accepted, revisions=1)`
 
 = `respond(note)`

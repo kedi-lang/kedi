@@ -1,21 +1,34 @@
-"""Prompt attachments: media values named for one model request.
+"""Prompt attachments: the values a prompt references, named for one model request.
 
-Every media value a prompt mentions becomes an attachment placed before the prompt text,
-labeled with the name the text uses. Naming happens once per request: an explicit
-``name=``, else the binding name, else ``image_1``, ``audio_1``, ... by first appearance.
-The same content is attached once even when two names mention it.
+Every value a prompt references with ``<<x>>`` becomes an attachment placed before the prompt
+text, inside one ``<attachments>`` element and tagged with the name the text uses::
+
+    <attachments>
+    <image id="cat1" type="image/png">
+    [image part]
+    </image>
+    <document id="spec" type="text/plain">
+    ...
+    </document>
+    </attachments>
+    Does cat1 match spec?
+
+Naming happens once per request: an explicit ``name=``, else the binding name, else
+``<proc>_result_1``, ... for procedure calls. The same content is attached once even when two
+names reference it. Contents are not escaped.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from kedi.media import Media, MediaError, MediaKind, MediaMention, format_inline_text
+from kedi.media import Media, MediaError, MediaKind, Reference
 
 MediaSource = Literal["data", "url", "file_id"]
 MediaProvider = Literal["openai", "anthropic", "google", "bedrock", "typesafe", "laya"]
@@ -38,13 +51,15 @@ class MediaSummary:
 class MediaAttachment:
     """One media value attached to a prompt under the name the prompt text uses.
 
-    ``artifact_ref`` replaces the content of a text document stored as an artifact: the model
-    then sees the reference and reads the text with the artifact tools.
+    ``stored`` is the artifact handle of a value referenced with ``<<x>>`` that is already stored
+    as an artifact. When the model can read artifacts, ``artifact_ref`` replaces the content: the
+    model sees the reference and reads the value with the artifact tools.
     """
 
     name: str
     media: Media
     artifact_ref: Mapping[str, Any] | None = None
+    stored: Any = field(default=None, compare=False, repr=False)
 
     @property
     def summary(self) -> MediaSummary:
@@ -69,21 +84,93 @@ class MediaAttachment:
     def is_text(self) -> bool:
         return self.artifact_ref is not None or self.media.is_text
 
-    def label(self) -> str:
-        """The text part that introduces a binary attachment."""
+    @property
+    def tag(self) -> str:
+        return "artifact" if self.artifact_ref is not None else self.media.kind
 
-        return f"{self.name}:"
+    def open_tag(self) -> str:
+        if self.artifact_ref is not None:
+            return f'<artifact id="{self.name}">'
+        media_type = self.media.media_type
+        kind = self.media.kind
+        if media_type is None:
+            return f'<{kind} id="{self.name}">'
+        return f'<{kind} id="{self.name}" type="{media_type}">'
 
-    def inline_text(self, text: str | None = None) -> str:
-        """The text a text document or an artifact reference reaches the model as."""
+    def close_tag(self) -> str:
+        return f"</{self.tag}>"
+
+    def inline_text(self) -> str:
+        """The element a text document or an artifact reference reaches the model as."""
 
         if self.artifact_ref is not None:
-            reference = json.dumps(self.artifact_ref, ensure_ascii=False, sort_keys=True)
-            return f"{self.label()}\n{reference}"
-        content = self.media.text if text is None else text
-        return format_inline_text(
-            content, name=self.name, media_type=self.media.media_type or "text/plain"
-        )
+            content = json.dumps(self.artifact_ref, ensure_ascii=False, sort_keys=True)
+        else:
+            content = self.media.text
+        return f"{self.open_tag()}\n{content}\n{self.close_tag()}"
+
+
+ATTACHMENTS_OPEN = "<attachments>"
+ATTACHMENTS_CLOSE = "</attachments>"
+
+
+def attachment_content(
+    prompt: str, attachments: Sequence[MediaAttachment]
+) -> list[str | MediaAttachment]:
+    """Lay out one user message: text pieces, and the attachments whose native part goes there.
+
+    Adjacent text is merged, so a binary attachment's opening tag ends the text before it.
+    """
+
+    if not attachments:
+        return [prompt]
+    pieces: list[str | MediaAttachment] = []
+    text = ATTACHMENTS_OPEN + "\n"
+    for attachment in attachments:
+        if attachment.is_text:
+            text += attachment.inline_text() + "\n"
+            continue
+        pieces.append(text + attachment.open_tag() + "\n")
+        pieces.append(attachment)
+        text = "\n" + attachment.close_tag() + "\n"
+    pieces.append(text + ATTACHMENTS_CLOSE + "\n" + prompt)
+    return pieces
+
+
+_TEXT_ELEMENT = re.compile(
+    r'<document id="([A-Za-z_][A-Za-z0-9_]*)" type="[^"]*">\n(.*?)\n</document>', re.DOTALL
+)
+_OPEN_TAG_AT_END = re.compile(
+    r'<(?:image|audio|video|document) id="([A-Za-z_][A-Za-z0-9_]*)"(?: type="[^"]*")?>\n\Z'
+)
+
+
+def scan_sent_content(
+    items: Sequence[Any],
+    index: dict[str, tuple[str, ...]],
+    *,
+    text_of: Callable[[Any], str | None],
+    identity_of: Callable[[Any], tuple[str, ...] | None],
+) -> None:
+    """Record the attachments one sent user message holds, by name, into ``index``."""
+
+    for position, item in enumerate(items):
+        text = text_of(item)
+        if text is None:
+            continue
+        for name, content in _TEXT_ELEMENT.findall(text):
+            index[name] = (name, "document", "sha256", _sha256(content.encode("utf-8")))
+        opened = _OPEN_TAG_AT_END.search(text)
+        following = items[position + 1] if position + 1 < len(items) else None
+        identity = None if following is None or opened is None else identity_of(following)
+        if identity is not None and opened is not None:
+            index[opened.group(1)] = (opened.group(1), *identity)
+
+
+def _sha256(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
 
 
 class MediaNamer:
@@ -95,23 +182,35 @@ class MediaNamer:
         self._generated: Counter[str] = Counter()
         self._attachments: list[MediaAttachment] = []
 
-    def render(self, mention: MediaMention) -> str:
+    def render(self, ref: Reference) -> str:
         names = [
-            self.name_for(item, mention.preferred_name(index))
-            for index, item in enumerate(mention.items, start=1)
+            self.name_for(
+                item, ref.preferred_name(index), generated=ref.generated_base, stored=ref.stored
+            )
+            for index, item in enumerate(ref.items, start=1)
         ]
         return ", ".join(names)
 
-    def name_for(self, media: Media, preferred: str | None) -> str:
+    def name_for(
+        self,
+        media: Media,
+        preferred: str | None,
+        *,
+        generated: str | None = None,
+        stored: Any = None,
+    ) -> str:
         key = (media.kind, *media.content_key)
         existing = self._by_content.get(key)
         if existing is not None:
             return existing
         base = media.name or preferred
-        name = self._next_generated(media.kind) if base is None else self._unique(base)
+        if base is None:
+            name = self._next_generated(generated or media.kind)
+        else:
+            name = self._unique(base)
         self._by_content[key] = name
         self._names.add(name)
-        self._attachments.append(MediaAttachment(name=name, media=media))
+        self._attachments.append(MediaAttachment(name=name, media=media, stored=stored))
         return name
 
     @property
@@ -135,12 +234,12 @@ class MediaNamer:
 
 
 def compose_prompt(parts: Iterable[Any]) -> tuple[str, tuple[MediaAttachment, ...]]:
-    """Join rendered prompt parts, naming each media mention once for this request."""
+    """Join rendered prompt parts, naming each reference once for this request."""
 
     namer = MediaNamer()
     rendered: list[str] = []
     for part in parts:
-        rendered.append(namer.render(part) if isinstance(part, MediaMention) else part)
+        rendered.append(namer.render(part) if isinstance(part, Reference) else part)
     return "".join(rendered), namer.attachments
 
 
@@ -388,10 +487,12 @@ def _model_text(model: str | None) -> str:
 
 __all__ = [
     "MediaAttachment",
-    "MediaMention",
+    "ATTACHMENTS_CLOSE",
+    "ATTACHMENTS_OPEN",
     "MediaNamer",
     "MediaProvider",
     "MediaSummary",
+    "attachment_content",
     "check_media_support",
     "download_image_urls",
     "image_size",
@@ -400,5 +501,6 @@ __all__ = [
     "media_digest_material",
     "media_provider",
     "media_summaries",
+    "scan_sent_content",
     "unsent_attachments",
 ]

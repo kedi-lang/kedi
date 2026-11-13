@@ -156,7 +156,7 @@ def test_nested_groups_and_models_finish_with_one_worker() -> None:
             > process:
                 >> The answer is [value: int].
 
-                > show: <`seen.append(value)`>
+                > show: `seen.append(value)`
 = done
 """,
         engine=engine,
@@ -697,11 +697,11 @@ def test_both_adapters_use_identical_group_lifecycle(adapter_name: str) -> None:
     > await [a]: first
     > process:
         >> The result is [value: int].
-        > show: <`seen.append(value)`>
+        > show: `seen.append(value)`
     > await [b]: second
     > process:
         >> The result is [value: int].
-        > show: <`seen.append(value)`>
+        > show: `seen.append(value)`
 """
     )
     rt = compile_program(

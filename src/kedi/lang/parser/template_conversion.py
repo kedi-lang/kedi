@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import TYPE_CHECKING, List
 
 from tree_sitter import Node
 
 from kedi.lang.ast import (
+    REFERENCE_SEGMENTS,
     BacktickLineStmt,
     CallArg,
+    CallReference,
     CallSegment,
+    InputReference,
     InputSegment,
     LiteralArg,
     OutputSegment,
@@ -21,6 +25,7 @@ from kedi.lang.ast import (
     TemplateBlock,
     TemplateLine,
     TextSegment,
+    reference_span,
 )
 from kedi.lang.parser.cst_helpers import (
     _decode_inline_python_body,
@@ -309,6 +314,17 @@ def _walk_segment(self: _Walker, node: Node) -> Segment:
         return InputSegment(name=name, loc=self._span(node))
     if t == "call_segment":
         return self._walk_call_segment(node)
+    if t == "reference_segment":
+        # The segment's span starts at the second `<`, where `<name>` would start.
+        loc = self._span(node)
+        loc = replace(loc, start_byte=loc.start_byte + 1, start_col=loc.start_col + 1)
+        call_node = _field(node, "call")
+        if call_node is not None:
+            call = self._walk_call_segment(call_node)
+            return CallReference(name=call.name, args=call.args, loc=loc)
+        name_node = _field(node, "name")
+        assert name_node is not None
+        return InputReference(name=_identifier_name(self.source, name_node), loc=loc)
     if t == "output_segment":
         name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
         type_node = _field(node, "type")
@@ -412,7 +428,36 @@ def _walk_segment_in_call(self: _Walker, node: Node) -> Segment:
             escaped_whitespace=escaped_positions,
             loc=self._span(node),
         )
-    return self._walk_segment(node)
+    segment = self._walk_segment(node)
+    if isinstance(segment, REFERENCE_SEGMENTS):
+        self._reject_reference(segment, node, "procedure call arguments")
+    return segment
+
+
+def _reject_references(self: _Walker, segments: List[Segment], node: Node, where: str) -> None:
+    """Report `<<...>>` references outside model prompts; nested call arguments report themselves."""
+    for segment in segments:
+        if isinstance(segment, REFERENCE_SEGMENTS):
+            self._reject_reference(segment, node, where)
+
+
+def _reject_reference(
+    self: _Walker, segment: InputReference | CallReference, node: Node, where: str
+) -> None:
+    self.diagnostics.append(
+        KediDiagnostic(
+            severity="error",
+            message=(
+                f"References (<<{segment.name}{'(...)' if isinstance(segment, CallReference) else ''}>>) "
+                f"are not allowed in {where}. "
+                "Only model prompts accept them: >> lines, [x] << invokes and > if: claims. "
+                "Use <...> for text, or single-backtick Python for a native value, "
+                'for example [img: Image] = `image("cat.png")`.'
+            ),
+            span=reference_span(segment) or self._span(node),
+            code="K-REFERENCE-CONTEXT",
+        )
+    )
 
 
 def _walk_inline_python_expr(self: _Walker, node: Node) -> str:

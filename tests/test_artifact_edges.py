@@ -62,8 +62,6 @@ from kedi.artifacts.streaming import ArtifactStreamEncoder, StreamedArtifact
 from kedi.artifacts.tools import artifact_tool_specs
 from kedi.lang.compiler.environment import (
     KediEnv,
-    model_lookup_value,
-    model_text,
     model_value,
     native_value,
 )
@@ -1614,10 +1612,6 @@ def test_nested_environment_values_materialize_for_native_and_model_paths() -> N
         assert model["list"][0]["ref_id"] == handle.ref.ref_id
         assert model["set"][0]["ref_id"] == handle.ref.ref_id
         assert model["frozen"][0]["ref_id"] == handle.ref.ref_id
-        assert handle.ref.ref_id in model_text(nested)
-        assert handle.ref.ref_id in model_text(Holder(value=handle))
-        assert handle.ref.ref_id in model_text(Box(value=handle))
-        assert model_text("plain") == "plain"
 
         cyclic: list[Any] = []
         cyclic.append(cyclic)
@@ -1625,7 +1619,6 @@ def test_nested_environment_values_materialize_for_native_and_model_paths() -> N
         resolved_cycle = native_value(cyclic)
         assert resolved_cycle[0] is resolved_cycle
         assert resolved_cycle[1] == "payload"
-        assert handle.ref.ref_id in model_text(cyclic)
 
         arbitrary = object()
         assert native_value([arbitrary, handle])[0] is arbitrary
@@ -1634,7 +1627,6 @@ def test_nested_environment_values_materialize_for_native_and_model_paths() -> N
         assert isinstance(env.raw_value("artifact"), ArtifactHandle)
         assert env.native_value("artifact") == "payload"
         assert env["artifact"] == "payload"
-        assert model_lookup_value(SimpleNamespace(), "artifact", env)["ref_id"] == handle.ref.ref_id
     finally:
         manager.close()
 

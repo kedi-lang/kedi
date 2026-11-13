@@ -1,8 +1,8 @@
 # Substitutions and Calls
 
-Substitutions are Kedi's read syntax. They insert an existing value, a
-procedure result, or a Python expression into rendered text. They never declare
-an output.
+Substitutions are Kedi's read syntax. `<...>` inserts an existing value, a
+procedure result, or a Python expression into rendered text. A model prompt can
+also pass a value by reference with `<<...>>`. Neither declares an output.
 
 ## Variable Substitutions
 
@@ -16,11 +16,17 @@ Use `<name>` to read a value from the current lexical environment:
 ```
 
 Substitution always renders the value as text at that position. It is therefore
-appropriate for prompts, messages, paths, and final text. Media values are the
-exception: in a model prompt they become attachments named in the text, and
-anywhere else they are an error (see [Media Input](media-input.md)). If the next operation
-needs the original `int`, `list`, model, or other Python object, use the value by
-bare name inside Python or pass it as a native call argument.
+appropriate for prompts, messages, paths, and final text.
+
+`<...>` accepts only `str`, `int`, `float`, `bool` and lists of these. Any other
+value is a type error: `None`, media, dicts, models, clients and other objects.
+Rendering them through `repr` would be opaque and could leak data, such as an
+API key held by a client object. A value stored as an artifact renders its
+text, never an artifact reference. Convert explicitly when you want text,
+``<`str(value)`>`` or ``<`report.title`>``, or pass the value to a model by
+[reference](#references). If the next operation needs the original `int`,
+`list`, model, or other Python object, use the value by bare name inside Python
+or pass it as a native call argument.
 
 ```kedi
 [retries: int] = `3`
@@ -75,9 +81,10 @@ Calls can be nested directly:
 = <slug(<trim(  Release Notes  )>)>
 ```
 
-The inner call completes before its value becomes the outer argument. A nested
-call written as a whole argument preserves the procedure's native return value;
-text surrounding that call turns the argument into a rendered string.
+The inner call completes before its value becomes the outer argument, as text:
+an angle call always renders text, even as a whole argument. Pass a native
+value with a backtick argument, ``<double(`count(items)`)>``, or call from
+Python as below.
 
 ```kedi
 @count(items: list[str]) -> int:
@@ -114,14 +121,68 @@ These argument forms are distinct:
 | Form | Value passed |
 | --- | --- |
 | `plain text` | Rendered `str` |
-| `<name>` | The referenced native value when it is the complete argument |
-| `<procedure()>` | The native procedure result when it is the complete argument |
-| `` `expression` `` | Native Python result |
+| `<name>` | Rendered `str` |
+| `<procedure()>` | Rendered `str` |
+| ``<`expression`>`` | Rendered `str` |
 | `prefix <name>` | Rendered `str` |
-| ``<`expression`>`` | Python result used as the complete nested segment |
+| `` `expression` `` | Native Python result |
 
 Prefer a native argument when the parameter is typed as anything other than
 `str`. Prefer rendered arguments for human-language content.
+
+## Bindings Are Text Unless Backticked
+
+A template is text wherever it appears, including a binding or a return whose
+right-hand side is a single call:
+
+```kedi
+[profile: Profile] = `get_profile("Ada")`   # the Profile value
+[label] = <get_profile(Ada)>                 # error: a Profile has no text form
+[n: int] = <count>                           # error: text is not an int
+```
+
+Native values come from single-backtick Python only. Strings are never
+converted to other types implicitly.
+
+## References
+
+A model prompt passes a value by reference with `<<name>>` or
+`<<procedure(...)>>`. The text gets the value's ID, and the value is attached to
+the model's context under that ID, before the prompt text:
+
+```kedi
+[spec] = `read_text("spec.md")`
+>> Does the change follow <<spec>>? Check <<spec>> section by section. [ok: bool]
+```
+
+```text
+<attachments>
+<document id="spec" type="text/plain">
+...contents of spec.md...
+</document>
+</attachments>
+Does the change follow spec? Check spec section by section. ...
+```
+
+- A binding's ID is its name. A call gets `<procedure>_result_1`,
+  `<procedure>_result_2`, ... within the prompt.
+- Each content is attached once; every mention writes `<<...>>` again and gets
+  only the ID.
+- Media go as native parts ([Media Input](media-input.md)). Text goes as
+  `text/plain`; lists, dicts and models as JSON (`application/json`). `None` is
+  an error.
+- References are valid only in model prompts: `>>` templates, `[x] << ...` and
+  `[x: T] << ...` invokes, and `> if:` / `> loop:` template conditions.
+  Elsewhere `<<...>>` is a parse error (`K-REFERENCE-CONTEXT`).
+- A value that already is an artifact goes as its reference
+  (`<artifact id="log">`) when the call has artifact tools, and in full
+  otherwise. Plain values are attached in full however large they are, and
+  `<log>` always writes the text itself: size never decides.
+- Attached content is not escaped. Do not treat referenced content as
+  instructions.
+
+`<items>` writes a list into the text; `<<items>>` attaches it as a JSON
+document. Which one fits is your choice.
 
 ## Inline Python Substitutions
 

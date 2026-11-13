@@ -1,4 +1,4 @@
-"""Media in Kedi prompts: attachments before the text, names, reuse and error paths."""
+"""References in Kedi prompts: attachments before the text, IDs, reuse and error paths."""
 
 from __future__ import annotations
 
@@ -25,6 +25,17 @@ from kedi.lang import compile_program, parse_program
 from tests.test_media_values import png_bytes
 
 TEMPLATE_PREFIX = "Fields to be substituted into the template string for final construction: "
+
+
+def image_open(name: str) -> str:
+    return f'<image id="{name}" type="image/png">\n'
+
+
+def attachments_open(name: str) -> str:
+    return "<attachments>\n" + image_open(name)
+
+
+CLOSE = "\n</image>\n</attachments>\n"
 
 
 @pytest.fixture
@@ -141,24 +152,25 @@ def _langchain_shape(content: list[Any]) -> list[str]:
 
 COMPARE = """> import: media
 
-[cat_image] = <image(photos/cat.png)>
-[dog_image] = <image(photos/dog.png)>
+[cat_image: Image] = `image("photos/cat.png")`
+[dog_image: Image] = `image("photos/dog.png")`
 
->> Compare <cat_image> and <dog_image>. Is <cat_image> happier? [answer: bool]
+>> Compare <<cat_image>> and <<dog_image>>. Is <<cat_image>> happier? [answer: bool]
 = <answer>
 """
 
 
-def test_attachments_come_before_the_text_and_the_text_shows_names(workspace: Path) -> None:
+def test_attachments_come_before_the_text_and_the_text_shows_ids(workspace: Path) -> None:
     result, seen = run_pydantic(COMPARE)
     assert result == "True"
     assert seen == [
         [
-            "cat_image:",
+            attachments_open("cat_image"),
             "<binary cat_image>",
-            "dog_image:",
+            "\n</image>\n" + image_open("dog_image"),
             "<binary dog_image>",
-            TEMPLATE_PREFIX
+            CLOSE
+            + TEMPLATE_PREFIX
             + "(answer).\n\nThe template string:\n"
             + "Compare cat_image and dog_image. Is cat_image happier? [answer]",
         ]
@@ -168,9 +180,9 @@ def test_attachments_come_before_the_text_and_the_text_shows_names(workspace: Pa
 def test_langchain_sends_the_same_structure_as_standard_blocks(workspace: Path) -> None:
     _, seen = run_langchain(COMPARE)
     assert _langchain_shape(seen[0])[:4] == [
-        "cat_image:",
+        attachments_open("cat_image"),
         "<image image/png>",
-        "dog_image:",
+        "\n</image>\n" + image_open("dog_image"),
         "<image image/png>",
     ]
     assert seen[0][1]["base64"] == base64.b64encode(png_bytes(1)).decode()
@@ -178,118 +190,197 @@ def test_langchain_sends_the_same_structure_as_standard_blocks(workspace: Path) 
 
 
 @pytest.mark.parametrize("runner", [run_pydantic, run_langchain])
-def test_names_lists_dedupe_raw_invokes_and_claims(workspace: Path, runner: Any) -> None:
+def test_ids_lists_dedupe_raw_invokes_and_claims(workspace: Path, runner: Any) -> None:
     source = """> import: media
 
-[cat_image] = <image(photos/cat.png)>
+[cat_image: Image] = `image("photos/cat.png")`
 [photos: list[Image]] = `[cat_image, image("photos/dog.png")]`
 [same: Image] = `cat_image`
->> Total of <image(photos/receipt.png)>: [total: float]
->> Is <same> among <photos>? [found: bool]
-[caption] << Describe <cat_image>.
+>> Total of <<image(photos/receipt.png)>>: [total: float]
+>> Is <<same>> among <<photos>>? [found: bool]
+[caption] << Describe <<cat_image>>.
 [mode] = no
-> if: <cat_image> shows a cat
+> if: <<cat_image>> shows a cat
   [mode] := yes
+> if: <<image(photos/dog.png)>> shows a dog
+  [mode] := <mode>!
 = <total>|<found>|<caption>|<mode>
 """
     result, seen = runner(source)
-    assert result == "12.5|True|a cat|yes"
+    assert result == "12.5|True|a cat|yes!"
     texts = [
-        [item for item in request if isinstance(item, str) and not item.startswith("<")]
+        "".join(
+            item for item in request if isinstance(item, str) and not item.startswith("<binary")
+        )
         for request in seen
     ]
-    assert texts[0][0] == "image_1:" and texts[0][-1].endswith("Total of image_1: [total]")
-    # The same content is attached once and renders the first name it got in this request.
-    assert texts[1][:2] == ["same:", "photos_2:"]
-    assert texts[1][-1].endswith("Is same among same, photos_2? [found]")
-    assert texts[2] == ["cat_image:", "Describe cat_image."]
-    assert texts[3] == ["cat_image:", "Claim: cat_image shows a cat"]
+    assert texts[0].startswith(attachments_open("image_result_1"))
+    assert texts[0].endswith("Total of image_result_1: [total]")
+    # The same content is attached once and renders the first ID it got in this request.
+    assert texts[1].startswith(attachments_open("same") + "\n</image>\n" + image_open("photos_2"))
+    assert texts[1].endswith("Is same among same, photos_2? [found]")
+    assert texts[2] == attachments_open("cat_image") + CLOSE + "Describe cat_image."
+    assert texts[3] == attachments_open("cat_image") + CLOSE + "Claim: cat_image shows a cat"
+    assert (
+        texts[4] == attachments_open("image_result_1") + CLOSE + "Claim: image_result_1 shows a dog"
+    )
 
 
 @pytest.mark.parametrize("runner", [run_pydantic, run_langchain])
-def test_text_documents_are_inlined_with_their_name(workspace: Path, runner: Any) -> None:
+def test_text_documents_and_values_are_document_elements(workspace: Path, runner: Any) -> None:
     source = """> import: media
 
->> List the decisions in <document(notes.md)>: [decisions: list[str]]
+~Owner(name: str, age: int)
+
+[owner: Owner] = `Owner(name="Ada", age=36)`
+[tags: list[str]] = `["a", "b"]`
+>> List the decisions in <<document(notes.md)>> for <<owner>> with <<tags>>: [decisions: list[str]]
 = done
 """
     _, seen = runner(source)
     assert seen[0][0] == (
-        '-----BEGIN FILE id="document_1" type="text/markdown"-----\n'
+        "<attachments>\n"
+        '<document id="document_result_1" type="text/markdown">\n'
         "# Meeting\n- decision: ship\n\n"
-        '-----END FILE id="document_1"-----'
+        "</document>\n"
+        '<document id="owner" type="application/json">\n'
+        '{"name":"Ada","age":36}\n'
+        "</document>\n"
+        '<document id="tags" type="application/json">\n'
+        '["a","b"]\n'
+        "</document>\n"
+        "</attachments>\n"
+        + TEMPLATE_PREFIX
+        + "(decisions).\n\nThe template string:\n"
+        + "List the decisions in document_result_1 for owner with tags: [decisions]"
     )
-    assert seen[0][1].endswith("List the decisions in document_1: [decisions]")
 
 
-def test_large_text_documents_become_artifact_references(workspace: Path) -> None:
+def test_referenced_content_is_never_turned_into_an_artifact_by_its_size(workspace: Path) -> None:
     (workspace / "log.txt").write_text("line\n" * 400, encoding="utf-8")
     source = """> import: media
 > artifacts:
     threshold: 1kb
 
-[summary] << Summarize <document(log.txt)>.
+[summary] << Summarize <<document(log.txt)>>.
 = <summary>
 """
     _, seen = run_pydantic(source)
-    label, reference = seen[0][0].split("\n", 1)
-    assert label == "document_1:"
-    ref = json.loads(reference)
-    assert ref["ref_id"].startswith("artifact_") and ref["char_count"] == 2000
-    assert seen[0][1] == "Summarize document_1."
+    (content,) = seen[0]
+    assert content.startswith(
+        '<attachments>\n<document id="document_result_1" type="text/plain">\n' + "line\n" * 400
+    )
+    assert content.endswith("</attachments>\nSummarize document_result_1.")
 
 
-def test_text_documents_stay_inline_when_artifacts_are_disabled(workspace: Path) -> None:
-    (workspace / "log.txt").write_text("line\n" * 400, encoding="utf-8")
-    source = """> import: media
-> artifacts:
-    enabled: false
+def _stored_log_program(extra: str) -> tuple[list[list[str]], list[str]]:
+    """A value an agent session stored as an artifact, then used in a prompt."""
+    from kedi.artifacts import ArtifactPolicy
+
+    seen: list[list[str]] = []
+    texts: list[str] = []
+
+    def respond(messages: list[Any], info: Any) -> ModelResponse:
+        part = next(p for p in messages[-1].parts if isinstance(p, UserPromptPart))
+        content = [part.content] if isinstance(part.content, str) else list(part.content)
+        seen.append([_pydantic_item(item) for item in content])
+        texts.append(content[-1])
+        return ModelResponse(parts=[TextPart("ok")])
+
+    source = f"""> artifacts:
     threshold: 1kb
 
-[summary] << Summarize <document(log.txt)>.
-= <summary>
+{extra}
+= done
 """
-    _, seen = run_pydantic(source)
-    assert seen[0][0].startswith('-----BEGIN FILE id="document_1" type="text/plain"-----\nline\n')
+    engine = SequentialEngine()
+    runtime = compile_program(
+        parse_program(source), adapter=PydanticAdapter(FunctionModel(respond)), engine=engine
+    )
+    policy = ArtifactPolicy.patch({"threshold": "1kb"})
+    runtime._initial_globals_env["log"] = runtime.artifacts.artifactize(
+        "line\n" * 400, policy=policy, source="tool:read_log"
+    )
+    try:
+        runtime.run_main()
+    finally:
+        asyncio.run(runtime.aclose())
+        engine.shutdown()
+    return seen, texts
 
 
-def test_typed_parameters_name_media_after_the_parameter(workspace: Path) -> None:
+def test_stored_values_go_by_reference_only_through_double_angles(workspace: Path) -> None:
+    seen, _ = _stored_log_program(
+        '[note: str] = `"short"`\n[summary] << Summarize <<log>> with <<note>>.'
+    )
+    (content,) = seen[0]
+    opening, reference, closing = content.split("\n", 3)[1:]
+    assert opening == '<artifact id="log">'
+    assert json.loads(reference)["ref_id"] == "tool_call_result_1"
+    assert closing == (
+        '</artifact>\n<document id="note" type="text/plain">\nshort\n</document>\n'
+        "</attachments>\nSummarize log with note."
+    )
+
+    # <log> is the template text itself: the whole log, never an artifact reference.
+    seen, _ = _stored_log_program("[summary] << Summarize <log>.")
+    assert seen[0] == ["Summarize " + "line\n" * 400 + "."]
+
+
+def test_stored_values_are_sent_in_full_when_the_model_cannot_read_artifacts(
+    workspace: Path,
+) -> None:
+    seen, _ = _stored_log_program(
+        "> artifacts:\n    enabled: false\n[summary] << Summarize <<log>>."
+    )
+    (content,) = seen[0]
+    assert content.startswith('<attachments>\n<document id="log" type="text/plain">\nline\n')
+
+
+def test_typed_parameters_take_media_values_only(workspace: Path) -> None:
     source = """> import: media
 
 @caption(photo: Image) -> str:
-  [text] << Describe <photo> in one sentence.
+  [text] << Describe <<photo>> in one sentence.
   = <text>
 
-[invoice: Image] = <image(photos/receipt.png)>
-= <caption(`invoice`)>|<caption(photos/cat.png)>
+[invoice: Image] = `image("photos/receipt.png")`
+= <caption(`invoice`)>
 """
     result, seen = run_pydantic(source)
-    assert result == "a cat|a cat"
+    assert result == "a cat"
     assert seen == [
-        ["photo:", "<binary photo>", "Describe photo in one sentence."],
-        ["photo:", "<binary photo>", "Describe photo in one sentence."],
+        [attachments_open("photo"), "<binary photo>", CLOSE + "Describe photo in one sentence."]
     ]
+    # A string is never converted to media, not even at a typed parameter.
+    with pytest.raises(KediExecutionError, match="strings are never converted to media"):
+        run_pydantic(source.replace("<caption(`invoice`)>", "<caption(photos/cat.png)>"))
 
 
-def test_parallel_engine_attaches_media_from_promises(workspace: Path) -> None:
+def test_parallel_engine_attaches_references_from_promises(workspace: Path) -> None:
     source = """> import: media
 
 @pick() -> Image:
-  = <image(photos/dog.png)>
+  = `image("photos/dog.png")`
 
-[cat_image] = <image(photos/cat.png)>
-[dog] = <pick()>
->> What is <cat_image>? [what]
->> Compare <dog> with <cat_image> given <what>: [comparison]
+[cat_image: Image] = `image("photos/cat.png")`
+[dog: Image] = `pick()`
+>> What is <<cat_image>>? [what]
+>> Compare <<dog>> with <<cat_image>> given <what>: [comparison]
 = <comparison>
 """
     result, seen = run_pydantic(source, engine=ThreadEngine())
     assert result == "x"
-    compare = next(request for request in seen if "dog:" in request)
-    assert compare[:4] == ["dog:", "<binary dog>", "cat_image:", "<binary cat_image>"]
+    compare = next(request for request in seen if "<binary dog>" in request)
+    assert compare[:4] == [
+        attachments_open("dog"),
+        "<binary dog>",
+        "\n</image>\n" + image_open("cat_image"),
+        "<binary cat_image>",
+    ]
 
 
-def test_hooks_see_media_read_only_and_edit_only_the_text(workspace: Path) -> None:
+def test_hooks_see_attachments_read_only_and_edit_only_the_text(workspace: Path) -> None:
     events: list[Any] = []
 
     def hook(event: Any) -> Any:
@@ -299,8 +390,8 @@ def test_hooks_see_media_read_only_and_edit_only_the_text(workspace: Path) -> No
         return None
 
     source = """> import: media
-[cat_image] = <image(photos/cat.png)>
-[text] << Describe <cat_image>.
+[cat_image: Image] = `image("photos/cat.png")`
+[text] << Describe <<cat_image>>.
 = <text>
 """
     _, seen = run_pydantic(source, hook=hook)
@@ -314,37 +405,47 @@ def test_hooks_see_media_read_only_and_edit_only_the_text(workspace: Path) -> No
     )
     assert summary.size == len(png_bytes(1)) and len(summary.sha256 or "") == 64
     assert "iVBOR" not in repr(event)
-    assert seen == [["cat_image:", "<binary cat_image>", "Describe cat_image. Be brief."]]
+    assert seen == [
+        [
+            attachments_open("cat_image"),
+            "<binary cat_image>",
+            CLOSE + "Describe cat_image. Be brief.",
+        ]
+    ]
 
 
 HISTORY = """> import: media
 > history: enabled
 
-[photo] = <image(photos/cat.png)>
-[notes] = <document(notes.md)>
-[a] << Describe <photo> using <notes>.
-[b] << How many colors does <photo> have? Check <notes>.
-[photo] := <image(photos/dog.png)>
-[c] << Describe <photo>.
-[photo] := <image(photos/cat.png)>
-[d] << Describe <photo> again.
+[photo: Image] = `image("photos/cat.png")`
+[notes: Document] = `document("notes.md")`
+[a] << Describe <<photo>> using <<notes>>.
+[b] << How many colors does <<photo>> have? Check <<notes>>.
+[photo] := `image("photos/dog.png")`
+[c] << Describe <<photo>>.
+[photo] := `image("photos/cat.png")`
+[d] << Describe <<photo>> again.
 = done
 """
 
 
 @pytest.mark.parametrize("runner", [run_pydantic, run_langchain])
-def test_history_reuses_attachments_by_name_and_content(workspace: Path, runner: Any) -> None:
+def test_history_reuses_attachments_by_id_and_content(workspace: Path, runner: Any) -> None:
     _, seen = runner(HISTORY)
-    labels = [
-        [item for item in request if isinstance(item, str) and item.endswith(":")]
+    sent = [
+        [
+            name
+            for name in ("photo", "notes")
+            if any(isinstance(item, str) and f'id="{name}"' in item for item in request)
+        ]
         for request in seen
     ]
     # Turn 2 reuses both; a rebound name is attached again, also when it returns to old content.
-    assert labels == [["photo:"], [], ["photo:"], ["photo:"]]
+    assert sent == [["photo", "notes"], [], ["photo"], ["photo"]]
     assert seen[1] == ["How many colors does photo have? Check notes."]
 
 
-def test_history_processor_attaches_media_on_every_turn(workspace: Path) -> None:
+def test_history_processor_attaches_references_on_every_turn(workspace: Path) -> None:
     seen: list[list[str]] = []
 
     def respond(messages: list[Any], info: Any) -> ModelResponse:
@@ -359,54 +460,84 @@ def test_history_processor_attaches_media_on_every_turn(workspace: Path) -> None
         )
     source = """> import: media
 > history: enabled
-[photo] = <image(photos/cat.png)>
-[a] << Describe <photo>.
-[b] << Describe <photo> again.
+[photo: Image] = `image("photos/cat.png")`
+[a] << Describe <<photo>>.
+[b] << Describe <<photo>> again.
 = done
 """
     _run(source, adapter, None)
-    assert [request[0] for request in seen] == ["photo:", "photo:"]
+    assert [request[0] for request in seen] == [attachments_open("photo")] * 2
 
 
 @pytest.mark.parametrize(
     ("statement", "message"),
     [
-        ("[m] = See <cat_image>", "cannot be embedded in text"),
-        ("[m] = <cat_image>", "use backticks: `cat_image`"),
-        ("= <cat_image>", "cannot be embedded in text"),
-        ("[m] = <describe(<cat_image>)>", "cannot be embedded in text"),
-        ("> instructions:\n    Look at <cat_image>.\n>> Hi [x]", "instructions are text only"),
-        ("[m] = <`{'photo': cat_image}`> note", "cannot be embedded in text"),
-        (">> Describe <`{'photo': cat_image}`> [x]", "inside a list, dict or model"),
-        (">> Compare <`[cat_image, 'x']`> [x]", "inside a list, dict or model"),
+        (">> See <cat_image> [x]", "<cat_image> renders text, but the value is <image cat.png"),
+        ("[m] = See <cat_image>", "<cat_image> renders text"),
+        ("[m: Image] = <image(photos/cat.png)>", r"<image\(...\)> renders text"),
+        ("[m: Image] = photos/cat.png", "strings are never converted to media"),
+        ("= <cat_image>", "<cat_image> renders text"),
+        ("[m] = <describe(<cat_image>)>", "<cat_image> renders text"),
+        ("> instructions:\n    Look at <cat_image>.\n>> Hi [x]", "<cat_image> renders text"),
+        (
+            ">> Describe <`{'photo': cat_image}`> [x]",
+            "renders text, but the value is of type dict. In a model prompt bind it to a name",
+        ),
+        (">> Compare <`[cat_image, 'x']`> [x]", r"\(in a list\)"),
+        (">> Compare <<pair>> [x]", "media inside a dict, a model or a mixed list"),
+        (">> Describe <<nothing>> [x]", "<<nothing>> is None"),
+        (">> Describe <nothing> [x]", "<nothing> renders text, but the value is None"),
+        ("> show: <cat_image>", "<cat_image> renders text"),
     ],
 )
-def test_media_in_text_fails_loudly(workspace: Path, statement: str, message: str) -> None:
+def test_substituting_non_text_fails_loudly(workspace: Path, statement: str, message: str) -> None:
     source = f"""> import: media
 
 @describe(photo: Image) -> str:
-  [text] << Describe <photo>.
+  [text] << Describe <<photo>>.
   = <text>
 
-[cat_image] = <image(photos/cat.png)>
+[cat_image: Image] = `image("photos/cat.png")`
+[pair: list] = `[cat_image, "x"]`
+[nothing: str | None] = `None`
 {statement}
 """
-    with pytest.raises(KediExecutionError, match=message.replace("[", r"\[")):
+    with pytest.raises(KediExecutionError, match=message):
         run_pydantic(source)
 
 
-def test_show_prints_a_byte_free_label(workspace: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    run_pydantic("> import: media\n[cat_image] = <image(photos/cat.png)>\n> show: <cat_image>\n")
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "[m] = See <<cat_image>>",
+        "= <<cat_image>>",
+        "> show: <<cat_image>>",
+        "[m] = <describe(<<cat_image>>)>",
+    ],
+)
+def test_references_outside_model_prompts_are_parse_errors(workspace: Path, statement: str) -> None:
+    from kedi.lang.parser.diagnostics import KediParseError
+
+    with pytest.raises(KediParseError, match="are not allowed in"):
+        parse_program(
+            f'> import: media\n[cat_image: Image] = `image("photos/cat.png")`\n{statement}\n'
+        )
+
+
+def test_show_prints_a_byte_free_label_with_backticks(
+    workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_pydantic(
+        '> import: media\n[cat_image: Image] = `image("photos/cat.png")`\n> show: `cat_image`\n'
+    )
     assert capsys.readouterr().out.strip() == "<image cat.png · image/png · 73 B>"
 
 
 def test_loader_errors_name_the_cause(workspace: Path) -> None:
     with pytest.raises(KediExecutionError, match="path escapes the working directory"):
-        run_pydantic("> import: media\n[x] = <image(../outside.png)>\n")
+        run_pydantic('> import: media\n[x: Image] = `image("../outside.png")`\n')
     with pytest.raises(KediExecutionError, match="Media file not found: photos/missing.png"):
-        run_pydantic(
-            "> import: media\n@d(photo: Image) -> str:\n  = ok\n\n= <d(photos/missing.png)>\n"
-        )
+        run_pydantic("> import: media\n[t] << See <<image(photos/missing.png)>>.\n")
 
 
 def test_adapters_without_media_input_fail_before_model_io(workspace: Path) -> None:
@@ -419,7 +550,8 @@ def test_adapters_without_media_input_fail_before_model_io(workspace: Path) -> N
     )
     with pytest.raises((KediExecutionError, MediaError), match="does not accept media input"):
         _run(
-            "> import: media\n[cat_image] = <image(photos/cat.png)>\n[t] << See <cat_image>.\n",
+            '> import: media\n[cat_image: Image] = `image("photos/cat.png")`\n'
+            "[t] << See <<cat_image>>.\n",
             adapter,
             None,
         )
@@ -429,7 +561,10 @@ def test_debugger_events_carry_metadata_but_no_bytes(workspace: Path) -> None:
     from kedi.debugging import observe_execution
 
     events: list[Any] = []
-    source = "> import: media\n[cat_image] = <image(photos/cat.png)>\n[t] << See <cat_image>.\n"
+    source = (
+        '> import: media\n[cat_image: Image] = `image("photos/cat.png")`\n'
+        "[t] << See <<cat_image>>.\n"
+    )
     with observe_execution(events.append):
         run_pydantic(source)
     payloads = [event.payload for event in events if event.kind in {"model_input", "request"}]

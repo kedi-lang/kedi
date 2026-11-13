@@ -448,7 +448,7 @@ class KediRuntime:
         )
 
     def _evaluate_claim(self, claim: str | Sequence[Any]) -> bool:
-        """Classify a rendered control-flow claim (text, or parts with media mentions)."""
+        """Classify a rendered control-flow claim (text, or parts with references)."""
         return _model_calls._evaluate_claim(self, claim)
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:

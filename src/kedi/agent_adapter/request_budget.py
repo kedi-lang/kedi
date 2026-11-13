@@ -308,7 +308,7 @@ def estimate_attachment_tokens(attachments: Iterable[Any]) -> int:
         if attachment.is_text and attachment.media.data is not None:
             total += len(attachment.inline_text().encode("utf-8"))
         else:
-            total += len(attachment.label()) + estimate_media_tokens(
+            total += len(attachment.open_tag() + attachment.close_tag()) + estimate_media_tokens(
                 attachment.media.kind, attachment.media.size
             )
     return total

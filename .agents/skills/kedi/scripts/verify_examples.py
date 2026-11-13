@@ -128,7 +128,7 @@ def main() -> int:
     for name, expected in deterministic.items():
         record(name, lambda name=name, expected=expected: equal(execute(name), expected))
     record(
-        "native models and sole call RHS",
+        "native models from a backtick call",
         lambda: equal(
             execute("native_values.kedi").model_dump(), {"total": 36, "labels": ["book", "pen"]}
         ),

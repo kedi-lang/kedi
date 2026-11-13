@@ -44,6 +44,7 @@ from kedi.lang.ast import (
     BacktickLineStmt,
     BudgetDirectiveStmt,
     CallArg,
+    CallReference,
     CallSegment,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
@@ -55,6 +56,7 @@ from kedi.lang.ast import (
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
     IfStmt,
+    InputReference,
     LoopStmt,
     McpDirectiveStmt,
     McpField,
@@ -427,6 +429,14 @@ class _Walker:
           - ``render_segments``: arg is a mini-template rendered to a string.
         """
         return _template_conversion._walk_call_arg(self, node)
+
+    def _reject_references(self, segments: List[Segment], node: Node, where: str) -> None:
+        _template_conversion._reject_references(self, segments, node, where)
+
+    def _reject_reference(
+        self, segment: InputReference | CallReference, node: Node, where: str
+    ) -> None:
+        _template_conversion._reject_reference(self, segment, node, where)
 
     def _walk_segment_in_call(self, node: Node) -> Segment:
         """A segment appearing inside a ``template_arg`` (call argument).

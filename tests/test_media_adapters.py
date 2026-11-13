@@ -1,4 +1,4 @@
-"""Adapter-side media lowering: native parts, history scans, downloads and provider checks."""
+"""Adapter-side attachment lowering: native parts, history scans, downloads and provider checks."""
 
 from __future__ import annotations
 
@@ -21,12 +21,18 @@ from kedi.agent_adapter.request.media import (
     history_keeps_media,
     media_provider,
 )
-from kedi.media import Audio, Document, Image, Media, MediaError, MediaMention, Video
+from kedi.media import Audio, Document, Image, Media, MediaError, Reference, Video
 from tests.test_media_values import png_bytes
 
 CAT = Image.from_bytes(png_bytes(1), "image/png")
 DOG = Image.from_bytes(png_bytes(2), "image/png")
 PDF = Document.from_bytes(b"%PDF-1.4\n%%EOF\n", "application/pdf")
+
+
+def _sha256(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
 
 
 def _attach(name: str, media: Media) -> MediaAttachment:
@@ -37,24 +43,33 @@ def test_generated_and_repeated_names_skip_taken_ones() -> None:
     bird = Image.from_bytes(png_bytes(3), "image/png")
     text, attachments = compose_prompt(
         [
-            MediaMention((CAT,), "image_1"),
+            Reference((CAT,), "image_1"),
             " ",
-            MediaMention((DOG,)),
+            Reference((DOG,)),
             " ",
-            MediaMention((CAT.with_name("photo"),)),
-            MediaMention((DOG.with_name("photo"),)),
-            MediaMention((bird.with_name("photo"),)),
+            Reference((CAT.with_name("photo"),)),
+            Reference((DOG.with_name("photo"),)),
+            Reference((bird.with_name("photo"),)),
+            " ",
+            Reference((PDF,), call="pick"),
+            Reference((PDF, bird), call="pick", is_list=True),
         ]
     )
     # ``image_1`` is a binding here, so the unnamed image becomes ``image_2``; content already
-    # attached keeps its first name, and a repeated explicit name is numbered.
-    assert text == "image_1 image_2 image_1image_2photo"
-    assert [attachment.name for attachment in attachments] == ["image_1", "image_2", "photo"]
+    # attached keeps its first name, and a repeated explicit name is numbered. Calls are named
+    # ``<proc>_result_<n>``.
+    assert text == "image_1 image_2 image_1image_2photo pick_result_1pick_result_1, photo"
+    assert [attachment.name for attachment in attachments] == [
+        "image_1",
+        "image_2",
+        "photo",
+        "pick_result_1",
+    ]
 
     names = [
         attachment.name
         for attachment in compose_prompt(
-            [MediaMention((media.with_name("photo"),)) for media in (CAT, DOG, bird)]
+            [Reference((media.with_name("photo"),)) for media in (CAT, DOG, bird)]
         )[1]
     ]
     assert names == ["photo", "photo_2", "photo_3"]
@@ -150,17 +165,17 @@ def test_url_text_documents_are_downloaded_and_inlined(
     (tmp_path / "cat.png").write_bytes(png_bytes())
     monkeypatch.setattr(pydantic_ai.models, "download_item", fake_download)
     source = """> import: media
-[summary] << Summarize <document(https://example.com/notes.md)> for <image(cat.png)>.
+[summary] << Summarize <<document(https://example.com/notes.md)>> for <<image(cat.png)>>.
 = <summary>
 """
     _, seen = run_pydantic(source)
     assert seen == [
         [
-            '-----BEGIN FILE id="document_1" type="text/markdown"-----\n'
-            'decision: ship\n\n-----END FILE id="document_1"-----',
-            "image_1:",
-            "<binary image_1>",
-            "Summarize document_1 for image_1.",
+            '<attachments>\n<document id="document_result_1" type="text/markdown">\n'
+            "decision: ship\n\n</document>\n"
+            '<image id="image_result_1" type="image/png">\n',
+            "<binary image_result_1>",
+            "\n</image>\n</attachments>\nSummarize document_result_1 for image_result_1.",
         ]
     ]
 
@@ -181,7 +196,13 @@ def test_pydantic_parts_for_urls_and_uploaded_files() -> None:
             "Compare them.", attachments, history=None, model=SimpleNamespace()
         )
     )
-    assert content[0::2] == ["typed:", "untyped:", "paper:", "stored:", "Compare them."]
+    assert content[0::2] == [
+        '<attachments>\n<image id="typed" type="image/png">\n',
+        '\n</image>\n<image id="untyped">\n',
+        '\n</image>\n<document id="paper" type="application/pdf">\n',
+        '\n</document>\n<document id="stored" type="application/pdf">\n',
+        "\n</document>\n</attachments>\nCompare them.",
+    ]
     typed, untyped, paper, stored = content[1::2]
     assert isinstance(typed, ImageUrl) and typed.media_type == "image/png"
     assert (typed.identifier, untyped.identifier) == ("typed", "untyped")
@@ -211,9 +232,9 @@ def test_pydantic_history_scan_reads_labels_urls_files_and_checkpoints() -> None
         parts=[
             UserPromptPart(
                 content=[
-                    "old:",
+                    '<attachments>\n<image id="old" type="image/png">\n',
                     BinaryContent(png_bytes(1), media_type="image/png"),
-                    "Describe old.",
+                    "\n</image>\n</attachments>\nDescribe old.",
                 ]
             )
         ]
@@ -225,14 +246,16 @@ def test_pydantic_history_scan_reads_labels_urls_files_and_checkpoints() -> None
         parts=[
             UserPromptPart(
                 content=[
-                    "link:",
+                    '<attachments>\n<image id="link" type="image/png">\n',
                     ImageUrl("https://example.com/cat.png"),
-                    "stored:",
+                    '\n</image>\n<document id="stored" type="application/pdf">\n',
                     UploadedFile("file-1", "openai", media_type="application/pdf"),
-                    "not a label",
+                    "\n</document>\nnot a tag",
                     BinaryContent(png_bytes(2), media_type="image/png"),
-                    "note:",
-                    "plain text follows a colon",
+                    '<document id="note" type="text/plain">\nship\n</document>\n</attachments>\nHi',
+                    '<image id="ghost" type="image/png">\n',
+                    "text after an opening tag",
+                    '<image id="last" type="image/png">\n',
                 ]
             ),
             UserPromptPart(content="plain"),
@@ -243,6 +266,7 @@ def test_pydantic_history_scan_reads_labels_urls_files_and_checkpoints() -> None
     assert index == {
         "link": ("link", "image", "url", "https://example.com/cat.png"),
         "stored": ("stored", "document", "file_id", "openai", "file-1"),
+        "note": ("note", "document", "sha256", _sha256(b"ship")),
     }
     assert pydantic_media.sent_attachments([first])["old"][:3] == ("old", "image", "sha256")
 
@@ -326,7 +350,8 @@ def test_langchain_profile_and_client_detection() -> None:
             "Read.", [notes, pdf], history=None, model=SimpleNamespace(profile=None)
         )
     )
-    assert isinstance(content, list) and content[0]["text"].startswith("-----BEGIN FILE")
+    assert isinstance(content, list)
+    assert content[0]["text"].startswith('<attachments>\n<document id="notes" type="text/plain">')
     assert asyncio.run(langchain_media.user_content("Read.", [notes], history=None, model=no_pdf))
 
 
@@ -339,26 +364,29 @@ def test_langchain_history_scan_reads_labels_urls_and_inline_files() -> None:
         AIMessage(content="ok"),
         HumanMessage(
             content=[
-                "cat:",
+                '<attachments>\n<image id="cat" type="image/png">\n',
                 {"type": "image", "base64": encoded, "mime_type": "image/png"},
-                {"type": "text", "text": "link:"},
+                {"type": "text", "text": '\n</image>\n<image id="link" type="image/png">\n'},
                 {"type": "image", "url": "https://example.com/cat.png"},
-                {"type": "text", "text": "stored:"},
+                {"type": "text", "text": '\n</image>\n<document id="stored">\n'},
                 {"type": "file", "file_id": "file-1"},
-                {"type": "text", "text": "broken:"},
+                {"type": "text", "text": '\n</document>\n<image id="broken">\n'},
                 {"type": "image", "base64": "@@@"},
-                {"type": "text", "text": "untyped:"},
+                {"type": "text", "text": '\n</image>\n<audio id="untyped">\n'},
                 {"type": "audio", "base64": encoded},
-                {"type": "text", "text": "tool:"},
+                {"type": "text", "text": '\n</audio>\n<image id="tool">\n'},
                 {"type": "tool_use", "id": "t"},
-                {"type": "text", "text": "words:"},
+                {"type": "text", "text": "words"},
                 "bare string",
                 {"type": "text", "text": None},
                 {
                     "type": "text",
-                    "text": 'intro\n-----BEGIN FILE id="notes" type="text/plain"-----\nship\n-----END FILE id="notes"-----',
+                    "text": '<document id="notes" type="text/plain">\nship\n</document>\n'
+                    "</attachments>\nintro",
                 },
-                {"type": "text", "text": "last:"},
+                {"type": "text", "text": '<image id="ghost">\n'},
+                "bare string after an opening tag",
+                {"type": "text", "text": '<image id="last">\n'},
             ]
         ),
     ]

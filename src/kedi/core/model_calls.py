@@ -20,9 +20,10 @@ from kedi.core.expressions import (
     ComputedExpr,
     Expression,
     InputExpr,
-    MediaExpr,
     OutputExpr,
+    ReferenceExpr,
     ValueEnv,
+    binding_reference,
 )
 from kedi.decisions import (
     DecisionInput,
@@ -58,21 +59,23 @@ class _PromptInputSnapshot:
     identity: DecisionInput
 
 
-def _snapshot_prompt_input(name: str, value: Any) -> _PromptInputSnapshot:
-    from kedi.lang.compiler.environment import model_value_and_text
-    from kedi.media import MediaMention, prompt_media
+def _snapshot_prompt_input(
+    name: str, value: Any, *, by_reference: bool = False
+) -> _PromptInputSnapshot:
+    """Render ``<name>`` (or attach ``<<name>>``) once, with its decision identity."""
+    from kedi.lang.compiler.environment import substitution_value_and_text
 
-    items = prompt_media(value)
-    if items is not None:
-        # Media is identified by content, not bytes: the attachment carries the content.
+    if by_reference:
+        ref = binding_reference(name, value)
+        # Referenced content is identified by content, not bytes: the attachment carries it.
         fingerprint = fingerprint_value(
-            ["media", [[item.kind, *item.content_key] for item in items]]
+            ["reference", [[item.kind, *item.content_key] for item in ref.items]]
         )
         return _PromptInputSnapshot(
-            part=MediaMention(items=items, binding=name, is_list=isinstance(value, (list, tuple))),
+            part=ref,
             identity=DecisionInput(name=name, fingerprint=fingerprint, supported=True),
         )
-    model_value, text = model_value_and_text(value)
+    model_value, text = substitution_value_and_text(value, name)
     fingerprint = fingerprint_value(model_value)
     return _PromptInputSnapshot(
         part=text,
@@ -104,31 +107,34 @@ def _prepare_attachments(
     adapter: Any,
     tools: Sequence[ToolSpec],
 ) -> tuple[MediaAttachment, ...]:
-    """Load URL text documents; store large ones as artifacts when the model can read them."""
+    """Load URL text documents and decide how values stored as artifacts are sent.
+
+    Referenced content is never converted to an artifact by its size: the program chose to
+    attach it. A value that already is an artifact goes as its reference when the model can
+    read artifacts, and as its content otherwise.
+    """
     if not attachments:
         return attachments
     from dataclasses import replace
 
     from kedi.agent_adapter.request.media import load_text_documents
-    from kedi.artifacts import ArtifactHandle
+    from kedi.lang.compiler.environment import native_value
+    from kedi.media import reference
 
     attachments = load_text_documents(attachments)
-    if profile.artifacts is None or not any(item.media.is_text for item in attachments):
+    if not any(item.stored is not None for item in attachments):
         return attachments
-    if not self._artifact_contract_needed(profile, adapter, has_tools=bool(tools)):
-        return attachments
+    readable = profile.artifacts is not None and self._artifact_contract_needed(
+        profile, adapter, has_tools=bool(tools)
+    )
     prepared = []
     for attachment in attachments:
-        if attachment.media.is_text:
-            stored = self.artifacts.artifactize(
-                attachment.media.text,
-                policy=profile.artifacts,
-                source=f"input:{attachment.name}",
-            )
-            if isinstance(stored, ArtifactHandle):
-                attachment = replace(
-                    attachment, artifact_ref=stored.as_ref().model_dump(mode="json")
-                )
+        stored = attachment.stored
+        if stored is not None and readable:
+            attachment = replace(attachment, artifact_ref=stored.as_ref().model_dump(mode="json"))
+        elif stored is not None:
+            (media,) = reference(native_value(stored), binding=attachment.name).items
+            attachment = replace(attachment, media=media, stored=None)
         prepared.append(attachment)
     return tuple(prepared)
 
@@ -196,13 +202,10 @@ def _invoke_text_parts(
                 return str(lower_request_sync(adapter, request))
 
             def produce_request(request: AgentRunRequest) -> Any:
-                value = self._validate_adapter_output(
+                # A capture is the program's value, never an artifact: artifacts are what an
+                # agent session creates for its own tool results.
+                return self._validate_adapter_output(
                     lower_request_sync(adapter, request), output_type, explicit_type=True
-                )
-                if profile.artifacts is None:
-                    return value
-                return self.artifacts.artifactize(
-                    value, policy=profile.artifacts, source=f"output:{capture_key}"
                 )
 
             attachments = _prepare_attachments(
@@ -288,7 +291,7 @@ def _declare_capture(env: ValueEnv, key: str, value: Any, contract: Any | None) 
 def _evaluate_claim(self: KediRuntime, claim: str | Sequence[Any]) -> bool:
     """Classify a rendered control-flow claim through the active agent lane.
 
-    ``claim`` is the rendered text, or its parts when the claim substitutes media.
+    ``claim`` is the rendered text, or its parts when the claim references values.
     """
     from kedi.agent_adapter.meta import SupportsProfileOverride
     from kedi.agent_adapter.tools.specs import SupportsToolRegistration
@@ -386,20 +389,26 @@ def _kedi_run(
     input_snapshots: list[_PromptInputSnapshot | KediPromise] = []
     inputs_complete = True
     for expr in expressions:
-        if isinstance(expr, InputExpr):
-            value = self._lookup_value(expr.key, env)
+        key = expr.key if isinstance(expr, (InputExpr, ReferenceExpr)) else None
+        if key is not None:
+            by_reference = isinstance(expr, ReferenceExpr)
+            value = self._lookup_value(key, env)
             if isinstance(value, KediPromise):
-                captured = value.map(lambda item, key=expr.key: _snapshot_prompt_input(key, item))
+                captured = value.map(
+                    lambda item, key=key, by_reference=by_reference: _snapshot_prompt_input(
+                        key, item, by_reference=by_reference
+                    )
+                )
                 text = captured.map(lambda item: item.part)
                 input_snapshots.append(captured)
             else:
-                captured = _snapshot_prompt_input(expr.key, value)
+                captured = _snapshot_prompt_input(key, value, by_reference=by_reference)
                 text = captured.part
                 input_snapshots.append(captured)
             out = None
         else:
             text, out = self._evaluate_expression(expr, env)
-            if isinstance(expr, (CallExpr, ComputedExpr, MediaExpr)):
+            if isinstance(expr, (CallExpr, ComputedExpr, ReferenceExpr)):
                 inputs_complete = False
         if out is not None:
             outputs.append(out)
@@ -511,24 +520,15 @@ def _kedi_run(
                 result = lower_request_sync(adapter, request)
             captured_evidence.extend(evidence)
             out_map: Dict[str, Any] = {}
-            artifact_policy = profile.artifacts
             for key in required:
                 value = output_value(result, key, NotFound)
                 if value is NotFound:
                     raise ValueError(f"LLM did not return required key: {key}")
-                validated = self._validate_adapter_output(
+                # Captures are the program's values, never artifacts (see produce_request).
+                out_map[key] = self._validate_adapter_output(
                     value,
                     typed_fields[key],
                     explicit_type=key in explicit_typed_fields,
-                )
-                out_map[key] = (
-                    self.artifacts.artifactize(
-                        validated,
-                        policy=artifact_policy,
-                        source=f"output:{key}",
-                    )
-                    if artifact_policy is not None
-                    else validated
                 )
             return out_map
 

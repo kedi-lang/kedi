@@ -15,7 +15,7 @@ from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import BindingMetadata, ScopeFrame, build_python_env
 from .statement_compiler import StatementExecutor
-from .type_system import KediType
+from .type_system import KediType, mismatch_message
 
 
 class ProcedureCompiler:
@@ -119,15 +119,11 @@ class ProcedureCompiler:
 
             try:
                 validated = kedi_type.validate(self.rt, None, provided)
-            except (ValidationError, OSError) as exc:
-                # Only a value that fails validation is a mismatch; a media path that cannot be
-                # read (OSError) is one too. Other errors, such as the recursion limit, propagate.
-                from ...media import media_error_detail
-
-                detail = media_error_detail(exc)
+            except ValidationError as exc:
+                # Only a value that fails validation is a mismatch. Other errors, such as the
+                # recursion limit, propagate.
                 raise KediTypeExecutionError(
-                    f"Parameter '{param_name}' does not match annotated type"
-                    + ("" if detail is None else f": {detail}")
+                    mismatch_message(f"Parameter '{param_name}' does not match annotated type", exc)
                 ) from None
             kwargs[param_name] = validated
 
