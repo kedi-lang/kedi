@@ -38,6 +38,7 @@ from kedi.agent_adapter.adapters.pydantic.compat import (
 )
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from kedi.agent_adapter.codemode import (
+    CODEMODE_INSTRUCTIONS,
     CodeModeBoundaryError,
     CodeModeCatalog,
     CodeModeCatalogError,
@@ -239,6 +240,9 @@ def test_codemode_catalog_search_ranking_and_python_aliases_are_deterministic() 
     ] == sorted(tool.name for tool in tools)
     assert CodeModeTool("123-tool", None, {}).callable_name == "_123_tool"
     assert CodeModeTool("class", None, {}).callable_name == "class_"
+    assert CodeModeTool("type", None, {}).callable_name == "type_"
+    assert CodeModeTool("print", None, {}).callable_name == "print_"
+    assert CodeModeTool("asyncio", None, {}).callable_name == "asyncio_"
     assert catalog.search(query="rea", limit=10, cursor=None, default_limit=10, max_limit=10)[
         "tool_names"
     ][:2] == ["read", "read_file"]
@@ -578,6 +582,129 @@ def test_codemode_rejects_unhydrated_and_non_json_tool_results() -> None:
         session.get_tool_schema(tool_names=["lookup"])
         with pytest.raises(CodeModeExecutionError, match="JSON-compatible"):
             await session.execute_code(code="await lookup(value=1)", invoke=invoke)
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_codemode_tools_named_like_builtins_keep_both_reachable() -> None:
+    async def run() -> None:
+        session = CodeModeSession()
+        session.update_tools([_integer_tool("type"), _integer_tool("len")])
+        calls: list[tuple[str, dict[str, Any]]] = []
+
+        async def invoke(name: str, arguments: dict[str, Any]) -> Any:
+            calls.append((name, arguments))
+            return arguments["value"] * 10
+
+        # The builtins are not mistaken for unhydrated tools.
+        assert await session.execute_code(code="type(5).__name__", invoke=invoke) == "int"
+        schema = session.get_tool_schema(tool_names=["type", "len"])
+        assert [tool["callable_name"] for tool in schema["tools"]] == ["type_", "len_"]
+        result = await session.execute_code(
+            code="[await type_(value=1), await len_(value=2), type(5).__name__, len('ab')]",
+            invoke=invoke,
+        )
+        assert result == [10, 20, "int", 2]
+        assert calls == [("type", {"value": 1}), ("len", {"value": 2})]
+        await session.close()
+
+    asyncio.run(run())
+    with pytest.raises(CodeModeCatalogError, match="same Python callable name"):
+        CodeModeCatalog([_integer_tool("type"), _integer_tool("type_")])
+    assert "`type` becomes `type_`" in CODEMODE_INSTRUCTIONS
+
+
+@pytest.mark.parametrize(
+    ("code", "line"),
+    [
+        ("lookup(value=1)", 1),
+        ("x = 1\nlookup(value=1)['value']", 2),
+        ("lookup(value=1).value", 1),
+        ("print(lookup(value=1))", 1),
+        ("str(object=lookup(value=1))", 1),
+        ("for item in lookup(value=1):\n    pass", 1),
+        ("[item for item in lookup(value=1)]", 1),
+        ("if lookup(value=1):\n    pass", 1),
+        ("lookup(value=1) + 1", 1),
+        ("f'{lookup(value=1)}'", 1),
+    ],
+)
+def test_codemode_rejects_unawaited_tool_calls_before_dispatch(code: str, line: int) -> None:
+    async def run() -> None:
+        session = CodeModeSession()
+        session.update_tools([_integer_tool("lookup")])
+        session.get_tool_schema(tool_names=["lookup"])
+
+        async def invoke(_name: str, _arguments: dict[str, Any]) -> Any:
+            raise AssertionError("no tool may run when a call is not awaited")
+
+        with pytest.raises(CodeModeExecutionError) as caught:
+            await session.execute_code(code=code, invoke=invoke)
+        message = str(caught.value)
+        assert f"used without await: lookup on line {line}." in message
+        assert "Write `result = await lookup(...)`" in message
+        assert message.endswith("Nothing was executed.")
+        await session.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "pending = lookup(value=2)\nawait pending",
+        "import asyncio\nsum(await asyncio.gather(lookup(value=1), lookup(value=1)))",
+        "import asyncio\nsum(await asyncio.gather(*[lookup(value=v) for v in [1, 1]]))",
+        "from asyncio import gather\nsum(await gather(lookup(value=1), lookup(value=1)))",
+    ],
+)
+def test_codemode_allows_tool_calls_awaited_later(code: str) -> None:
+    async def run() -> None:
+        session = CodeModeSession()
+        session.update_tools([_integer_tool("lookup")])
+        session.get_tool_schema(tool_names=["lookup"])
+
+        async def invoke(_name: str, arguments: dict[str, Any]) -> Any:
+            return arguments["value"]
+
+        assert await session.execute_code(code=code, invoke=invoke) == 2
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_codemode_coroutine_errors_name_the_tools_that_already_ran() -> None:
+    async def run() -> None:
+        session = CodeModeSession()
+        session.update_tools([_integer_tool("lookup")])
+        session.get_tool_schema(tool_names=["lookup"])
+        calls = 0
+
+        async def invoke(_name: str, arguments: dict[str, Any]) -> Any:
+            nonlocal calls
+            calls += 1
+            return arguments["value"]
+
+        result = await session.execute_code(
+            code="pending = lookup(value=1)\npending['value']",
+            invoke=invoke,
+        )
+        assert calls == 1
+        assert result["error"].startswith("TypeError: 'coroutine' object is not subscriptable. ")
+        assert result["error"].endswith(
+            "Tool functions are async; call them with `await`. These tools already ran in "
+            "this execution: lookup; do not call them again unless repeating them is intended."
+        )
+
+        # A coroutine of the code's own makes no claim about tools.
+        result = await session.execute_code(
+            code="async def local():\n    return 1\nlocal()['value']",
+            invoke=invoke,
+        )
+        assert result["error"].endswith(
+            "is not subscriptable. Tool functions are async; call them with `await`."
+        )
         await session.close()
 
     asyncio.run(run())
