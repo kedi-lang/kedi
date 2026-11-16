@@ -142,6 +142,12 @@ constraint, and the callable name used by Monty. Successfully resolved tools
 are added to the current run's hydrated allowlist. Unknown, duplicate, or
 ambiguous names fail explicitly.
 
+The callable name is the tool name made into a Python identifier: invalid
+characters become `_`, a leading digit gets a `_` prefix, and a Python keyword
+or builtin name, or `asyncio`, gets a `_` suffix. A tool named `type` is called
+as `type_(...)`, and `type(...)` stays Python's builtin. Two tools that resolve
+to the same callable name are rejected when the catalog is built.
+
 ### `execute_code`
 
 ```python
@@ -170,6 +176,21 @@ users, projects = await asyncio.gather(
 )
 {"users": len(users), "projects": len(projects)}
 ```
+
+A tool call must be awaited, directly or through `asyncio.gather`. Kedi checks
+the snippet before running it: a call whose result is discarded or used without
+`await` (a bare statement, subscripted, iterated, tested, formatted, or passed
+to a builtin such as `print`) fails before any tool runs, with the corrected
+form:
+
+```text
+Tool functions are async, and these calls are used without await: list_users on line 1. Write `result = await list_users(...)`, or pass the calls to `asyncio.gather(...)`. Nothing was executed.
+```
+
+Assigning a call, `pending = list_users(team="runtime")`, is allowed and is
+awaited later. If such a coroutine is then used without `await`, the sandbox
+error adds the same hint and names the tools that already ran in that snippet,
+so the model does not repeat them.
 
 A sequential tool runs exclusively relative to the other nested calls in that
 snippet. Merely hydrating it does not serialize unrelated independent calls.

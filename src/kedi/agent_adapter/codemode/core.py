@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import builtins
 import hashlib
 import hmac
 import json
@@ -41,6 +42,10 @@ from .telemetry import codemode_span
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
 _INVALID_IDENTIFIER = re.compile(r"\W+")
 _QUERY_TOKEN = re.compile(r"[a-z0-9]+")
+# Builtins resolve before external functions in the sandbox, and the instructions import
+# asyncio, so a tool with one of these names would be unreachable.
+_BUILTIN_NAMES = frozenset(name for name in vars(builtins) if not name.startswith("_"))
+_RESERVED_CALLABLE_NAMES = _BUILTIN_NAMES | {"asyncio"}
 
 CODEMODE_INSTRUCTIONS = """\
 CodeMode is enabled. Application tools are available only through three control tools:
@@ -48,7 +53,9 @@ CodeMode is enabled. Application tools are available only through three control 
 1. Call `search_tools` to browse tool names. `query` is optional; use `cursor` for another page.
 2. Call `get_tool_schema` with the exact names you intend to use unless their schemas are already
    included in the preloaded application tools below. Do not guess arguments.
-3. Call `execute_code` with small, task-focused Python that invokes only hydrated functions.
+3. Call `execute_code` with small, task-focused Python that invokes only hydrated functions, each by
+   its `callable_name`; it differs from the tool name when the name is not a Python identifier or
+   is a Python keyword or builtin (`type` becomes `type_`).
 
 The sandbox supports ordinary literals, indexing and slicing, arithmetic, comparisons, boolean
 logic, if/elif/else, for/while, range/enumerate/zip, comprehensions, sorting, filtering, grouping,
@@ -384,12 +391,20 @@ class CodeModeSession:
             raise CodeModeExecutionError(
                 f"CodeMode accepts at most {self.limits.max_code_chars} code characters"
             )
-        called_tools = self._called_catalog_tools(code)
+        called_tools, unawaited = self._scan_tool_calls(code)
         unhydrated = sorted(tool.name for tool in called_tools if tool.name not in self._hydrated)
         if unhydrated:
             rendered = ", ".join(repr(name) for name in unhydrated)
             raise CodeModeHydrationError(
                 f"Hydrate these tools with get_tool_schema before execute_code: {rendered}"
+            )
+        if unawaited:
+            rendered = ", ".join(f"{name} on line {line}" for name, line in unawaited)
+            first = unawaited[0][0]
+            raise CodeModeExecutionError(
+                f"Tool functions are async, and these calls are used without await: {rendered}. "
+                f"Write `result = await {first}(...)`, or pass the calls to `asyncio.gather(...)`. "
+                "Nothing was executed."
             )
 
         hydrated_tools = [
@@ -405,6 +420,7 @@ class CodeModeSession:
         # Monty can cancel callbacks before feed_run reports cancellation.
         dispatch_cancelled = False
         handoffs: list[ToolResultHandoff] = []
+        completed: list[str] = []
 
         async def dispatch(
             tool: CodeModeTool,
@@ -427,6 +443,7 @@ class CodeModeSession:
                     if dispatch_cancelled:
                         raise asyncio.CancelledError
                     result = await invoke(tool.name, kwargs)
+            completed.append(tool.callable_name)
             try:
                 jsonable, size = _json_boundary_value(result)
                 if size > self.limits.max_tool_result_bytes:
@@ -523,6 +540,8 @@ class CodeModeSession:
 
         output = capture.output.rstrip("\n")
         if error is not None:
+            if "coroutine" in error:
+                error = f"{error}. {_unawaited_hint(completed)}"
             return {"output": output, "error": error}
         if output and result is not None:
             return {"output": output, "result": result}
@@ -563,18 +582,23 @@ class CodeModeSession:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _called_catalog_tools(self, code: str) -> list[CodeModeTool]:
+    def _scan_tool_calls(self, code: str) -> tuple[list[CodeModeTool], list[tuple[str, int]]]:
+        """Return the catalog tools the code calls and the calls whose result is used unawaited."""
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return []
+            return [], []
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         tools: dict[str, CodeModeTool] = {}
+        unawaited: list[tuple[str, int]] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 tool = self._catalog.tool_for_callable(node.func.id)
                 if tool is not None:
                     tools[tool.name] = tool
-        return list(tools.values())
+                    if _used_without_await(node, parents):
+                        unawaited.append((tool.callable_name, node.lineno))
+        return list(tools.values()), sorted(unawaited, key=lambda item: item[1])
 
     def _bounded_discovery_result(
         self,
@@ -639,11 +663,45 @@ def _json_boundary_value(value: Any) -> tuple[Any, int]:
     return jsonable, len(encoded)
 
 
+def _used_without_await(call: ast.Call, parents: dict[ast.AST, ast.AST]) -> bool:
+    """Whether a tool call's coroutine is consumed directly instead of being awaited.
+
+    Assignments, containers and ``asyncio`` helpers are allowed: the coroutine may be awaited
+    later. Discarding it or using it as a value is not.
+    """
+    parent = parents[call]
+    if isinstance(parent, ast.keyword):
+        parent = parents[parent]
+    if isinstance(parent, ast.Call):
+        return (
+            call is not parent.func
+            and isinstance(parent.func, ast.Name)
+            and parent.func.id in _BUILTIN_NAMES
+        )
+    if isinstance(parent, (ast.Subscript, ast.Attribute)):
+        return parent.value is call
+    if isinstance(parent, (ast.For, ast.AsyncFor, ast.comprehension)):
+        return parent.iter is call
+    if isinstance(parent, (ast.If, ast.While, ast.IfExp, ast.Assert)):
+        return parent.test is call
+    return isinstance(
+        parent, (ast.Expr, ast.BoolOp, ast.UnaryOp, ast.BinOp, ast.Compare, ast.FormattedValue)
+    )
+
+
+def _unawaited_hint(completed: Sequence[str]) -> str:
+    hint = "Tool functions are async; call them with `await`."
+    if completed:
+        ran = ", ".join(dict.fromkeys(completed))
+        hint += f" These tools already ran in this execution: {ran}; do not call them again unless repeating them is intended."
+    return hint
+
+
 def _python_identifier(name: str) -> str:
     candidate = _INVALID_IDENTIFIER.sub("_", name)
     if candidate and candidate[0].isdigit():
         candidate = f"_{candidate}"
-    if keyword.iskeyword(candidate):
+    if keyword.iskeyword(candidate) or candidate in _RESERVED_CALLABLE_NAMES:
         candidate = f"{candidate}_"
     return candidate or "_"
 
