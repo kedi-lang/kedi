@@ -279,7 +279,7 @@ class TestOutputAnnotations:
         # This test expects the LLM to return an integer, but our mock returns strings
         # So we expect this to fail with type validation error
         with pytest.raises(
-            TypeError, match="Native initialization value does not match annotated type"
+            TypeError, match="The right-hand side is text, which does not match the annotation"
         ):
             _run(src)
 
@@ -292,7 +292,7 @@ class TestOutputAnnotations:
         # This test expects the LLM to return a list, but our mock returns strings
         # So we expect this to fail with type validation error
         with pytest.raises(
-            TypeError, match="Native initialization value does not match annotated type"
+            TypeError, match="The right-hand side is text, which does not match the annotation"
         ):
             _run(src)
 

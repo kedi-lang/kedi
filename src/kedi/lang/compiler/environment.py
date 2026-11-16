@@ -636,11 +636,13 @@ def model_value(value: Any, *, _memo: dict[int, Any] | None = None) -> Any:
 def substitution_text(value: Any, subject: str) -> str:
     """Render one ``<...>`` substitution: ``<>`` always produces text.
 
-    Only ``str``, ``int``, ``float``, ``bool`` and lists of them are text. Anything else, and
-    ``None``, is a type error: it would otherwise reach the text through its ``repr``, which can
-    hold anything (an API key in a client object, for example). ``subject`` is what the error
-    shows inside ``<...>``. A value stored as an artifact is opened: a substitution is the
-    template text itself, never an artifact reference (pass a reference with ``<<x>>``).
+    The value renders when it has a text form (:mod:`kedi.text_form`): text, numbers, booleans,
+    decimals, dates and times, UUIDs, enums by value, and lists, tuples and str-keyed dicts of
+    them as JSON. Anything else, and ``None``, is a type error: its text would come from a
+    ``repr``, which can hold anything (an API key in a client object, for example). ``subject``
+    is what the error shows inside ``<...>``. A value stored as an artifact is opened: a
+    substitution is the template text itself, never an artifact reference (pass a reference with
+    ``<<x>>``).
     """
 
     return substitution_value_and_text(value, subject)[1]
@@ -652,41 +654,25 @@ def substitution_value_and_text(value: Any, subject: str) -> tuple[Any, str]:
     ``value`` is already resolved: callers map promises before rendering.
     """
 
+    from ...text_form import NoTextForm, text_form
+
     value = native_value(value)
-    problem = _non_text_value(value)
-    if problem is not None:
+    try:
+        text, _ = text_form(value)
+    except NoTextForm as exc:
+        literal = subject.startswith("`")
         by_reference = (
             "bind it to a name and pass it by reference with <<name>>"
-            if subject.startswith("`")
+            if literal
             else f"pass it by reference with <<{subject}>>"
         )
+        problem = exc.describe("the value" if literal or not exc.path else subject)
         raise TypeError(
-            f"<{subject}> renders text, but {problem}. In a model prompt {by_reference}; to keep "
+            f"<{subject}> renders text, but {problem} In a model prompt {by_reference}; to keep "
             "the value use single-backtick Python; for text convert it explicitly, for example "
             "<`str(...)`>."
-        )
-    return value, str(value)
-
-
-def _non_text_value(value: Any, *, depth: int = 0) -> str | None:
-    """Describe why a value has no text form, or ``None`` when it has one."""
-
-    if value is None:
-        return "the value is None"
-    if isinstance(value, (str, int, float, bool)):
-        return None
-    if isinstance(value, list) and depth < 32:
-        for item in value:
-            problem = _non_text_value(item, depth=depth + 1)
-            if problem is not None:
-                return f"{problem} (in a list)" if depth == 0 else problem
-        return None
-    from ...media import as_media
-
-    media = as_media(value)
-    if media is not None:
-        return f"the value is {media.label}"
-    return f"the value is of type {type(value).__name__}"
+        ) from None
+    return value, text
 
 
 def _raw_mapping_value(mapping: dict[str, Any], key: str) -> Any:

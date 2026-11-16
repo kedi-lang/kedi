@@ -18,11 +18,29 @@ Use `<name>` to read a value from the current lexical environment:
 Substitution always renders the value as text at that position. It is therefore
 appropriate for prompts, messages, paths, and final text.
 
-`<...>` accepts only `str`, `int`, `float`, `bool` and lists of these. Any other
-value is a type error: `None`, media, dicts, models, clients and other objects.
+`<...>` renders a value that has a text form: text that comes from the value's
+data alone, in one canonical form, without running a `__str__` or `__repr__`.
+
+| Value | Renders as |
+| --- | --- |
+| `str` | the text itself |
+| `int`, `float`, `Decimal` | the number: `3`, `1.5`, `1.10`; `NaN` and infinities are errors |
+| `bool` | `true`, `false` |
+| `datetime`, `date`, `time` | ISO 8601: `2026-11-16T10:00:00Z`, `2026-11-16`, `09:05:00` |
+| `UUID` | its canonical form |
+| an `Enum` member | its value, by these rules |
+| `list`, `tuple`, `dict` with `str` keys | compact JSON, checked item by item: `["a",1]`, `{"k":[1,null]}` |
+
+`None` inside a container renders as `null`. Any other value is a type error
+that names the offending part, for example
+`<order> renders text, but order["items"][2] is of type Client`: `None` itself,
+media, bytes, sets (no stable order: ``<`sorted(ids)`>``), paths
+(``<`str(path)`>``), `timedelta`, `complex`, NamedTuples, dict and list
+subclasses, models, `~Type` values, dataclasses, clients and other objects.
 Rendering them through `repr` would be opaque and could leak data, such as an
-API key held by a client object. A value stored as an artifact renders its
-text, never an artifact reference. Convert explicitly when you want text,
+API key held by a client object. The editor reports `K-SUBSTITUTION-TYPE` when
+a declared type decides it, such as `[ids: set[int]]`. A value stored as an
+artifact renders its text, never an artifact reference. Convert explicitly when you want text,
 ``<`str(value)`>`` or ``<`report.title`>``, or pass the value to a model by
 [reference](#references). If the next operation needs the original `int`,
 `list`, model, or other Python object, use the value by bare name inside Python
@@ -168,9 +186,11 @@ Does the change follow spec? Check spec section by section. ...
   `<procedure>_result_2`, ... within the prompt.
 - Each content is attached once; every mention writes `<<...>>` again and gets
   only the ID.
-- Media go as native parts ([Media Input](media-input.md)). Text goes as
-  `text/plain`; lists, dicts and models as JSON (`application/json`). `None` is
-  an error.
+- Media go as native parts ([Media Input](media-input.md)). Any other value goes
+  as its text form, the text `<value>` renders: scalars as `text/plain`, lists,
+  tuples and dicts as JSON (`application/json`). Models, `~Type` values and
+  dataclasses are accepted too, as JSON. `None` and values without a text form
+  are errors.
 - References are valid only in model prompts: `>>` templates, `[x] << ...` and
   `[x: T] << ...` invokes, and `> if:` / `> loop:` template conditions.
   Elsewhere `<<...>>` is a parse error (`K-REFERENCE-CONTEXT`).

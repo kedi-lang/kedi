@@ -886,7 +886,7 @@ def test_statement_compiler_initialization_template_and_single_statement_edges(
         lambda rt_arg, segments, env_arg: (NO_NATIVE_VALUE, "not-int"),
     )
     with pytest.raises(
-        TypeError, match="Native initialization value does not match annotated type"
+        TypeError, match="The right-hand side is text, which does not match the annotation"
     ):
         compiler.execute_variable_init(
             VariableInitStmt(

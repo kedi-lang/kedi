@@ -189,7 +189,7 @@ def test_template_output_exposes_immutable_decision_evidence(parallel: bool) -> 
         parallel=parallel,
     )
 
-    assert result == "True"
+    assert result == "true"
     info = decision_info_for_env(runtime._globals_env, "duplicate_charge")
     assert info is not None
     assert info.model == "jev-test"
@@ -558,7 +558,9 @@ def test_substituting_an_object_never_calls_its_repr() -> None:
     value = ReprCounter()
     session = InteractiveSession(adapter=DecisionAdapter(), engine=SequentialEngine())
     cast(Any, session._env).declare("value", [value])
-    with pytest.raises(KediExecutionError, match=r"the value is of type ReprCounter \(in a list\)"):
+    with pytest.raises(
+        KediExecutionError, match=r"<value> renders text, but value\[0\] is of type ReprCounter\."
+    ):
         session.execute(">> Evaluate <value> [approved: bool]")
     assert ReprCounter.calls == 0
 
@@ -780,7 +782,7 @@ def test_retryable_model_failure_keeps_decision_pending_until_success() -> None:
         engine=engine,
     )
     try:
-        assert runtime.run_main() == "True"
+        assert runtime.run_main() == "true"
         info = decision_info_for_env(runtime._globals_env, "approved")
         assert info is not None
         assert info.probability == 0.92

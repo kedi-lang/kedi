@@ -400,7 +400,9 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
     )
     assert {item.range.start.line for item in type_refs} >= {0, 1, 3}
 
-    assert lsp_diagnostics_module.compute_diagnostics(source, path) == []
+    # `<outer>` renders text and an Item has none: the only diagnostic, reported statically.
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(source, path)
+    assert [(d.code, d.range.start.line) for d in diagnostics] == [("K-SUBSTITUTION-TYPE", 3)]
 
 
 def test_generic_hover_visits_legacy_top_level_body() -> None:

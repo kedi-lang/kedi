@@ -92,7 +92,7 @@ def test_editor_reports_media_substituted_as_text() -> None:
     assert "pass it by reference with <<image(...)>>" in "\n".join(messages)
 
 
-def test_editor_ignores_media_names_without_the_media_import() -> None:
+def test_editor_treats_media_names_without_the_media_import_as_ordinary_types() -> None:
     source = """~Image(url: str)
 
 @image(path: str) -> str:
@@ -105,7 +105,16 @@ def test_editor_ignores_media_names_without_the_media_import() -> None:
 [cat_image] = <image(cat.png)>
 [reply] << Describe <<cat_image>> and <<image(dog.png)>> with <image(dog.png)>.
 """
-    assert _codes(source) == []
+    # Without the import, Image is the program's own ~Image type: a model value, not media.
+    assert _codes(source) == [("K-SUBSTITUTION-TYPE", 6)]
+    (message,) = [
+        d.message
+        for d in diagnostics_for(source, "/tmp/media.kedi")
+        if d.code == "K-SUBSTITUTION-TYPE"
+    ]
+    assert message.startswith(
+        "<photo> renders text, but photo is declared Image, which has no text"
+    )
 
 
 def test_editor_reports_media_prompts_on_adapters_without_media_input() -> None:
@@ -233,3 +242,77 @@ def test_notebook_snapshots_round_trip_media() -> None:
     for value in values:
         restored = decoder.decode(json.loads(json.dumps(encoder.encode(value))))
         assert restored == value
+
+
+def test_editor_reports_substitutions_whose_declared_type_has_no_text_form() -> None:
+    source = """~Line(qty: int)
+
+@lines() -> list[Line]:
+  = `[]`
+
+@tags(names: set[str]) -> str:
+  = <names>
+
+[ok_scalars: dict[str, list[int | None]]] = `{}`
+[ok_union: Line | str] = `"x"`
+[ok_optional: Optional[str]] = `None`
+[ok_unknown: Customer] = `None`
+[ok_open: list] = `[]`
+[ok_literal: Literal["a"]] = `"a"`
+[ok_twice: set[int]] = `set()`
+[ok_twice] = text
+[bad_line: Line] = `Line(qty=1)`
+[bad_list: list[Line]] = `[]`
+[bad_keys: dict[int, str]] = `{}`
+[bad_values: Dict[str, Line]] = `{}`
+[bad_path: Path] = `None`
+[bad_union: Union[set[int], bytes]] = `b""`
+[bad_none: None] = `None`
+[bad_annotated: Annotated[frozenset[int], "ids"]] = `frozenset()`
+[bad_optional: Optional[bytes]] = `None`
+>> <ok_scalars> <ok_union> <ok_optional> <ok_unknown> <ok_open> <ok_literal> <ok_twice> [a]
+>> <bad_line> <bad_list> <bad_keys> <bad_values> <bad_path> <bad_union> [b]
+>> <bad_none> <bad_annotated> <bad_optional> <lines()> <<lines()>> <<bad_line>> [c]
+"""
+    found = [
+        (d.range.start.line, d.range.start.character, d.message)
+        for d in diagnostics_for(source, "/tmp/types.kedi")
+        if d.code == "K-SUBSTITUTION-TYPE"
+    ]
+    assert sorted((line, character) for line, character, _ in found) == [
+        (6, 4),
+        (26, 3),
+        (26, 14),
+        (26, 25),
+        (26, 36),
+        (26, 49),
+        (26, 60),
+        (27, 3),
+        (27, 14),
+        (27, 30),
+        (27, 45),
+    ]
+    messages = "\n".join(message for _, _, message in found)
+    assert (
+        "<names> renders text, but names is declared set[str], which has no text form." in messages
+    )
+    assert (
+        "<lines(...)> renders text, but lines(...) returns list[Line], which has no text form"
+        in messages
+    )
+    assert "pass it by reference with <<bad_keys>>" in messages
+
+
+def test_unparsable_annotations_are_left_to_the_run_time_check() -> None:
+    from kedi.lsp.features.substitution_types import annotation_has_no_text
+
+    assert annotation_has_no_text("list[", frozenset()) is False
+    assert annotation_has_no_text("set[int]", frozenset()) is True
+    # Dotted names and keys that are not plain names.
+    assert annotation_has_no_text("pathlib.Path", frozenset({"Path"})) is True
+    assert annotation_has_no_text("dict[tuple[int, int], str]", frozenset()) is False
+    assert annotation_has_no_text("tuple[Line, ...]", frozenset({"Line"})) is True
+    assert annotation_has_no_text("tuple[int, ...]", frozenset({"Line"})) is False
+    assert annotation_has_no_text("Optional[Line]", frozenset({"Line"})) is True
+    assert annotation_has_no_text("list[Optional[Line]]", frozenset({"Line"})) is False
+    assert annotation_has_no_text("make()", frozenset()) is False

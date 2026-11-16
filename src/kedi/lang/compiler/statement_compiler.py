@@ -400,8 +400,13 @@ class StatementCompiler:
         try:
             return kedi_type.validate(self.rt, closure_env, rendered)
         except ValidationError as exc:
+            # Text is never parsed into another type: `<x>` renders text, a value keeps backticks.
             raise TypeError(
-                mismatch_message("Native initialization value does not match annotated type", exc)
+                mismatch_message(
+                    f"The right-hand side is text, which does not match the annotation {kedi_type}; "
+                    "keep a value with single-backtick Python, for example [x: int] = `count`",
+                    exc,
+                )
             ) from exc
 
     def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:

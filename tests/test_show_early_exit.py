@@ -129,14 +129,14 @@ def test_typed_backtick_call_return_preserves_native_falsy_values(value):
     assert type(result) is type(value)
 
 
-@pytest.mark.parametrize("value", [0, False, ""])
-def test_typed_template_call_return_is_text(value):
+@pytest.mark.parametrize(("value", "text"), [(0, "0"), (False, "false"), ("", "")])
+def test_typed_template_call_return_is_text(value, text):
     result = run(
         f"@empty() -> str | bool | int:\n  = `{value!r}`\n"
         "@outer() -> str:\n  = <empty()>\n"
         "= `outer()`\n"
     )
-    assert result == str(value)
+    assert result == text
 
 
 def test_template_call_returning_none_is_a_type_error():

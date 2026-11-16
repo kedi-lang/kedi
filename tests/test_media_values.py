@@ -232,7 +232,7 @@ def test_references_attach_media_and_documents_for_other_values(workspace: Path)
 
     assert document("plain text") == ("text/plain", "plain text")
     assert document(3) == ("text/plain", "3")
-    assert document(True) == ("text/plain", "True")
+    assert document(True) == ("text/plain", "true")
     assert document(["a", 1]) == ("application/json", '["a",1]')
     assert document([]) == ("application/json", "[]")
     assert document({"k": [1]}) == ("application/json", '{"k":[1]}')
@@ -243,8 +243,23 @@ def test_references_attach_media_and_documents_for_other_values(workspace: Path)
         reference({"photo": image}, call="f")
     with pytest.raises(MediaError, match="media inside a dict, a model or a mixed list"):
         reference([image, "caption"], binding="x")
-    with pytest.raises(MediaError, match="a object value has no JSON form"):
+    with pytest.raises(
+        MediaError, match="<<x>> has no text form to attach: the value is of type object"
+    ):
         reference(object(), binding="x")
+    # The same text form as <x>: sets have no stable order, and the path names the part.
+    with pytest.raises(
+        MediaError,
+        match=r"<<f\(\.\.\.\)>> has no text form to attach: f\(\.\.\.\)\[\"k\"\] is of type set",
+    ):
+        reference({"k": {1}}, call="f")
+
+    class Holder(BaseModel):
+        model_config = {"arbitrary_types_allowed": True}
+        item: object
+
+    with pytest.raises(MediaError, match="a Holder value has no JSON form to attach"):
+        reference(Holder(item=object()), binding="x")
 
 
 def test_reference_ids_come_from_bindings_and_calls() -> None:
@@ -446,8 +461,9 @@ def test_substitutions_open_stored_values_and_references_keep_them() -> None:
         return ArtifactHandle(ref=ref, manager=manager)  # type: ignore[arg-type]
 
     assert substitution_text(stored("the whole log"), "log") == "the whole log"
-    with pytest.raises(TypeError, match="<report> renders text, but the value is of type dict"):
-        substitution_text(stored({"k": 1}), "report")
+    assert substitution_text(stored({"k": [1, None]}), "report") == '{"k":[1,null]}'
+    with pytest.raises(TypeError, match="<report> renders text, but the value is of type object"):
+        substitution_text(stored(object()), "report")
     handle = stored("the whole log")
     ref = reference(handle, binding="log")
     assert ref.stored is handle and ref.items[0].text == '{"ref_id": "a1"}'
