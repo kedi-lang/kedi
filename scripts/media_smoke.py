@@ -2,7 +2,8 @@
 
 Runs one tiny Kedi program per model and media kind and checks the answer. It calls real
 providers and costs a few cents; provider keys come from their usual environment variables
-(OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, AWS credentials) and are never printed.
+(OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, AWS credentials) or a .env file in the
+directory the script starts in, and are never printed.
 
     uv run --group dev python scripts/media_smoke.py \\
         --model pydantic=openai:gpt-5.4 \\
@@ -33,6 +34,8 @@ import tempfile
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
+
+import dotenv
 
 CODE_WORD = "pelican"
 NOTE_WORD = "banana"
@@ -182,6 +185,8 @@ def main() -> int:
     parser.add_argument("--audio", type=Path, help="a WAV or MP3 file with a spoken number")
     parser.add_argument("--audio-number", type=int, default=SPOKEN_NUMBER)
     args = parser.parse_args()
+    # Keys may live in a .env where the script is started; load it before leaving that directory.
+    dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
 
     failed = 0
     with tempfile.TemporaryDirectory(prefix="kedi-media-smoke-") as temp:
