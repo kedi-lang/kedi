@@ -325,12 +325,33 @@ Inside a template, both `<`...`>` and bare `` `...` `` evaluate Python and inser
 its text. Bare backticks are useful when the expression contains characters
 such as `>` or `[]` that would otherwise need escaping in literal template text.
 
-**`<...>` always renders text.** A substitution accepts only `str`, `int`, `float`, `bool`
-and lists of these (checked item by item). Any other value is a type error, including
-`None`, media, dicts, models and clients: rendering it through its `repr` would be opaque,
-and could leak data such as an API key held by a client object. Convert explicitly when you
-want text (``<`str(value)`>``, ``<`report.title`>``), or pass the value by reference with
-`<<...>>` (below).
+**`<...>` always renders text.** A substitution renders a value that has a text form: text
+that comes from the value's data alone, in one canonical form, without running a `__str__` or
+`__repr__`.
+
+| Value | Renders as |
+| --- | --- |
+| `str` | the text itself |
+| `int`, `float`, `Decimal` | the number: `3`, `1.5`, `1.10`; `NaN` and infinities are errors |
+| `bool` | `true`, `false` |
+| `datetime`, `date`, `time` | ISO 8601: `2026-11-16T10:00:00Z`, `2026-11-16`, `09:05:00` |
+| `UUID` | its canonical form |
+| an `Enum` member | its value, by these rules |
+| `list`, `tuple`, `dict` with `str` keys | compact JSON, checked item by item: `["a",1]`, `{"k":[1,null]}` |
+
+`None` inside a container renders as `null`, and a `Decimal`, date, time or `UUID` inside one is a
+JSON string (`["1.10"]`). `> show: <flag>` displays `true`; ``> show: `flag` `` displays the Python
+value itself, `True`. Any other value is a type error that names the
+offending part, for example `<order> renders text, but order["items"][2] is of type Client`:
+`None` itself, media, bytes, sets (no stable order: ``<`sorted(ids)`>``), paths
+(``<`str(path)`>``), `timedelta`, `complex`, NamedTuples, dict and list subclasses, models,
+`~Type` values, dataclasses, clients and other objects, and a container that contains itself
+or nests deeper than 64 levels. Rendering them through a `repr` would be opaque and could leak
+data such as an API key held by a client object. Convert explicitly when you want text
+(``<`str(value)`>``, ``<`report.title`>``), or pass the value by reference with `<<...>>`
+(below). The editor reports `K-SUBSTITUTION-TYPE` when the declared type decides it, for
+example `[ids: set[int]]` or `[lines: list[Line]]`; `list`, `dict`, `Any` and unannotated
+values are checked at run time.
 
 A template is text wherever it appears. `[x] = <proc()>`, `= <proc()>` and an argument such
 as `<f(<g()>)>` all produce text. A native value comes from single-backtick Python only:
@@ -341,8 +362,9 @@ as `<f(<g()>)>` all produce text. A native value comes from single-backtick Pyth
 = <describe(`profile`)>                      # the argument is passed natively
 ```
 
-Strings are never converted to other types implicitly: `[n: int] = <count>` is a type error
-(use `` [n: int] = `count` ``), and a string is never loaded as an image.
+Strings are never converted to other types implicitly: `[n: int] = <count>` is a type error,
+"the right-hand side is text, which does not match the annotation int" (use
+`` [n: int] = `count` ``), and a string is never loaded as an image.
 
 ### References (`<<...>>`)
 
@@ -380,9 +402,12 @@ Does cat1 match the description in spec? Compare cat1 carefully.
   mentions write only the ID. The same content under two names is attached once, and both
   mentions show the first ID; a name reused for different content becomes `cat1_2`.
 - **What is attached.** Media go as native image, audio, video or PDF parts. Any other value
-  is a `<document>`: text as `text/plain`, numbers and booleans as their text, and lists,
-  dicts and models as JSON (`application/json`). `None` and media nested inside a dict, a
-  model or a mixed list are errors; reference each media value directly.
+  is a `<document>` holding its text form, exactly the text `<value>` renders: scalars as
+  `text/plain`, lists, tuples and dicts as JSON (`application/json`). References also accept
+  models, `~Type` values and dataclasses, written as JSON by their own schema; a set of two or
+  more items or a non-finite number inside one is an error that names the field. `None`, values without a text form (a set,
+  for example) and media nested inside a dict, a model or a mixed list are errors; reference
+  each media value directly.
 - **Stored values.** A value that already is an artifact, which only an agent session creates
   (for example from a large tool result), goes as its reference: `<artifact id="log">` with the artifact
   reference, and the model reads it with the artifact tools. When the call has no artifact
@@ -1191,7 +1216,9 @@ remains `string`. Claude currently accepts all of the formats listed above.
 Type names in annotations always mean types. A value named like a type, such as
 `[str] = hello`, a parameter named `list` or a local `[int] = x`, does not change what
 `str`, `list` or `int` mean in an annotation; only a value that is itself a type
-(``[T: Any] = `int` ``) can stand in for one. Type arguments can be names, strings,
+(``[T: Any] = `int` ``) can stand in for one. In Python code the binding is what the
+name means, as for procedures: after `[Point] = x\=1`, `` `Point` `` is that text, never
+parsed into a `Point` model. Type arguments can be names, strings,
 numbers or `...`: `Literal[1, -2.5]`, `Annotated[int, 3]`, `Callable[..., int]`.
 A backtick type is Python and sees bindings as written. When it does not evaluate to
 a type, the error names the expression rather than reporting a mismatched value, and
@@ -3334,6 +3361,13 @@ Agent tools require an adapter that supports tool registration (for example
 Pydantic AI). Adapters without tool support surface capability warnings in the
 LSP; harness adapters that cannot accept external tools may ignore registrations
 until their underlying protocol gains tool support.
+
+### Tool results
+
+A tool result that is not text reaches the model as JSON written by Pydantic, on every
+adapter: models and dataclasses by their schema, dates in ISO form, sets and tuples as lists,
+bytes as base64. A value without a JSON form, such as a client object, is a tool error; its
+`__str__` or `__repr__` never reaches the model.
 
 ### Tool approval and sensitive files
 

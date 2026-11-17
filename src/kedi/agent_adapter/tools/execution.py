@@ -6,7 +6,7 @@ import secrets
 from collections.abc import Mapping
 from contextvars import copy_context
 from dataclasses import replace
-from functools import wraps
+from functools import cache, wraps
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -728,3 +728,24 @@ def _is_async_callable(fn: Callable[..., Any]) -> bool:
 
 def _has_async_approval_handler(policy: ApprovalPolicy | None) -> bool:
     return policy is not None and policy.handler is not None and _is_async_callable(policy.handler)
+
+
+@cache
+def _tool_result_adapter() -> Any:
+    from pydantic import ConfigDict, TypeAdapter
+
+    return TypeAdapter(Any, config=ConfigDict(ser_json_bytes="base64"))
+
+
+def tool_result_text(value: Any) -> str:
+    """The text a harness adapter sends back to the model for a tool result.
+
+    Text stays text. Any other value is JSON written by Pydantic, as Pydantic AI writes tool
+    returns: models and dataclasses by their schema, dates in ISO form, sets and tuples as lists,
+    bytes as base64. A value without a JSON form, such as a client object, is an error; its
+    ``__str__`` or ``__repr__`` never reaches the model.
+    """
+
+    if isinstance(value, str):
+        return value
+    return _tool_result_adapter().dump_json(value).decode("utf-8")

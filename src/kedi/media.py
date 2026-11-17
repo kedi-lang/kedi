@@ -747,8 +747,10 @@ class Reference:
 def reference(value: Any, *, binding: str | None = None, call: str | None = None) -> Reference:
     """Build what ``<<value>>`` attaches: media natively, any other value as a text document.
 
-    A list of media attaches each item. Text stays text; numbers and booleans are written as
-    text; lists, dicts and models are JSON. Media nested in other values cannot be referenced.
+    A list of media attaches each item. Any other value is attached as its text form, the text
+    ``<value>`` would render (:mod:`kedi.text_form`): scalars as text, lists, tuples and dicts as
+    JSON; models and dataclasses are also accepted, as JSON. Media nested in other values cannot be
+    referenced.
     """
 
     from kedi.artifacts import ArtifactHandle
@@ -778,20 +780,21 @@ def reference(value: Any, *, binding: str | None = None, call: str | None = None
             f"{subject}: media inside a dict, a model or a mixed list cannot be referenced; "
             "reference each media value directly"
         )
-    if isinstance(value, str):
-        text, media_type = value, "text/plain"
-    elif isinstance(value, (bool, int, float)):
-        text, media_type = str(value), "text/plain"
-    else:
-        from pydantic_core import PydanticSerializationError, to_json
+    from pydantic_core import PydanticSerializationError
 
-        try:
-            text = to_json(value).decode("utf-8")
-        except PydanticSerializationError as exc:
-            raise MediaError(
-                f"{subject}: a {type(value).__name__} value has no JSON form to attach"
-            ) from exc
-        media_type = "application/json"
+    from kedi.text_form import NoTextForm, text_form
+
+    try:
+        text, structured = text_form(value, models=True)
+    except NoTextForm as exc:
+        name = binding or f"{call}(...)"
+        problem = exc.describe(name if exc.path else "the value")
+        raise MediaError(f"{subject} has no text form to attach: {problem}") from None
+    except PydanticSerializationError as exc:
+        raise MediaError(
+            f"{subject}: a {type(value).__name__} value has no JSON form to attach"
+        ) from exc
+    media_type = "application/json" if structured else "text/plain"
     document = Document(media_type=media_type, data=text.encode("utf-8"))
     return Reference(items=(document,), binding=binding, call=call)
 

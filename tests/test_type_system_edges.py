@@ -19,11 +19,9 @@ from kedi.lang.ast import (
 from kedi.lang.compiler import type_system as type_system_module
 from kedi.lang.compiler.type_system import (
     KediType,
-    _convert_basic_literal,
     _default_factory,
     _is_immutable_default,
     _lookup_name,
-    _parse_model_repr,
     _typeexpr_to_str,
     coerce_model_value,
     initialize_value_from_native,
@@ -202,7 +200,9 @@ def test_model_coercion_registration_defaults_and_compatibility(
     assert coerce_model_value(Person, other) is other
     assert coerce_model_value(Person, {"name": "Ada", "age": 2}).age == 2
     assert coerce_model_value(Person, '{"name": "Ada", "age": 3}').age == 3
-    assert coerce_model_value(Person, "name=Ada age=4 active=true").active is True
+    # A model's str() form is never parsed back into a model.
+    with pytest.raises(ValueError, match="Cannot coerce str to Person"):
+        coerce_model_value(Person, "name=Ada age=4 active=true")
     with pytest.raises(ValueError, match="Cannot coerce str"):
         coerce_model_value(Person, "[1, 2]")
     monkeypatch.setattr(type_system_module.json, "loads", lambda _: [1, 2])
@@ -255,7 +255,7 @@ def test_model_coercion_registration_defaults_and_compatibility(
     assert type_env["__Box_fields__"]["name"] is str
 
 
-def test_literal_model_repr_default_and_native_initialization_helpers() -> None:
+def test_literal_default_and_native_initialization_helpers() -> None:
     rt = KediRuntime()
 
     assert _default_factory({"x": [1]})() == {"x": [1]}
@@ -265,25 +265,6 @@ def test_literal_model_repr_default_and_native_initialization_helpers() -> None:
     assert _is_immutable_default(frozenset({1, "x"}))
     assert not _is_immutable_default(frozenset({object()}))
     assert not _is_immutable_default([])
-
-    assert _convert_basic_literal("1", int) == 1
-    assert _convert_basic_literal("1.5", float) == 1.5
-    assert _convert_basic_literal("x", str) == "x"
-    assert _convert_basic_literal("true", bool) is True
-    assert _convert_basic_literal("0", bool) is False
-    assert _convert_basic_literal("anything", bool) is True
-    assert _convert_basic_literal("not-int", int) == "not-int"
-    assert _convert_basic_literal("value", object) == "value"
-
-    assert _parse_model_repr("", Person) is None
-    assert _parse_model_repr('"unterminated', Person) is None
-    assert _parse_model_repr("name", Person) is None
-    assert _parse_model_repr("missing=value", Person) is None
-    assert _parse_model_repr("name=Ada age=5 active=yes", Person) == {
-        "name": "Ada",
-        "age": 5,
-        "active": True,
-    }
 
     assert initialize_value_from_native("x", KediType(None), rt, {}) == "x"
     with pytest.raises(TypeError, match="requires explicit type annotation"):

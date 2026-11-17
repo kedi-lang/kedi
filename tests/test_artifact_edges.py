@@ -1680,13 +1680,13 @@ def test_conversation_failed_turn_does_not_store_state() -> None:
         state.close()
 
 
-def test_conversation_serializes_cyclic_results_with_string_fallback() -> None:
+def test_conversation_stores_cyclic_results_by_type_without_repr() -> None:
     state = ConversationState(session_id="conversation_cycle")
     try:
         cyclic: list[Any] = []
         cyclic.append(cyclic)
         state.record_exchange("cycle", cyclic)
-        assert state.snapshot()[-1].content == "[[...]]"
+        assert state.snapshot()[-1].content == "<list>"
     finally:
         state.close()
 

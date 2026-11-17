@@ -2462,7 +2462,7 @@ def test_claude_adapter_produces_with_schema_profile_tools_and_mcp(
     assert len(options["hooks"]["PreToolUse"]) == 1
 
     tool_result = asyncio.run(events["tools"][0]({"query": "docs"}))
-    assert tool_result == {"content": [{"type": "text", "text": '{"found": "docs"}'}]}
+    assert tool_result == {"content": [{"type": "text", "text": '{"found":"docs"}'}]}
 
 
 def test_claude_adapter_supports_output_type_sync_and_tool_scope(
@@ -3296,10 +3296,10 @@ def test_claude_helpers_cover_mcp_and_serialization() -> None:
         value: str
 
     assert claude_tools_module._tool_result_text("already text") == "already text"
-    assert claude_tools_module._tool_result_text(DirectAnswer(answer="ok")) == '{"answer": "ok"}'
-    assert claude_tools_module._tool_result_text(Payload("ok")) == '{"value": "ok"}'
+    assert claude_tools_module._tool_result_text(DirectAnswer(answer="ok")) == '{"answer":"ok"}'
+    assert claude_tools_module._tool_result_text(Payload("ok")) == '{"value":"ok"}'
     assert claude_tools_module._tool_result_text([DirectAnswer(answer="ok")]) == (
-        '[{"answer": "ok"}]'
+        '[{"answer":"ok"}]'
     )
     assert claude_messages_module._claude_text_response(SimpleNamespace(result="text")) == "text"
     assert claude_messages_module._claude_text_response(SimpleNamespace(content="content")) == (

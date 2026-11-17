@@ -162,7 +162,7 @@ COMPARE = """> import: media
 
 def test_attachments_come_before_the_text_and_the_text_shows_ids(workspace: Path) -> None:
     result, seen = run_pydantic(COMPARE)
-    assert result == "True"
+    assert result == "true"
     assert seen == [
         [
             attachments_open("cat_image"),
@@ -207,7 +207,7 @@ def test_ids_lists_dedupe_raw_invokes_and_claims(workspace: Path, runner: Any) -
 = <total>|<found>|<caption>|<mode>
 """
     result, seen = runner(source)
-    assert result == "12.5|True|a cat|yes!"
+    assert result == "12.5|true|a cat|yes!"
     texts = [
         "".join(
             item for item in request if isinstance(item, str) and not item.startswith("<binary")
@@ -481,9 +481,12 @@ def test_history_processor_attaches_references_on_every_turn(workspace: Path) ->
         ("> instructions:\n    Look at <cat_image>.\n>> Hi [x]", "<cat_image> renders text"),
         (
             ">> Describe <`{'photo': cat_image}`> [x]",
-            "renders text, but the value is of type dict. In a model prompt bind it to a name",
+            r'renders text, but the part at \["photo"\] is <image cat.png ',
         ),
-        (">> Compare <`[cat_image, 'x']`> [x]", r"\(in a list\)"),
+        (
+            ">> Compare <`[cat_image, 'x']`> [x]",
+            r"renders text, but the part at \[0\] is <image cat.png ",
+        ),
         (">> Compare <<pair>> [x]", "media inside a dict, a model or a mixed list"),
         (">> Describe <<nothing>> [x]", "<<nothing>> is None"),
         (">> Describe <nothing> [x]", "<nothing> renders text, but the value is None"),

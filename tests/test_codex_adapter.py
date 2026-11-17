@@ -1317,7 +1317,7 @@ def test_codex_tool_schema_validation_and_result_helpers() -> None:
         codex_server_module._required_object({}, "thread")
     with pytest.raises(CodexAppServerProtocolError, match="string field"):
         codex_server_module._required_string({}, "id")
-    assert codex_server_module._tool_result_text(DumpedToolResult(value=3)) == '{"value": 3}'
+    assert codex_server_module._tool_result_text(DumpedToolResult(value=3)) == '{"value":3}'
 
 
 def test_codex_client_constructor_dependency_and_closed_errors(

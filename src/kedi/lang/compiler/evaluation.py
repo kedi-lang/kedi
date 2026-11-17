@@ -246,7 +246,8 @@ def evaluate_binding_rhs(
     """Return a backtick's native value (including None), or NO_NATIVE_VALUE with text.
 
     Only a sole single-backtick expression keeps its native value; every template, including a
-    sole ``<proc()>``, renders text.
+    sole ``<proc()>``, renders text. A native value is never converted to text: the second item
+    is then empty, and no ``__str__`` or ``__repr__`` of the value runs.
     """
     non_ws = [
         s
@@ -255,8 +256,7 @@ def evaluate_binding_rhs(
     ]
     if len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment):
         seg = non_ws[0]
-        value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-        return value, str(value)
+        return force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)), ""
     return NO_NATIVE_VALUE, render_expression(rt, segments, kwargs, context="assign")
 
 
@@ -337,14 +337,14 @@ def _segment_parts(
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
             parts.append(substitution_text(value, _call_subject(seg)))
         elif isinstance(seg, OutputSegment):
+            # A filled output is text in place, under the same rule as `<name>`.
+            env = rt._current_env.get()
             if seg.name in kwargs:
-                parts.append(str(force(kwargs[seg.name])))
+                parts.append(substitution_text(force(kwargs[seg.name]), seg.name))
+            elif env and seg.name in env:
+                parts.append(substitution_text(force(env[seg.name]), seg.name))
             else:
-                env = rt._current_env.get()
-                if env and seg.name in env:
-                    parts.append(str(force(env[seg.name])))
-                else:
-                    parts.append("")
+                parts.append("")
         elif isinstance(seg, PythonExprNativeSegment) and context == "show":
             # `> show: `value`` displays any value, the way a single backtick always has.
             parts.append(str(force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))))

@@ -211,7 +211,7 @@ def test_decision_prompt_reaches_hooks_history_and_model_without_losing_criteria
         ),
         adapter=adapter,
     )
-    assert runtime.run_main() == "True"
+    assert runtime.run_main() == "true"
     assert len(client.calls) == len(observed) == 1
     assert observed[0].startswith("Evaluate each marked decision field")
     assert "private account" in observed[0]
@@ -234,7 +234,7 @@ def test_regular_llm_keeps_completion_prompt_in_kedi_runtime() -> None:
         parse_program(">> The review is [approved: bool].\n= <approved>\n"),
         adapter=adapter,
     )
-    assert runtime.run_main() == "True"
+    assert runtime.run_main() == "true"
     assert observed[0].startswith("Fields to be substituted")
     assert "Fill each unescaped" not in observed[0]
 

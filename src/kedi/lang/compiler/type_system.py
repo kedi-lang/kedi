@@ -15,7 +15,6 @@ from __future__ import annotations
 import ast
 import copy
 import json
-import shlex
 from typing import Annotated, Any, ForwardRef, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -362,7 +361,10 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
 
 
 def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
-    """Coerce a value to a Pydantic model."""
+    """Coerce a model instance, a dict, or a JSON object string to a Pydantic model.
+
+    Text in any other form, such as a model's ``str()`` (``name='Ada' age=3``), is never parsed.
+    """
     from ...promise import force
 
     value = force(value)
@@ -379,9 +381,6 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
             if isinstance(loaded, dict):
                 return model(**loaded)
             raise ValueError(f"Cannot coerce non-object JSON to {model.__name__}")
-        parsed = _parse_model_repr(text, model)
-        if parsed is not None:
-            return model(**parsed)
     raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 
 
@@ -550,43 +549,6 @@ def initialize_value_from_native(
         raise KediTypeExecutionError(
             mismatch_message("Native initialization value does not match annotated type", exc)
         ) from None
-
-
-def _convert_basic_literal(raw: str, typ: Any) -> Any:
-    try:
-        if typ in (int, float, str):
-            return typ(raw)
-        if typ is bool:
-            if raw.lower() in {"true", "1", "yes"}:
-                return True
-            if raw.lower() in {"false", "0", "no"}:
-                return False
-            return bool(raw)
-    except Exception:
-        return raw
-    return raw
-
-
-def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | None:
-    text = value.strip()
-    if not text:
-        return None
-    try:
-        tokens = shlex.split(text)
-    except ValueError:
-        return None
-    data: dict[str, Any] = {}
-    fields = model.model_fields
-    for token in tokens:
-        if "=" not in token:
-            return None
-        name, raw = token.split("=", 1)
-        if name not in fields:
-            return None
-        field = fields[name]
-        annotation = field.annotation or str
-        data[name] = _convert_basic_literal(raw, annotation)
-    return data
 
 
 def push_type_env(rt: KediRuntime) -> dict[str, Any]:
