@@ -10,7 +10,7 @@ directory the script starts in, and are never printed.
         --model langchain=openai:gpt-5.4 \\
         --model pydantic=anthropic:claude-sonnet-5-5 \\
         --model langchain=anthropic:claude-sonnet-5-5 \\
-        --model pydantic=google-gla:gemini-3.5-flash \\
+        --model pydantic=google:gemini-3.5-flash \\
         --model langchain=google_genai:gemini-3.5-flash
 
 `pydantic=` models use Pydantic AI model names, `langchain=` models use `init_chat_model`
@@ -144,26 +144,31 @@ def cases(directory: Path, audio: Path | None, audio_number: int) -> list[Case]:
     return found
 
 
-def adapter_for(spec: str):
+def adapter_for(spec: str, timeout: float):
+    # A request that never answers becomes an ERROR line instead of a hung run.
+    settings = {"timeout": timeout}
     framework, _, model = spec.partition("=")
     if framework == "pydantic":
         from kedi.agent_adapter import PydanticAdapter
 
-        return PydanticAdapter(model)
+        return PydanticAdapter(model, model_settings=settings)
     if framework == "langchain":
         from kedi.agent_adapter import LangChainAdapter
 
-        return LangChainAdapter(model)
+        # LangChain's Gemini client retries six times by default, each up to the timeout.
+        return LangChainAdapter(model, model_settings={**settings, "max_retries": 1})
     raise SystemExit(f"--model {spec!r}: use pydantic=<model> or langchain=<model>")
 
 
-def run_case(spec: str, case: Case) -> tuple[str, str]:
+def run_case(spec: str, case: Case, timeout: float) -> tuple[str, str]:
     from kedi.lang import compile_program, parse_program
     from kedi.media import MediaError
 
     source = "> import: media\n" + case.program
     try:
-        result = compile_program(parse_program(source), adapter=adapter_for(spec)).run_main()
+        result = compile_program(
+            parse_program(source), adapter=adapter_for(spec, timeout)
+        ).run_main()
     except Exception as exc:  # report every failure and keep going
         cause: BaseException = exc
         while cause.__cause__ is not None and not isinstance(cause, MediaError):
@@ -184,6 +189,7 @@ def main() -> int:
     parser.add_argument("--kind", action="append", help="limit to image, pdf, text or audio")
     parser.add_argument("--audio", type=Path, help="a WAV or MP3 file with a spoken number")
     parser.add_argument("--audio-number", type=int, default=SPOKEN_NUMBER)
+    parser.add_argument("--timeout", type=float, default=120, help="seconds per model request")
     args = parser.parse_args()
     # Keys may live in a .env where the script is started; load it before leaving that directory.
     dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
@@ -207,7 +213,7 @@ def main() -> int:
                 selected = [c for c in selected if c.kind in args.kind]
             for spec in args.model:
                 for case in selected:
-                    status, detail = run_case(spec, case)
+                    status, detail = run_case(spec, case, args.timeout)
                     failed += status in {"FAIL", "ERROR"}
                     print(f"{status:8} {spec:48} {case.kind:6} {detail}", flush=True)
         finally:
