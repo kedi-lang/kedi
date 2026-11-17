@@ -95,6 +95,8 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
     if any(d.severity == "error" for d in self.diagnostics):
         raise KediParseError(self.diagnostics)
 
+    _reject_python_reserved_names(self, root)
+
     # First pass — discover whether we need ProgramWithValidation.
     children = _named_children(root)
     has_validation = any(c.type == "validation_block" for c in children)
@@ -397,6 +399,29 @@ def _walk_module_export(self: _Walker, node: Node) -> ModuleExport:
             if name_node is not None:
                 names.append(_identifier_name(self.source, name_node))
     return ModuleExport(names=names, export_all=export_all, loc=self._span(node))
+
+
+# Names Python gives a fixed meaning in every namespace Kedi evaluates Python in: `__debug__` is a
+# compile-time constant (Python code always reads `True`), and a `__builtins__` binding replaces
+# the builtins of every Python expression in scope.
+PYTHON_RESERVED_NAMES = frozenset({"__debug__", "__builtins__"})
+
+
+def _reject_python_reserved_names(self: _Walker, root: Node) -> None:
+    """Report every Kedi name that Python reserves; Python code itself is not inspected."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "identifier":
+            name = _identifier_name(self.source, node)
+            if name in PYTHON_RESERVED_NAMES:
+                self._error(
+                    node,
+                    f"{name!r} is reserved by Python and cannot be a Kedi name: Python code would "
+                    "not see the Kedi value",
+                    code="K-RESERVED-NAME",
+                )
+        stack.extend(reversed(node.children))
 
 
 def _walk_procedure_def(self: _Walker, node: Node) -> ProcedureDef:

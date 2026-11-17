@@ -30,6 +30,10 @@ Command-line flags are available through the runtime-owned `args` binding (for e
 configure a different reserved name with `kedi.lang.compiler.environment.CLI_ARGS_IDENTIFIER`
 before compiling a program.
 
+`__debug__` and `__builtins__` cannot be Kedi names (`K-RESERVED-NAME`), wherever a name is
+declared or used: Python code always reads `__debug__` as `True`, and a `__builtins__` binding
+would replace the builtins of every Python expression. Python code itself may use both.
+
 After execution, `[capital]` is filled by the LLM (e.g., "Paris") and the variable `capital` becomes available in scope:
 ```kedi
 >> The capital of <country> is [capital].
@@ -398,7 +402,8 @@ Does cat1 match the description in spec? Compare cat1 carefully.
 - **What is attached.** Media go as native image, audio, video or PDF parts. Any other value
   is a `<document>` holding its text form, exactly the text `<value>` renders: scalars as
   `text/plain`, lists, tuples and dicts as JSON (`application/json`). References also accept
-  models, `~Type` values and dataclasses, as JSON. `None`, values without a text form (a set,
+  models, `~Type` values and dataclasses, written as JSON by their own schema; a set of two or
+  more items or a non-finite number inside one is an error that names the field. `None`, values without a text form (a set,
   for example) and media nested inside a dict, a model or a mixed list are errors; reference
   each media value directly.
 - **Stored values.** A value that already is an artifact, which only an agent session creates
@@ -1135,7 +1140,9 @@ These are separate examples of return forms:
 
 Unescaped source whitespace is trimmed at expression boundaries; internal spaces,
 including gaps between adjacent substitutions, are preserved. Whitespace supplied by
-substituted values or explicit `\s`, `\t`, and `\n` escapes is not stripped. The same
+substituted values or explicit `\s`, `\t`, and `\n` escapes is not stripped. A
+continuation collapses the source whitespace around its backslash to one space and keeps
+escaped whitespace next to it: `= a\s \` followed by `1` returns `a  1`. The same
 rules apply to rendered call arguments, typed string returns, and model prompts.
 
 ### Display Without Returning
@@ -1207,7 +1214,9 @@ remains `string`. Claude currently accepts all of the formats listed above.
 Type names in annotations always mean types. A value named like a type, such as
 `[str] = hello`, a parameter named `list` or a local `[int] = x`, does not change what
 `str`, `list` or `int` mean in an annotation; only a value that is itself a type
-(``[T: Any] = `int` ``) can stand in for one. Type arguments can be names, strings,
+(``[T: Any] = `int` ``) can stand in for one. In Python code the binding is what the
+name means, as for procedures: after `[Point] = x\=1`, `` `Point` `` is that text, never
+parsed into a `Point` model. Type arguments can be names, strings,
 numbers or `...`: `Literal[1, -2.5]`, `Annotated[int, 3]`, `Callable[..., int]`.
 A backtick type is Python and sees bindings as written. When it does not evaluate to
 a type, the error names the expression rather than reporting a mismatched value, and

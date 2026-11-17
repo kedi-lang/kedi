@@ -246,7 +246,8 @@ def evaluate_binding_rhs(
     """Return a backtick's native value (including None), or NO_NATIVE_VALUE with text.
 
     Only a sole single-backtick expression keeps its native value; every template, including a
-    sole ``<proc()>``, renders text.
+    sole ``<proc()>``, renders text. A native value is never converted to text: the second item
+    is then empty, and no ``__str__`` or ``__repr__`` of the value runs.
     """
     non_ws = [
         s
@@ -255,8 +256,7 @@ def evaluate_binding_rhs(
     ]
     if len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment):
         seg = non_ws[0]
-        value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-        return value, str(value)
+        return force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)), ""
     return NO_NATIVE_VALUE, render_expression(rt, segments, kwargs, context="assign")
 
 

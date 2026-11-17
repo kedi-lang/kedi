@@ -898,7 +898,7 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
     merge(local_env, writable=True)
 
     # Add type environment
-    _add_type_env(rt, env, local_env)
+    _add_type_env(rt, env)
 
     # Wrap procedures as callables. A Kedi binding with the same name shadows the
     # procedure, as it does for `<name>` substitutions.
@@ -954,8 +954,10 @@ def _add_value_bindings(env: dict[str, Any], source: dict[str, Any]) -> None:
         env[name] = value
 
 
-def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]) -> None:
-    """Add type environment and handle Pydantic model coercion."""
+def _add_type_env(rt: KediRuntime, env: dict[str, Any]) -> None:
+    """Add the program's types. A Kedi binding with a type's name keeps its own value in Python,
+    as it does for `<name>` and as bindings shadow procedures; nothing is converted to a model.
+    """
     if not rt._type_env_stack:
         return
 
@@ -964,22 +966,13 @@ def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any
         type_env.update(layer)
 
     if isinstance(env, KediEnv):
+        bound = env.binding_owners()
         for name, value in type_env.items():
-            env._set_unowned(name, value)
+            if name not in bound:
+                env._set_unowned(name, value)
     else:
-        env.update(type_env)
-
-    # Coerce string values to models where applicable
-    from .type_system import coerce_model_value
-
-    for key, val in list(local_env.items()):
-        base = key.split(".")[0]
-        if base in type_env and isinstance(val, str):
-            model = type_env[base]
-            if isinstance(model, type) and issubclass(model, BaseModel):
-                wrapped = coerce_model_value(model, val)
-                local_env[key] = wrapped
-                env[key] = wrapped
+        for name, value in type_env.items():
+            env.setdefault(name, value)
 
 
 def _make_proc_wrapper(

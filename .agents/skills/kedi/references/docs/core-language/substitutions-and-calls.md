@@ -189,8 +189,9 @@ Does the change follow spec? Check spec section by section. ...
 - Media go as native parts ([Media Input](media-input.md)). Any other value goes
   as its text form, the text `<value>` renders: scalars as `text/plain`, lists,
   tuples and dicts as JSON (`application/json`). Models, `~Type` values and
-  dataclasses are accepted too, as JSON. `None` and values without a text form
-  are errors.
+  dataclasses are accepted too, written as JSON by their own schema; a set of
+  two or more items or a non-finite number inside one is an error. `None` and
+  values without a text form are errors.
 - References are valid only in model prompts: `>>` templates, `[x] << ...` and
   `[x: T] << ...` invokes, and `> if:` / `> loop:` template conditions.
   Elsewhere `<<...>>` is a parse error (`K-REFERENCE-CONTEXT`).

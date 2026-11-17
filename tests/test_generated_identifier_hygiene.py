@@ -34,6 +34,38 @@ def test_unsupported_python_declaration_names_have_source_diagnostics(source, co
     assert any(diagnostic.code == code for diagnostic in compute_diagnostics(source, "names.kedi"))
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "[__debug__] = hello\n= `__debug__`\n",
+        "[__debug__: int] = `3`\n",
+        ">> Say hi [__debug__]\n",
+        "[__debug__] << Say hi\n",
+        "> loop [__debug__]: `range(2)`:\n  [n] = one\n",
+        "@count(__debug__: int) -> int:\n  = `1`\n",
+        "@__debug__() -> int:\n  = `1`\n",
+        "~__builtins__(value: int)\n",
+        "[__builtins__] = hello\n",
+        "= <__debug__>\n",
+    ],
+)
+def test_python_reserved_names_are_rejected_where_they_appear(source: str) -> None:
+    # Python code reads `__debug__` as True whatever Kedi binds, and a `__builtins__` binding
+    # replaces the builtins of every Python expression, so neither may be a Kedi name.
+    with pytest.raises(KediParseError) as caught:
+        parse_program(source, source_path="names.kedi")
+    (diagnostic,) = caught.value.diagnostics
+    assert diagnostic.code == "K-RESERVED-NAME"
+    assert "is reserved by Python and cannot be a Kedi name" in diagnostic.message
+    assert diagnostic.span.start_line == 1
+    assert [d.code for d in compute_diagnostics(source, "names.kedi")] == ["K-RESERVED-NAME"]
+
+
+def test_python_code_keeps_its_own_reserved_names() -> None:
+    source = "```\nseen = __builtins__ is not None\n```\n= `__debug__ and seen`\n"
+    assert compile_program(parse_program(source)).run_main() is True
+
+
 @pytest.mark.parametrize("name", ["_body", "_body_", "__kedi_call__", "_impl", "self"])
 @pytest.mark.parametrize("python_call", [False, True])
 def test_procedure_parameters_do_not_shadow_generated_helpers(name, python_call) -> None:

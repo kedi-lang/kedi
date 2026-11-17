@@ -55,13 +55,11 @@ def unescape_text_with_tracking(text: str) -> Tuple[str, set[int]]:
     whose character came from a ``\\t``, ``\\n``, or ``\\s`` escape.
 
     A backslash immediately followed by a literal newline byte
-    (``\\<newline>``) is line continuation: it collapses to a single
-    space and consumes any leading horizontal whitespace of the next
-    line, matching the pre-refactor parser's
-    :func:`merge_line_continuations` behaviour. (The pre-refactor
-    parser did this in a preprocessing pass before this function ran;
-    the tree-sitter scanner instead absorbs `\\<newline>` into the
-    text token, so we handle the collapse here.)
+    (``\\<newline>``) is line continuation: the source whitespace around
+    it collapses to a single space. Escaped whitespace (``\\s``, ``\\t``,
+    ``\\n``) next to the join is kept: it is content, not source
+    whitespace. (The tree-sitter scanner absorbs `\\<newline>` into the
+    text token, so the collapse happens here.)
     """
     escaped_positions: set[int] = set()
     out: List[str] = []
@@ -93,13 +91,9 @@ def unescape_text_with_tracking(text: str) -> Tuple[str, set[int]]:
         if ch == "\\" and i + 1 < n:
             nxt = text[i + 1]
             if nxt == "\n":
-                # Line continuation: collapse `<trailing WS>\<newline>
-                # <leading WS>` to a single space. Matches the
-                # pre-refactor `merge_line_continuations` semantics:
-                # ``current.rstrip() + " " + s2.lstrip()``.
-                while out and out[-1] in (" ", "\t"):
-                    out.pop()
-                out.append(" ")
+                # Line continuation: `<trailing WS>\<newline><leading WS>`
+                # becomes a single space.
+                _join_continuation(out, escaped_positions)
                 i += 2
                 while i < n and (text[i] == " " or text[i] == "\t"):
                     i += 1
@@ -115,9 +109,7 @@ def unescape_text_with_tracking(text: str) -> Tuple[str, set[int]]:
                 while j < n and (text[j] == " " or text[j] == "\t"):
                     j += 1
                 if j < n and text[j] == "\n":
-                    while out and out[-1] in (" ", "\t"):
-                        out.pop()
-                    out.append(" ")
+                    _join_continuation(out, escaped_positions)
                     i = j + 1
                     while i < n and (text[i] == " " or text[i] == "\t"):
                         i += 1
@@ -141,6 +133,17 @@ def unescape_text_with_tracking(text: str) -> Tuple[str, set[int]]:
         out.append(ch)
         i += 1
     return "".join(out), escaped_positions
+
+
+def _join_continuation(out: List[str], escaped_positions: set[int]) -> None:
+    """Replace the source whitespace before a line continuation with one space.
+
+    Only source whitespace is dropped: an escaped space or tab before the
+    backslash is content and stays (``a\\s \\<newline>1`` is ``a  1``).
+    """
+    while out and out[-1] in (" ", "\t") and len(out) - 1 not in escaped_positions:
+        out.pop()
+    out.append(" ")
 
 
 def unescape_call_arg_text(text: str) -> str:

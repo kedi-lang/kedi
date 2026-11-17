@@ -359,7 +359,7 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
 
     plain_env: dict[str, Any] = {}
     no_globals._type_env_stack = [{"Person": Person}]
-    compiler_env._add_type_env(no_globals, plain_env, {})
+    compiler_env._add_type_env(no_globals, plain_env)
     assert plain_env["Person"] is Person
 
 
@@ -372,7 +372,7 @@ def test_runtime_lookup_reads_current_env() -> None:
         rt._current_env.reset(token)
 
 
-def test_build_python_env_wraps_procedures_and_coerces_model_values() -> None:
+def test_build_python_env_wraps_procedures_and_keeps_bindings_named_like_types() -> None:
     rt = KediRuntime()
 
     def add_one(value: int) -> int:
@@ -380,18 +380,15 @@ def test_build_python_env_wraps_procedures_and_coerces_model_values() -> None:
 
     rt.procedure(add_one)
 
-    local_env: dict[str, Any] = {"person": '{"name": "Ada"}'}
-    setattr(rt, "_type_env_stack", [{"person": Person}])
+    # A binding named like a type keeps its text; it is never parsed into the model.
+    local_env: dict[str, Any] = {"Person": '{"name": "Ada"}'}
+    setattr(rt, "_type_env_stack", [{"Person": Person, "Other": int}])
     env = build_python_env(rt, local_env)
 
     assert env["add_one"](2) == 3
-    assert isinstance(local_env["person"], Person)
-    assert local_env["person"].name == "Ada"
-
-    non_model_env: dict[str, Any] = {"thing": "value"}
-    setattr(rt, "_type_env_stack", [{"thing": object()}])
-    assert build_python_env(rt, non_model_env)["thing"] is not non_model_env["thing"]
-    assert non_model_env["thing"] == "value"
+    assert env["Person"] == '{"name": "Ada"}'
+    assert local_env["Person"] == '{"name": "Ada"}'
+    assert env["Other"] is int
 
 
 def test_proc_wrapper_allows_metadata_without_procedure_def() -> None:
@@ -503,7 +500,7 @@ def test_prepare_segments_binding_rhs_and_argument_variants() -> None:
         {"x": 2},
     )
     assert native == 3
-    assert rendered_native == "3"
+    assert rendered_native == ""  # a native value is never converted to text
 
     # A sole call is a template: it renders text and keeps no native value.
     called, rendered_called = evaluate_binding_rhs(

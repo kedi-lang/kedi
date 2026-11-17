@@ -221,3 +221,106 @@ def test_substitution_errors_name_the_path_and_never_run_user_code() -> None:
         match=r"^<items> renders text, but the value is of type set, whose order is not stable\. Sort it first, for example <`sorted\(\.\.\.\)`>\. In a model prompt",
     ):
         substitution_text({1}, "items")
+
+
+def test_native_values_are_never_converted_to_text() -> None:
+    from kedi.lang import compile_program, parse_program
+
+    source = (
+        "```\n"
+        "class Loud:\n"
+        "    def __str__(self):\n"
+        "        raise AssertionError('a user __str__ ran')\n"
+        "    __repr__ = __str__\n"
+        "```\n"
+        "[made: Any] = `Loud()`\n"
+        "[made] := `Loud()`\n"
+        "@build() -> Any:\n  = `Loud()`\n"
+        "[built: Any] = `build()`\n"
+        "= `type(made).__name__ + type(built).__name__`\n"
+    )
+    assert compile_program(parse_program(source)).run_main() == "LoudLoud"
+
+
+def test_text_named_like_a_type_stays_text() -> None:
+    from kedi.lang import compile_program, parse_program
+
+    # A model's str() form is never parsed back into the model.
+    source = "~Pt(x: int, y: int)\n[Pt] = x\\=1 y\\=2\n= `type(Pt).__name__ + ':' + Pt`\n"
+    assert compile_program(parse_program(source)).run_main() == "str:x=1 y=2"
+
+
+class Inner(BaseModel):
+    tags: set[str] = set()
+    score: float = 1.0
+
+
+class Report(BaseModel):
+    file: PurePosixPath = PurePosixPath("a/b")
+    took: datetime.timedelta = datetime.timedelta(seconds=90)
+    raw: bytes = b"x"
+    inner: Inner = Inner()
+    items: list[Inner] = []
+
+
+@dataclass
+class Row:
+    values: list[float]
+
+
+def test_references_write_models_by_their_schema() -> None:
+    assert text_form(Report(inner=Inner(tags={"a"})), models=True) == (
+        '{"file":"a/b","took":"PT1M30S","raw":"x","inner":{"tags":["a"],"score":1.0},"items":[]}',
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "path", "reason"),
+    [
+        (Report(items=[Inner(), Inner(tags={"a", "b"})]), ".items[1].tags", "is of type set"),
+        (Report(inner=Inner(score=float("nan"))), ".inner.score", "is not a finite number"),
+        ([Row(values=[1.0, float("inf")])], "[0].values[1]", "is not a finite number"),
+        ({"rows": [Row(values=[decimal.Decimal("NaN")])]}, '["rows"][0].values[0]', "is not a"),
+        (Owner.model_construct(name={"a": {1, 2}}), '.name["a"]', "is of type set"),
+        (Owner.model_construct(name=(1, {1, 2})), ".name[1]", "is of type set"),
+    ],
+)
+def test_references_reject_unstable_or_non_finite_model_data(
+    value: Any, path: str, reason: str
+) -> None:
+    with pytest.raises(NoTextForm) as caught:
+        text_form(value, models=True)
+    assert caught.value.path == path
+    assert caught.value.reason.startswith(reason)
+
+
+def test_model_data_cycles_and_depth_are_bounded() -> None:
+    loop: list[Any] = []
+    loop.append(loop)
+    with pytest.raises(NoTextForm, match="contains itself"):
+        text_form(Owner.model_construct(name=loop), models=True)
+    deep: list[Any] = []
+    for _ in range(DEPTH_LIMIT + 1):
+        deep = [deep]
+    with pytest.raises(NoTextForm, match="nests deeper"):
+        text_form(Owner.model_construct(name=deep), models=True)
+
+
+def test_inputs_with_a_text_form_keep_a_decision_identity() -> None:
+    from kedi.decisions import fingerprint_value
+
+    values = [
+        decimal.Decimal("1.10"),
+        datetime.date(2026, 11, 16),
+        UTC_NOON,
+        datetime.time(9, 5),
+        uuid.UUID(int=1),
+        Color.RED,
+        Level.HIGH,
+    ]
+    prints = [fingerprint_value(value) for value in values]
+    assert None not in prints
+    assert len(set(prints)) == len(prints)
+    assert fingerprint_value(decimal.Decimal("1.1")) != prints[0]
+    assert fingerprint_value(datetime.datetime(2026, 11, 16)) != prints[1]

@@ -11,10 +11,13 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
+from enum import Enum
 from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
@@ -574,6 +577,21 @@ def _canonical_value(value: Any, *, seen: set[int]) -> Any:
         return ["str", value]
     if type(value) is bytes:
         return ["bytes", base64.b64encode(value).decode("ascii")]
+    # The other values with a text form (kedi.text_form), so `<x>` inputs keep their identity.
+    if type(value) is Decimal:
+        return ["decimal", str(value)]
+    if type(value) in {datetime, date, time}:
+        return [type(value).__name__, value.isoformat()]
+    if type(value) is UUID:
+        return ["uuid", str(value)]
+    if isinstance(value, Enum):
+        return [
+            "enum",
+            value.__class__.__module__,
+            value.__class__.__qualname__,
+            value.name,
+            _canonical_value(value.value, seen=seen),
+        ]
     if isinstance(value, BaseModel):
         values = object.__getattribute__(value, "__dict__")
         return [

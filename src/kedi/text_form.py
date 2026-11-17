@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import is_dataclass
+from dataclasses import fields, is_dataclass
 from datetime import date, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -48,7 +48,9 @@ def text_form(value: Any, *, models: bool = False) -> tuple[str, bool]:
     """Return ``value``'s text and whether it is structured (a JSON container or model).
 
     ``models`` also accepts Pydantic models and dataclasses anywhere in the value, serialized by
-    their own schema; ``<<x>>`` passes them, ``<x>`` does not.
+    their own schema; ``<<x>>`` passes them, ``<x>`` does not. Their schema decides how a field is
+    written, but a set of two or more items (no stable order) or a non-finite number (no JSON
+    form) in one is an error.
     """
 
     _check(value, "", 0, set(), models)
@@ -98,8 +100,53 @@ def _check(value: Any, path: str, depth: int, active: set[int], models: bool) ->
         active.discard(id(value))
         return
     if models and _is_model(value):
+        _check_model_data(value, path, depth, active)
         return
     raise NoTextForm(path, *_problem(value))
+
+
+def _check_model_data(value: Any, path: str, depth: int, active: set[int]) -> None:
+    """Reject what a model's own serialization cannot write canonically: sets and NaN/inf.
+
+    A set with at most one item has one order, so empty and single-item sets are fine.
+
+    Everything else in a model (paths, bytes, durations, ...) is written by its schema.
+    """
+
+    if depth > DEPTH_LIMIT:
+        raise NoTextForm(path, f"nests deeper than {DEPTH_LIMIT} levels")
+    if isinstance(value, (float, Decimal)):
+        finite = value.is_finite() if isinstance(value, Decimal) else math.isfinite(value)
+        if not finite:
+            raise NoTextForm(path, "is not a finite number")
+        return
+    if isinstance(value, (set, frozenset)):
+        if len(value) > 1:
+            raise NoTextForm(path, *_problem(value))
+        return
+    if isinstance(value, (str, bytes)):
+        return
+    if isinstance(value, BaseModel):
+        data = object.__getattribute__(value, "__dict__")
+        items = [*data.items(), *(value.__pydantic_extra__ or {}).items()]
+        paths = [f"{path}.{name}" for name, _ in items]
+    elif is_dataclass(value) and not isinstance(value, type):
+        items = [(item.name, object.__getattribute__(value, item.name)) for item in fields(value)]
+        paths = [f"{path}.{name}" for name, _ in items]
+    elif isinstance(value, dict):
+        items = list(value.items())
+        paths = [f"{path}[{json.dumps(str(key), ensure_ascii=False)}]" for key, _ in items]
+    elif isinstance(value, (list, tuple)):
+        items = list(enumerate(value))
+        paths = [f"{path}[{index}]" for index, _ in items]
+    else:
+        return
+    if id(value) in active:
+        raise NoTextForm(path, "contains itself")
+    active.add(id(value))
+    for (_, item), item_path in zip(items, paths):
+        _check_model_data(item, item_path, depth + 1, active)
+    active.discard(id(value))
 
 
 def _is_model(value: Any) -> bool:
