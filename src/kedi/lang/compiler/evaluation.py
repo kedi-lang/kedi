@@ -337,14 +337,14 @@ def _segment_parts(
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
             parts.append(substitution_text(value, _call_subject(seg)))
         elif isinstance(seg, OutputSegment):
+            # A filled output is text in place, under the same rule as `<name>`.
+            env = rt._current_env.get()
             if seg.name in kwargs:
-                parts.append(str(force(kwargs[seg.name])))
+                parts.append(substitution_text(force(kwargs[seg.name]), seg.name))
+            elif env and seg.name in env:
+                parts.append(substitution_text(force(env[seg.name]), seg.name))
             else:
-                env = rt._current_env.get()
-                if env and seg.name in env:
-                    parts.append(str(force(env[seg.name])))
-                else:
-                    parts.append("")
+                parts.append("")
         elif isinstance(seg, PythonExprNativeSegment) and context == "show":
             # `> show: `value`` displays any value, the way a single backtick always has.
             parts.append(str(force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))))

@@ -535,12 +535,19 @@ def _current_async_task() -> asyncio.Task[Any] | None:
 
 
 def _portable_content(value: Any) -> str:
+    """Stored assistant content: text, or JSON; an object without a JSON form shows its type.
+
+    No ``__str__`` or ``__repr__`` runs, so a client object never lands in stored history.
+    """
+    from pydantic_core import PydanticSerializationError, to_jsonable_python
+
     if isinstance(value, str):
         return value
     try:
-        return json.dumps(value, ensure_ascii=False, default=str, sort_keys=True)
-    except (TypeError, ValueError):
-        return str(value)
+        jsonable = to_jsonable_python(value, fallback=lambda item: f"<{type(item).__name__}>")
+    except (ValueError, PydanticSerializationError):  # a cyclic value
+        return f"<{type(value).__name__}>"
+    return json.dumps(jsonable, ensure_ascii=False, sort_keys=True)
 
 
 def _run_cleanups(cleanups: Iterable[Callable[[], None]]) -> None:

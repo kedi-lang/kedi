@@ -481,11 +481,11 @@ def test_history_processor_attaches_references_on_every_turn(workspace: Path) ->
         ("> instructions:\n    Look at <cat_image>.\n>> Hi [x]", "<cat_image> renders text"),
         (
             ">> Describe <`{'photo': cat_image}`> [x]",
-            r'renders text, but the value\["photo"\] is <image cat.png ',
+            r'renders text, but the part at \["photo"\] is <image cat.png ',
         ),
         (
             ">> Compare <`[cat_image, 'x']`> [x]",
-            r"renders text, but the value\[0\] is <image cat.png ",
+            r"renders text, but the part at \[0\] is <image cat.png ",
         ),
         (">> Compare <<pair>> [x]", "media inside a dict, a model or a mixed list"),
         (">> Describe <<nothing>> [x]", "<<nothing>> is None"),

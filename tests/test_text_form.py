@@ -214,7 +214,7 @@ def test_substitution_errors_name_the_path_and_never_run_user_code() -> None:
         "it by reference with <<order>>; to keep the value use single-backtick Python; for text "
         "convert it explicitly, for example <`str(...)`>."
     )
-    with pytest.raises(TypeError, match=r"^<`load\(\)`> renders text, but the value\[0\] is "):
+    with pytest.raises(TypeError, match=r"^<`load\(\)`> renders text, but the part at \[0\] is "):
         substitution_text([Client()], "`load()`")
     with pytest.raises(
         TypeError,
@@ -284,6 +284,8 @@ def test_references_write_models_by_their_schema() -> None:
         ({"rows": [Row(values=[decimal.Decimal("NaN")])]}, '["rows"][0].values[0]', "is not a"),
         (Owner.model_construct(name={"a": {1, 2}}), '.name["a"]', "is of type set"),
         (Owner.model_construct(name=(1, {1, 2})), ".name[1]", "is of type set"),
+        (Owner.model_construct(name={Client(): {1, 2}}), ".name[<Client>]", "is of type set"),
+        (Owner.model_construct(name={7: {1, 2}}), ".name[7]", "is of type set"),
     ],
 )
 def test_references_reject_unstable_or_non_finite_model_data(
@@ -324,3 +326,47 @@ def test_inputs_with_a_text_form_keep_a_decision_identity() -> None:
     assert len(set(prints)) == len(prints)
     assert fingerprint_value(decimal.Decimal("1.1")) != prints[0]
     assert fingerprint_value(datetime.datetime(2026, 11, 16)) != prints[1]
+
+
+def test_filled_outputs_render_like_substitutions() -> None:
+    from kedi.lang import compile_program, parse_program
+    from tests.mock_adapter import MockAdapter
+
+    source = "[r] = Decide [ok: bool] and [xs: list[str]].\n[a] = Then <ok> and <xs>.\n= <r>|<a>\n"
+    result = compile_program(parse_program(source), adapter=MockAdapter()).run_main()
+    assert result == 'Decide true and ["xs-a","xs-b"].|Then true and ["xs-a","xs-b"].'
+
+
+def test_a_filled_output_without_text_is_a_type_error() -> None:
+    from kedi.core.runtime import KediRuntime
+    from kedi.lang.ast import OutputSegment, TextSegment
+    from kedi.lang.compiler.evaluation import _segment_parts
+
+    rt = KediRuntime()
+    segments = [TextSegment(text="Made "), OutputSegment(name="p"), OutputSegment(name="gone")]
+    with pytest.raises(TypeError, match=r"^<p> renders text, but the value is of type Owner\."):
+        _segment_parts(rt, segments, {"p": Owner(name="Ada")}, context="assign")
+    token = rt._current_env.set({"p": Owner(name="Ada")})
+    try:
+        with pytest.raises(TypeError, match="of type Owner"):
+            _segment_parts(rt, segments, {}, context="assign")
+    finally:
+        rt._current_env.reset(token)
+    assert _segment_parts(rt, segments, {"p": 3}, context="assign") == ["Made ", "3", ""]
+
+
+def test_harness_tool_results_never_run_user_code() -> None:
+    from kedi.agent_adapter.conversation import _portable_content
+    from kedi.agent_adapter.tools.execution import tool_result_text
+
+    assert tool_result_text("plain") == "plain"
+    assert tool_result_text(None) == "null"
+    from pathlib import Path
+
+    assert tool_result_text({"day": datetime.date(2026, 11, 16), "path": Path("a")}) == (
+        '{"day":"2026-11-16","path":"a"}'
+    )
+    with pytest.raises(Exception, match="Unable to serialize unknown type: <class '.*Client'>"):
+        tool_result_text({"client": Client()})
+    assert _portable_content("plain") == "plain"
+    assert _portable_content({"client": Client(), "n": 1}) == '{"client": "<Client>", "n": 1}'

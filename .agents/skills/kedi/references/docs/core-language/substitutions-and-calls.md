@@ -31,7 +31,9 @@ data alone, in one canonical form, without running a `__str__` or `__repr__`.
 | an `Enum` member | its value, by these rules |
 | `list`, `tuple`, `dict` with `str` keys | compact JSON, checked item by item: `["a",1]`, `{"k":[1,null]}` |
 
-`None` inside a container renders as `null`. Any other value is a type error
+`None` inside a container renders as `null`, and a `Decimal`, date, time or `UUID` inside one is a
+JSON string (`["1.10"]`). `> show: <flag>` displays `true`; ``> show: `flag` `` displays the Python
+value itself, `True`. Any other value is a type error
 that names the offending part, for example
 `<order> renders text, but order["items"][2] is of type Client`: `None` itself,
 media, bytes, sets (no stable order: ``<`sorted(ids)`>``), paths

@@ -666,7 +666,12 @@ def substitution_value_and_text(value: Any, subject: str) -> tuple[Any, str]:
             if literal
             else f"pass it by reference with <<{subject}>>"
         )
-        problem = exc.describe("the value" if literal or not exc.path else subject)
+        if not exc.path:
+            problem = exc.describe("the value")
+        elif literal:
+            problem = exc.describe("the part at ")
+        else:
+            problem = exc.describe(subject)
         raise TypeError(
             f"<{subject}> renders text, but {problem} In a model prompt {by_reference}; to keep "
             "the value use single-backtick Python; for text convert it explicitly, for example "

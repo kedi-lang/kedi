@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import inspect
-import json
 import sys
-from dataclasses import asdict, is_dataclass
 from importlib.util import find_spec
 from typing import Any, Coroutine, Mapping, Sequence, cast
 
-from pydantic import BaseModel
-
 from kedi.agent_adapter.approvals.policy import ToolRisk
 from kedi.agent_adapter.subagents.runs import safe_subagent_error_message
-from kedi.agent_adapter.tools.execution import arguments_target_secret_file
+from kedi.agent_adapter.tools.execution import arguments_target_secret_file, tool_result_text
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.errors import KediExecutionError
@@ -128,22 +124,7 @@ def _validated_tool_arguments(
     return tool.argument_validator(arguments)
 
 
-def _tool_result_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(_jsonable(value), ensure_ascii=False)
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_jsonable(item) for item in value]
-    return value
+_tool_result_text = tool_result_text
 
 
 def _claude_external_mcp_servers(profile: AgentProfile) -> dict[str, dict[str, Any]]:

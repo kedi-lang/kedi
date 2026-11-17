@@ -124,9 +124,6 @@ if TYPE_CHECKING:
         _claude_tool_specs_by_native_name as _claude_tool_specs_by_native_name,
     )
     from .tools import (
-        _jsonable as _jsonable,
-    )
-    from .tools import (
         _tool_result_text as _tool_result_text,
     )
     from .tools import (
@@ -165,7 +162,6 @@ _EXPORTS = {
     "_claude_native_tool_risk": ("tools", "_claude_native_tool_risk"),
     "_validated_tool_arguments": ("tools", "_validated_tool_arguments"),
     "_tool_result_text": ("tools", "_tool_result_text"),
-    "_jsonable": ("tools", "_jsonable"),
     "_claude_external_mcp_servers": ("tools", "_claude_external_mcp_servers"),
     "_with_kedi_approval_hook": ("hooks", "_with_kedi_approval_hook"),
     "_claude_hook_matcher_class": ("hooks", "_claude_hook_matcher_class"),

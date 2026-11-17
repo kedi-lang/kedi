@@ -26,6 +26,7 @@ from kedi.agent_adapter.execution import (
     run_sync,
 )
 from kedi.agent_adapter.subagents.control import current_live_input, current_live_revision
+from kedi.agent_adapter.tools.execution import tool_result_text
 
 from .live import TurnBindings, ensure_turn_current, run_cancellable_binding, run_cancellable_turn
 
@@ -1126,9 +1127,4 @@ def _required_string(value: Mapping[str, Any], key: str) -> str:
     return item
 
 
-def _tool_result_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    return json.dumps(value, ensure_ascii=False, default=str)
+_tool_result_text = tool_result_text

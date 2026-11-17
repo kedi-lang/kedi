@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import json
 
+from lsprotocol import types as lsp
+
 from kedi._interactive.persistence import SessionValueDecoder, SessionValueEncoder
 from kedi.agent_adapter.compaction.langchain_codec import LangChainHistoryCodec
 from kedi.agent_adapter.compaction.pydantic_codec import PydanticHistoryCodec
@@ -296,10 +298,21 @@ def test_editor_reports_substitutions_whose_declared_type_has_no_text_form() -> 
     assert (
         "<names> renders text, but names is declared set[str], which has no text form." in messages
     )
+    # A container of values without text renders only when empty: a warning, not an error.
     assert (
-        "<lines(...)> renders text, but lines(...) returns list[Line], which has no text form"
-        in messages
+        "<lines(...)> renders text, but lines(...) returns list[Line], which has a text form "
+        "only when empty" in messages
     )
+    severities = {
+        (d.range.start.line, d.range.start.character): d.severity
+        for d in diagnostics_for(source, "/tmp/types.kedi")
+        if d.code == "K-SUBSTITUTION-TYPE"
+    }
+    warning, error = lsp.DiagnosticSeverity.Warning, lsp.DiagnosticSeverity.Error
+    assert severities[(26, 14)] == warning  # list[Line]
+    assert severities[(26, 25)] == warning  # dict[int, str]
+    assert severities[(26, 3)] == error  # Line
+    assert severities[(6, 4)] == error  # set[str]
     assert "pass it by reference with <<bad_keys>>" in messages
 
 

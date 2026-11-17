@@ -135,7 +135,7 @@ def _check_model_data(value: Any, path: str, depth: int, active: set[int]) -> No
         paths = [f"{path}.{name}" for name, _ in items]
     elif isinstance(value, dict):
         items = list(value.items())
-        paths = [f"{path}[{json.dumps(str(key), ensure_ascii=False)}]" for key, _ in items]
+        paths = [f"{path}[{_key_label(key)}]" for key, _ in items]
     elif isinstance(value, (list, tuple)):
         items = list(enumerate(value))
         paths = [f"{path}[{index}]" for index, _ in items]
@@ -147,6 +147,14 @@ def _check_model_data(value: Any, path: str, depth: int, active: set[int]) -> No
     for (_, item), item_path in zip(items, paths):
         _check_model_data(item, item_path, depth + 1, active)
     active.discard(id(value))
+
+
+def _key_label(key: Any) -> str:
+    """A dict key for an error path, without running the key's ``__str__``/``__repr__``."""
+
+    if isinstance(key, (str, int, float, bool)) or key is None:
+        return json.dumps(key, ensure_ascii=False)
+    return f"<{type(key).__name__}>"
 
 
 def _is_model(value: Any) -> bool:

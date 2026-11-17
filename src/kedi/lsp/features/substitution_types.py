@@ -19,7 +19,9 @@ from kedi.lang.ast import (
     REFERENCE_SEGMENTS,
     CallSegment,
     InputSegment,
+    OutputSegment,
     ProcedureDef,
+    RawInvokeStmt,
     SystemDirectiveStmt,
     VariableInitStmt,
 )
@@ -172,7 +174,23 @@ def _bindings_without_text(
             undecided.add(name)
         else:
             declared.setdefault(name, []).append(annotation)
+    # A template output or a raw invoke rebinds the name to what the model writes.
+    for stmt in _iter_control_statements(statements):
+        if isinstance(stmt, RawInvokeStmt):
+            undecided.add(stmt.name)
+        undecided.update(
+            segment.name for segment in _segments_of(stmt) if isinstance(segment, OutputSegment)
+        )
     return {name: found[-1] for name, found in declared.items() if name not in undecided}
+
+
+def _only_empty_renders(annotation: str) -> bool:
+    """Whether the type is a container: then an empty value still renders (``[]``, ``{}``)."""
+
+    node = ast.parse(annotation.strip(), mode="eval").body
+    while isinstance(node, ast.Subscript) and _name(node.value) in {"Annotated", "Optional"}:
+        node = node.slice.elts[0] if isinstance(node.slice, ast.Tuple) else node.slice
+    return isinstance(node, ast.Subscript) and _name(node.value) in _SEQUENCES | _MAPPINGS
 
 
 def _text_use(
@@ -187,13 +205,18 @@ def _text_use(
     else:
         return None
     assert segment.loc is not None  # parsed segments always carry a span
-    if media and _MEDIA_TYPE.fullmatch(annotation):
+    severity = lsp.DiagnosticSeverity.Error
+    if media and _MEDIA_TYPE.fullmatch(annotation) and not annotation.strip().startswith("list"):
         problem = f"{subject} is media"
+    elif _only_empty_renders(annotation):
+        # Only an empty container renders, so the program may still run: a warning.
+        severity = lsp.DiagnosticSeverity.Warning
+        problem = f"{subject} {verb} {annotation.strip()}, which has a text form only when empty"
     else:
         problem = f"{subject} {verb} {annotation.strip()}, which has no text form"
     return lsp.Diagnostic(
         range=span_to_range(segment.loc),
-        severity=lsp.DiagnosticSeverity.Error,
+        severity=severity,
         code="K-SUBSTITUTION-TYPE",
         source="kedi",
         message=(
