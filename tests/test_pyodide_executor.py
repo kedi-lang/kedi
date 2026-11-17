@@ -607,6 +607,8 @@ def test_kedi_type_resolves_browser_owned_pydantic_model_reference() -> None:
             "required flag must be a boolean",
         ),
         ({"kind": "custom"}, "Unsupported playground type descriptor"),
+        ({"kind": "media", "name": "Bogus"}, "Unknown playground media type: 'Bogus'"),
+        ({"kind": "media", "name": 3}, "Unknown playground media type: 3"),
     ],
 )
 def test_decode_pyodide_type_descriptor_errors(
@@ -615,6 +617,22 @@ def test_decode_pyodide_type_descriptor_errors(
 ) -> None:
     with pytest.raises(TypeError, match=message):
         _decode_type_descriptor(descriptor)
+
+
+def test_media_values_and_types_cross_the_bridge() -> None:
+    from kedi import media
+    from tests.test_media_values import png_bytes
+
+    photo = media.Image.from_bytes(png_bytes(), "image/png", name="cat")
+    encoded = _json_value({"photo": photo})["photo"]
+    assert encoded == media.to_bridge(photo)
+    bridge = QueueBridge({"ok": True, "result": encoded, "env": {"copy": encoded}})
+    env: dict[str, Any] = {"copy": None}
+    result = PyodideExecutor(bridge).evaluate_inline(KediRuntime(), "photo", env)
+    assert type(result) is media.Image and result == photo and result.name == "cat"
+    assert env["copy"] == photo
+    assert _decode_type_descriptor({"kind": "media", "name": "Image"}) is media.Image
+    assert _decode_type_descriptor({"kind": "media", "name": "Media"}) is media.Media
 
 
 def test_pyodide_type_expression_uses_browser_descriptor() -> None:

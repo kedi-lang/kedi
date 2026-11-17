@@ -217,9 +217,21 @@ class StatementCompiler:
         return _fn
 
     def execute_show(self, stmt: ShowStmt, env: dict[str, Any]) -> None:
-        """Render once and use the executor's existing output destination."""
+        """Render once and use the executor's existing output destination.
+
+        A single backtick value is first offered to the host's display hook (an image preview in
+        the notebook, for example); when the host displays it, nothing is printed.
+        """
+        from ...display import display
+
         with self.rt.trace_frame(KediTraceFrame(kind="show", label="show", span=stmt.loc)):
-            text = render_expression(self.rt, stmt.segments, env, context="show")
+            native, _ = evaluate_binding_rhs(self.rt, stmt.segments, env, render=False)
+            if native is not NO_NATIVE_VALUE:
+                if display(native):
+                    return
+                text = str(native)
+            else:
+                text = render_expression(self.rt, stmt.segments, env, context="show")
             self.rt.executor.evaluate_inline(
                 self.rt,
                 "__builtins__['print'](__kedi_display_text)",

@@ -20,7 +20,7 @@ for the rules every reference follows.
 
 ## Loading Media
 
-`> import: media` exports four loaders and five types:
+`> import: media` exports four loaders, `save` and five types:
 
 | Name | Kind |
 | --- | --- |
@@ -28,6 +28,7 @@ for the rules every reference follows.
 | `audio(source)` | loads an `Audio` value |
 | `video(source)` | loads a `Video` |
 | `document(source)` | loads a `Document` |
+| `save(media, path)` | writes a media value to a file and returns the path |
 | `Media`, `Image`, `Audio`, `Video`, `Document` | types for annotations |
 
 A loader takes a path relative to the working directory, an `http(s)` URL or
@@ -162,6 +163,24 @@ parse error (`K-REFERENCE-CONTEXT`). ``> show: `cat_image` `` and Python
 `str()` display a byte-free label such as `<image cat.png · image/png · 48 KB>`.
 Media inside a dict, a model or a mixed list cannot be referenced; reference
 each media value directly.
+
+`save` writes a value's bytes to a file and returns the path:
+
+```kedi
+> import: media
+
+[photo: Image] = `image("photos/cat.png")`
+[copy] = <save(`photo`, out/cat.png)>
+```
+
+In Python, `photo.save("out/cat.png")` does the same. The path follows the same
+rules as loading: it starts at the working directory, cannot leave it with
+`KEDI_WORKSPACE_POLICY=strict`, and is never a `.env` file. Parent directories
+are created and an existing file is replaced. A value held as a URL or an
+uploaded file has no bytes and cannot be saved.
+
+In Kedi Notebook (host mode), ``> show: `photo` `` displays an image inline and
+gives audio a player instead of printing the label.
 
 ## History
 
