@@ -303,6 +303,7 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
         )
         == "`[search, fetch]`"
     )
+    assert "largest media value" in lsp_directive_help_module._setting_adapter_label("media_limit")
     cwd_hover = lsp_directive_help_module._setting_adapter_label("cwd")
     assert "Claude Agent SDK settings" in cwd_hover
     assert "Codex App Server settings" in cwd_hover

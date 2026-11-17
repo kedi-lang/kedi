@@ -8,7 +8,7 @@ from kedi.directive_values import ADAPTER_RULES, parse_scalar, validate_field
 SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
 
-KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset({"tool_reason"})
+KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset({"tool_reason", "media_limit"})
 
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -130,6 +130,14 @@ def tool_reason_enabled(settings: SettingsMap, *, default: bool = False) -> bool
         raise TypeError(
             "tool_reason must be a boolean; Python expressions must return True or False"
         )
+    return value
+
+
+def media_limit_bytes(settings: SettingsMap, *, default: int | None = None) -> int | None:
+    """The largest media value, in bytes, a request may attach; ``None`` keeps the 20 MB cap."""
+    value = settings.get("media_limit", default)
+    if value is not None:
+        validate_field("settings", "media_limit", value)
     return value
 
 

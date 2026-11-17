@@ -125,6 +125,7 @@ from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemod
 from kedi.agent_profile.settings import (
     KEDI_RUNTIME_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
+    media_limit_bytes,
     tool_reason_enabled,
 )
 from kedi.model_normalization import normalize_for_pydantic_ai
@@ -208,6 +209,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         codemode: bool | CodeModeSettings = False,
         query_artifact: bool = False,
         tool_reason: bool = False,
+        media_limit: int | None = None,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
@@ -229,6 +231,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if not isinstance(tool_reason, bool):
             raise TypeError("tool_reason must be a boolean")
         self.tool_reason = tool_reason
+        self.media_limit = media_limit_bytes({}, default=media_limit)
         self._tool_reasons_var: ContextVar[dict[str, str | None]] = ContextVar(
             f"kedi_pydantic_tool_reasons_{id(self)}", default={}
         )
@@ -509,6 +512,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def active_tool_reason(self) -> bool:
         return tool_reason_enabled(
             self.active_profile.settings, default=getattr(self, "tool_reason", False)
+        )
+
+    @property
+    def active_media_limit(self) -> int | None:
+        return media_limit_bytes(
+            self.active_profile.settings, default=getattr(self, "media_limit", None)
         )
 
     @staticmethod
@@ -866,9 +875,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         media = take_prompt_media()
         if not media:
             return prompt
-        from kedi.agent_adapter.request.media import history_keeps_media
+        from kedi.agent_adapter.request.media import check_media_limit, history_keeps_media
 
         from .media import user_prompt
+
+        check_media_limit(media, self.active_media_limit)
 
         history = run_kwargs.get("message_history")
         reusable = history_keeps_media(

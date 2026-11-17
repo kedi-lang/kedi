@@ -37,6 +37,20 @@ rules: with `KEDI_WORKSPACE_POLICY=strict`, the default, a path cannot leave
 the working directory, and `.env` files are refused. A media value is limited
 to 20 MB.
 
+To send smaller media, set `media_limit` in `> settings:`. It takes `5MB`,
+`512KB` or a number of bytes (KB and MB are binary), and applies to the
+requests in its scope on Pydantic AI and LangChain:
+
+```kedi
+> settings:
+    media_limit: 5MB
+```
+
+A larger attachment fails before the request, naming it. The setting overrides
+`PydanticAdapter(media_limit=...)` and `LangChainAdapter(media_limit=...)`. It
+is not sent to the model provider, and values held as a URL or a provider file
+ID have no local size, so they are not checked.
+
 Loading is always explicit. Keep a loaded value with single-backtick Python,
 ``[photo: Image] = `image("cat.png")` ``, or reference a loader call directly
 in a prompt, `<<image(cat.png)>>`. A binding, parameter or capture typed
