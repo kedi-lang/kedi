@@ -49,7 +49,8 @@ class Case:
     expected: str
 
 
-def red_png(size: int = 64) -> bytes:
+def red_png(size: int = 512) -> bytes:
+    # OpenAI models ignore very small images: a 64 px PNG adds no prompt tokens.
     def chunk(tag: bytes, data: bytes) -> bytes:
         body = tag + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
@@ -156,7 +157,11 @@ def adapter_for(spec: str, timeout: float):
         from kedi.agent_adapter import LangChainAdapter
 
         # LangChain's Gemini client retries six times by default, each up to the timeout.
-        return LangChainAdapter(model, model_settings={**settings, "max_retries": 1})
+        langchain_settings = {**settings, "max_retries": 1}
+        if model.startswith("openrouter:"):
+            # ChatOpenRouter takes its timeout in milliseconds; the other clients take seconds.
+            langchain_settings["timeout"] = int(timeout * 1000)
+        return LangChainAdapter(model, model_settings=langchain_settings)
     raise SystemExit(f"--model {spec!r}: use pydantic=<model> or langchain=<model>")
 
 
