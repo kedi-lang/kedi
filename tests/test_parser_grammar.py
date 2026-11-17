@@ -35,6 +35,7 @@ from kedi.lang import (
     TypePython,
     TypeRef,
     TypeUnion,
+    compile_program,
     parse_program,
 )
 from kedi.lang.ast import (
@@ -1317,3 +1318,23 @@ def test_line_continuation_collapses_to_single_space():
     # The trailing-WS-rstrip + `\<newline>` + leading-WS-strip rule
     # collapses to single spaces.
     assert seg.text == "Start middle end"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("= a\\s \\\n  1\n", "a  1"),
+        ("= a\\s\\s \\\n  1\n", "a   1"),
+        ("= a\\s\\\n  1\n", "a  1"),
+        ("= a\\s \\  \n  1\n", "a  1"),
+        ("= a\\t \\\n  1\n", "a\t 1"),
+        ("= a\\n \\\n  1\n", "a\n 1"),
+        ("= a\\s \\\n  \\s1\n", "a   1"),
+        ("= .`0`\\t \\\n  w\n", ".0\t w"),
+        ("= {\\t \\\n  w\n", "{\t w"),
+        ("= a \\\n  1\n", "a 1"),
+    ],
+)
+def test_line_continuation_keeps_escaped_whitespace(source: str, expected: str) -> None:
+    # Only source whitespace collapses at the join; \s, \t and \n are content.
+    assert compile_program(parse_program(source)).run_main() == expected

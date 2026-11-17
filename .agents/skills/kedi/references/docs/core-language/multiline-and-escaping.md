@@ -76,7 +76,10 @@ A rendered return uses a trailing backslash:
 ```
 
 This joins physical lines into one return expression. It is not model-template
-continuation. Use `\\` when the output must contain a literal backslash.
+continuation. The source whitespace around the backslash, at the end of one line
+and the start of the next, becomes a single space. Escaped whitespace next to it
+is content and stays: `= a\s \` followed by `1` returns `a  1`. Use `\\` when
+the output must contain a literal backslash.
 
 ## Escapes
 
