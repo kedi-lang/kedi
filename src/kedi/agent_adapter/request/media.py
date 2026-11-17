@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from kedi.media import Media, MediaError, MediaKind, Reference
+from kedi.media import Media, MediaError, MediaKind, Reference, format_size
 
 MediaSource = Literal["data", "url", "file_id"]
 MediaProvider = Literal["openai", "anthropic", "google", "bedrock", "typesafe", "laya"]
@@ -311,6 +311,23 @@ def media_provider(system: str | None) -> MediaProvider | None:
     if normalized == "laya":
         return "laya"
     return None
+
+
+def check_media_limit(attachments: Sequence[MediaAttachment], limit: int | None) -> None:
+    """Fail before model I/O when an attachment's bytes exceed the ``media_limit`` setting.
+
+    URLs and provider file IDs have no local size and are not checked.
+    """
+
+    if limit is None:
+        return
+    for attachment in attachments:
+        size = attachment.media.size
+        if size is not None and size > limit:
+            raise MediaError(
+                f"{attachment.name}: {attachment.media.label} is larger than the "
+                f"media_limit setting ({format_size(limit)})"
+            )
 
 
 def check_media_support(

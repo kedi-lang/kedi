@@ -640,6 +640,12 @@ def _setting_adapter_label(name: str) -> str:
             "Adds an optional reason to tools that may require approval. "
             "Overrides the adapter constructor in this scope; not sent to the model provider."
         )
+    if name == "media_limit":
+        return (
+            "Kedi media setting for Pydantic AI and LangChain: the largest media value a request "
+            "may attach, such as 5MB, 512KB or a number of bytes (default: the 20 MB load limit). "
+            "Overrides the adapter constructor in this scope; not sent to the model provider."
+        )
     labels: list[str] = []
     if name in PYDANTIC_MODEL_SETTING_KEYS:
         labels.append("Pydantic AI `ModelSettings`")

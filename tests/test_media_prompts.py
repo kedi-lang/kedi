@@ -574,3 +574,41 @@ def test_debugger_events_carry_metadata_but_no_bytes(workspace: Path) -> None:
     assert payloads and all(payload["media"][0]["name"] == "cat_image" for payload in payloads)
     encoded = base64.b64encode(png_bytes(1)).decode()
     assert all(encoded not in json.dumps(payload, default=str) for payload in payloads)
+
+
+LIMITED = """> import: media
+> settings:
+    media_limit: 50
+
+[cat_image: Image] = `image("photos/cat.png")`
+[caption] << Describe <<cat_image>>.
+= <caption>
+"""
+
+
+@pytest.mark.parametrize("runner", [run_pydantic, run_langchain])
+def test_media_limit_setting_rejects_larger_media_before_the_request(
+    workspace: Path, runner: Any
+) -> None:
+    with pytest.raises(
+        KediExecutionError,
+        match=r"cat_image: <image cat\.png · image/png · 73 B> is larger than the "
+        r"media_limit setting \(50 B\)",
+    ):
+        runner(LIMITED)
+    _, seen = runner(LIMITED.replace("media_limit: 50", "media_limit: 1KB"))
+    assert len(seen) == 1
+
+
+def test_media_limit_adapter_argument_and_scope_override(workspace: Path) -> None:
+    source = LIMITED.replace("> settings:\n    media_limit: 50\n", "")
+    with pytest.raises(KediExecutionError, match=r"media_limit setting \(50 B\)"):
+        _run(source, LangChainAdapter(_FakeChat(), media_limit=50), None)
+    model = _FakeChat()
+    wider = LIMITED.replace("media_limit: 50", "media_limit: 1KB")
+    _run(wider, LangChainAdapter(model, media_limit=50), None)
+    assert len(model.seen) == 1
+    with pytest.raises(ValueError, match="positive number of bytes"):
+        PydanticAdapter(
+            FunctionModel(lambda messages, info: ModelResponse(parts=[])), media_limit=0
+        )

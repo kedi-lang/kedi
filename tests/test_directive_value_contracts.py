@@ -92,6 +92,9 @@ def test_boolean_literals_are_strict_and_diagnostics_target_value(scope, value):
         "> history:\n  enabled: true\n  processor: callback\n",
         "> agent: a2a:\n  endpoint: https://example.com\n  auth:\n    scheme: mystery\n",
         "> adapter: pydantic\n> settings:\n  tool_choice: unknown\n",
+        "> settings:\n  media_limit: lots\n",
+        "> settings:\n  media_limit: 5GB\n",
+        "> settings:\n  media_limit: 0\n",
     ],
 )
 def test_invalid_static_fields_fail_parser_and_editor(source):
@@ -634,3 +637,20 @@ def test_unrelated_python_bindings_preserve_provable_profile_selections():
     )
     position = lsp.Position(line=source.count("\n"), character=16)
     assert {item.label for item in compute_completion(source, None, position)} == {"none"}
+
+
+def test_media_limit_takes_sizes_in_bytes_kb_and_mb():
+    from kedi.agent_profile.settings import media_limit_bytes
+    from kedi.directive_values import parse_size
+
+    assert parse_size("5MB") == 5 * 1024 * 1024
+    assert parse_size("512 kb") == 512 * 1024
+    assert parse_size("20_000") == 20_000
+    assert parse_size("7B") == 7
+    with pytest.raises(ValueError, match="expected a size such as 5MB"):
+        parse_size("1.5MB")
+    assert media_limit_bytes({}) is None
+    assert media_limit_bytes({}, default=10) == 10
+    assert media_limit_bytes({"media_limit": 20}, default=10) == 20
+    with pytest.raises(ValueError, match="positive number of bytes"):
+        media_limit_bytes({"media_limit": "5MB"})

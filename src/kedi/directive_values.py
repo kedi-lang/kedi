@@ -39,6 +39,10 @@ class ValueRule:
             raise ValueError("lists and mappings require an inline Python expression")
         if self.kind == "python":
             raise ValueError("expected an inline Python expression")
+        if self.kind == "size":
+            value = parse_size(raw)
+            self.validate(value)
+            return value
         value = parse_scalar(raw)
         if self.kind in {"option", "string", "path"}:
             value = raw
@@ -67,6 +71,12 @@ class ValueRule:
                 if not valid:
                     operator = ">" if self.exclusive_minimum else ">="
                     raise ValueError(f"expected a value {operator} {self.minimum:g}")
+        elif self.kind == "size":
+            if type(value) is not int or value < 1:
+                raise ValueError(
+                    "expected a size such as 5MB, 512KB or a number of bytes; "
+                    "Python expressions must return a positive number of bytes"
+                )
         elif self.kind == "string":
             if not isinstance(value, str):
                 raise ValueError("expected a string")
@@ -84,6 +94,18 @@ class ValueRule:
                 raise ValueError(f"expected true, false, or one of: {', '.join(self.options)}")
         elif value not in self.options and value not in self.aliases:
             raise ValueError(f"expected one of: {', '.join(self.options)}")
+
+
+_SIZE_UNITS = {"": 1, "b": 1, "kb": 1024, "mb": 1024 * 1024}
+
+
+def parse_size(raw: str) -> int:
+    """Decode a byte size: ``5MB``, ``512 KB``, ``20_000`` (KB and MB are binary, as in labels)."""
+    match = re.fullmatch(r"([0-9]+(?:_[0-9]+)*)\s*([A-Za-z]*)", raw.strip())
+    unit = "" if match is None else match.group(2).lower()
+    if match is None or unit not in _SIZE_UNITS:
+        raise ValueError("expected a size such as 5MB, 512KB or a number of bytes")
+    return int(match.group(1)) * _SIZE_UNITS[unit]
 
 
 def parse_scalar(raw: str) -> Any:
@@ -201,6 +223,7 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
     "budget": {"request_limit": POSITIVE_INT, "tool_attempt_limit": POSITIVE_INT},
     "settings": {
         "tool_reason": ACTIVATION,
+        "media_limit": ValueRule("Largest media value sent to the model", kind="size"),
         "callbacks": PYTHON_OBJECT,
         "rate_limiter": PYTHON_OBJECT,
         "seed": INTEGER,

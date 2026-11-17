@@ -92,6 +92,7 @@ from kedi.agent_profile.settings import (
     KEDI_RUNTIME_SETTING_KEYS,
     LANGCHAIN_MODEL_SETTING_KEYS,
     langchain_model_settings,
+    media_limit_bytes,
     tool_reason_enabled,
 )
 from kedi.artifacts.policy import warn_unmatched_tool_exclusions
@@ -163,6 +164,7 @@ class LangChainAdapter(HookRegistrationMixin):
         codemode: bool | CodeModeSettings = False,
         query_artifact: bool = False,
         tool_reason: bool = False,
+        media_limit: int | None = None,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
@@ -179,6 +181,7 @@ class LangChainAdapter(HookRegistrationMixin):
         if not isinstance(tool_reason, bool):
             raise TypeError("tool_reason must be a boolean")
         self.tool_reason = tool_reason
+        self.media_limit = media_limit_bytes({}, default=media_limit)
         for name, retries in (("tool_retries", tool_retries), ("output_retries", output_retries)):
             if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
@@ -280,6 +283,10 @@ class LangChainAdapter(HookRegistrationMixin):
     @property
     def active_tool_reason(self) -> bool:
         return tool_reason_enabled(self.active_profile.settings, default=self.tool_reason)
+
+    @property
+    def active_media_limit(self) -> int | None:
+        return media_limit_bytes(self.active_profile.settings, default=self.media_limit)
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[BaseModel]:
@@ -736,7 +743,9 @@ class LangChainAdapter(HookRegistrationMixin):
             return prompt
         from langchain_core.messages import messages_from_dict
 
-        from kedi.agent_adapter.request.media import history_keeps_media
+        from kedi.agent_adapter.request.media import check_media_limit, history_keeps_media
+
+        check_media_limit(media, self.active_media_limit)
 
         from .media import user_content
 
