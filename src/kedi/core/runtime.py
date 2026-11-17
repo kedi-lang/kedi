@@ -380,9 +380,12 @@ class KediRuntime:
     def _drain_outermost(self, primary_exc: BaseException | None) -> None:
         try:
             self.drain()
-        except BaseException:
+        except BaseException as failure:
             if primary_exc is None:
                 raise
+            if failure is primary_exc:
+                # The failed template is what raised the primary error: already reported.
+                return
             import logging
 
             logging.getLogger("kedi").error(

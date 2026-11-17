@@ -173,7 +173,7 @@ def run_case(spec: str, case: Case, timeout: float) -> tuple[str, str]:
         cause: BaseException = exc
         while cause.__cause__ is not None and not isinstance(cause, MediaError):
             cause = cause.__cause__
-        message = " ".join(str(cause).split())[:160]
+        message = " ".join(str(cause).split())[:400]
         if isinstance(cause, MediaError) or "cannot read" in message or "do not accept" in message:
             return "REJECTED", message
         return "ERROR", f"{type(cause).__name__}: {message}"
