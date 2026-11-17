@@ -330,6 +330,92 @@ def test_langchain_blocks_for_urls_files_and_documents(monkeypatch: pytest.Monke
     assert langchain_media.langchain_model_name(SimpleNamespace()) is None
 
 
+def _wav() -> bytes:
+    import io
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 80)
+    return buffer.getvalue()
+
+
+NOTES = Document.from_bytes(b"The secret word is banana.\n", "text/markdown")
+CLIP = Audio.from_bytes(_wav(), "audio/wav")
+
+
+def _anthropic_wire(attachment: MediaAttachment) -> list[Any]:
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.messages import HumanMessage
+
+    model = ChatAnthropic(model="claude-sonnet-5-5", api_key="test")
+    content = asyncio.run(
+        langchain_media.user_content("Read it.", [attachment], history=None, model=model)
+    )
+    return model._get_request_payload([HumanMessage(content=content)])["messages"][0]["content"]
+
+
+def _gemini_wire(attachment: MediaAttachment) -> list[Any]:
+    from langchain_core.messages import HumanMessage
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    model = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key="test")
+    content = asyncio.run(
+        langchain_media.user_content("Read it.", [attachment], history=None, model=model)
+    )
+    request = model._prepare_request([HumanMessage(content=content)])
+    (message,) = request["contents"]
+    return [part.model_dump(exclude_none=True) for part in message.parts]
+
+
+def test_langchain_anthropic_request_bodies_carry_kedi_media() -> None:
+    # The provider package turns Kedi's standard blocks into its own wire format.
+    image = _anthropic_wire(_attach("cat", CAT))
+    assert image[1] == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": base64.b64encode(CAT.data or b"").decode(),
+        },
+    }
+    assert image[0]["text"].endswith('<image id="cat" type="image/png">\n')
+    pdf = _anthropic_wire(_attach("contract", PDF))
+    assert pdf[1] == {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64.b64encode(PDF.data or b"").decode(),
+        },
+    }
+    (notes,) = _anthropic_wire(_attach("notes", NOTES))
+    assert "The secret word is banana." in notes["text"]
+    linked = _anthropic_wire(_attach("cat", Image.from_url("https://example.com/cat.png")))
+    assert linked[1] == {
+        "type": "image",
+        "source": {"type": "url", "url": "https://example.com/cat.png"},
+    }
+    with pytest.raises(MediaError, match="Anthropic models do not accept audio"):
+        _anthropic_wire(_attach("clip", CLIP))
+
+
+def test_langchain_gemini_request_bodies_carry_kedi_media() -> None:
+    for name, media in [("cat", CAT), ("contract", PDF), ("clip", CLIP)]:
+        parts = _gemini_wire(_attach(name, media))
+        assert parts[1] == {"inline_data": {"data": media.data, "mime_type": media.media_type}}
+        assert f'id="{name}"' in parts[0]["text"]
+    (notes,) = _gemini_wire(_attach("notes", NOTES))
+    assert "The secret word is banana." in notes["text"]
+    talk = _gemini_wire(_attach("talk", Video.from_url("https://www.youtube.com/watch?v=x1")))
+    assert talk[1] == {
+        "file_data": {"file_uri": "https://www.youtube.com/watch?v=x1", "mime_type": "video/mp4"}
+    }
+
+
 def test_langchain_profile_and_client_detection() -> None:
     from langchain_openai import ChatOpenAI
 

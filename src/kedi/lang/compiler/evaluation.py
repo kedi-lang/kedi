@@ -241,13 +241,14 @@ def render_expression(
 
 
 def evaluate_binding_rhs(
-    rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
+    rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any], *, render: bool = True
 ) -> tuple[Any, str]:
     """Return a backtick's native value (including None), or NO_NATIVE_VALUE with text.
 
     Only a sole single-backtick expression keeps its native value; every template, including a
     sole ``<proc()>``, renders text. A native value is never converted to text: the second item
-    is then empty, and no ``__str__`` or ``__repr__`` of the value runs.
+    is then empty, and no ``__str__`` or ``__repr__`` of the value runs. With ``render=False``
+    a template is not rendered either and the text is empty.
     """
     non_ws = [
         s
@@ -257,6 +258,8 @@ def evaluate_binding_rhs(
     if len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment):
         seg = non_ws[0]
         return force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)), ""
+    if not render:
+        return NO_NATIVE_VALUE, ""
     return NO_NATIVE_VALUE, render_expression(rt, segments, kwargs, context="assign")
 
 
@@ -345,9 +348,6 @@ def _segment_parts(
                 parts.append(substitution_text(force(env[seg.name]), seg.name))
             else:
                 parts.append("")
-        elif isinstance(seg, PythonExprNativeSegment) and context == "show":
-            # `> show: `value`` displays any value, the way a single backtick always has.
-            parts.append(str(force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
             parts.append(substitution_text(value, f"`{seg.code}`"))

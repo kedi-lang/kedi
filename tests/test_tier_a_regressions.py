@@ -96,6 +96,19 @@ def test_a3_drain_runs_on_exceptional_exit_and_preserves_primary(
     assert any("during drain after a primary error" in rec.message for rec in caplog.records)
 
 
+def test_a3_drain_does_not_log_the_failure_that_is_the_primary_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The failed template is itself the primary error: reading <x> raises it, and the drain then
+    # meets the same failure. It is reported once, by the raise, with no second traceback.
+    src = ">> failing [x]\n= <x>\n"
+    rt = compile_program(parse_program(src), adapter=AlwaysFailAdapter(), engine=ThreadEngine(2))
+    with caplog.at_level(logging.ERROR, logger="kedi"):
+        with pytest.raises(KediExecutionError, match="template boom"):
+            rt.run_main()
+    assert not any("during drain" in rec.message for rec in caplog.records)
+
+
 # --- A4: re-entrant schedule honors not-yet-ready deps --------------------------------------
 
 

@@ -200,11 +200,11 @@ def format_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
-def workspace_path(raw: str | os.PathLike[str]) -> Path:
+def workspace_path(raw: str | os.PathLike[str], *, writing: bool = False) -> Path:
     """Resolve a path with the bundled filesystem module's rules.
 
     Relative paths start at the working directory. With ``KEDI_WORKSPACE_POLICY=strict``
-    (the default) a path may not leave it. ``.env`` files are never loaded as media.
+    (the default) a path may not leave it. ``.env`` files are never read or written as media.
     """
 
     root = Path.cwd().resolve()
@@ -218,7 +218,9 @@ def workspace_path(raw: str | os.PathLike[str]) -> Path:
     if policy == "strict" and not resolved.is_relative_to(root):
         raise PermissionError(f"path escapes the working directory: {raw}")
     if resolved.name == ".env" or resolved.name.startswith(".env."):
-        raise PermissionError(f"refusing to load a secret file as media: {raw}")
+        action = "write media to" if writing else "load"
+        suffix = "" if writing else " as media"
+        raise PermissionError(f"refusing to {action} a secret file{suffix}: {raw}")
     return resolved
 
 
@@ -369,6 +371,25 @@ class Media:
             name=name,
             filename=self.filename,
         )
+
+    def save(self, path: str | os.PathLike[str]) -> Path:
+        """Write the media's bytes to a workspace path and return the resolved path.
+
+        Paths follow :func:`workspace_path`: relative to the working directory, inside it under
+        ``KEDI_WORKSPACE_POLICY=strict``, never a ``.env`` file. Parent directories are created
+        and an existing file is replaced. A value held as a URL or an uploaded file has no bytes
+        to write.
+        """
+
+        if self.data is None:
+            held = "a URL" if self.url is not None else "an uploaded file"
+            raise MediaError(f"{self.label} is held as {held} and has no bytes to save")
+        target = workspace_path(path, writing=True)
+        if target.is_dir():
+            raise IsADirectoryError(f"cannot save media over a directory: {path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.data)
+        return target
 
     # Display
 
@@ -895,6 +916,55 @@ def _utf8_text_bytes(data: bytes, source: str) -> bytes:
 
 def _rebuild_media(cls: type[Media], values: dict[str, Any]) -> Media:
     return cls(**values)
+
+
+# Process bridges (the notebook's host Python worker) carry JSON. A media value crosses as
+# {BRIDGE_KEY: {"type": "Image", <fields>}} with base64 data, keeping its class, name and filename.
+BRIDGE_KEY = "__kedi_media__"
+_BRIDGE_TYPES: dict[str, type[Media]] = {
+    cls.__name__: cls for cls in (Image, Audio, Video, Document)
+}
+_MAX_BRIDGE_DATA_CHARS = 4 * -(-MAX_MEDIA_BYTES // 3)
+
+
+def bridge_type(name: str) -> type[Media] | None:
+    """The media class a bridge names in a type descriptor (``Media`` included)."""
+
+    return Media if name == "Media" else _BRIDGE_TYPES.get(name)
+
+
+def to_bridge(media: Media) -> dict[str, Any]:
+    """Encode a media value as ``{BRIDGE_KEY: ...}`` for a JSON process bridge."""
+
+    fields: dict[str, Any] = {name: getattr(media, name) for name in _FIELDS}
+    if media.data is not None:
+        fields["data"] = base64.b64encode(media.data).decode("ascii")
+    kind = next(cls for cls in _BRIDGE_TYPES.values() if isinstance(media, cls))
+    return {BRIDGE_KEY: {"type": kind.__name__, **fields}}
+
+
+def from_bridge(payload: Any) -> Media:
+    """Rebuild the media value :func:`to_bridge` encoded; ``payload`` is the value under
+    ``BRIDGE_KEY``. It may come from another process, so every field is checked."""
+
+    if not isinstance(payload, dict):
+        raise MediaError("A bridged media value must be an object")
+    kind = payload.get("type")
+    cls = _BRIDGE_TYPES.get(kind) if isinstance(kind, str) else None
+    if cls is None:
+        raise MediaError(f"Unknown bridged media type {kind!r}")
+    fields = {name: payload.get(name) for name in _FIELDS}
+    if any(value is not None and not isinstance(value, str) for value in fields.values()):
+        raise MediaError("Bridged media fields must be strings")
+    data = fields["data"]
+    if data is not None:
+        if len(data) > _MAX_BRIDGE_DATA_CHARS:
+            raise MediaError(f"media values are limited to {format_size(MAX_MEDIA_BYTES)}")
+        try:
+            fields["data"] = base64.b64decode(data, validate=True)
+        except binascii.Error as exc:
+            raise MediaError("Bridged media data is not valid base64") from exc
+    return _rebuild_media(cls, fields)
 
 
 def _serialize(value: Media, info: core_schema.SerializationInfo) -> Any:

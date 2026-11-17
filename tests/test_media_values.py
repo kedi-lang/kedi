@@ -495,3 +495,87 @@ def test_raw_invokes_resolve_binding_references_when_built() -> None:
     )
     future.set_result({"notes": "later"})
     assert pending.resolve().items[0].text == "later"
+
+
+def test_save_writes_bytes_inside_the_workspace(workspace: Path) -> None:
+    image = Image.from_path("cat.png")
+    saved = image.save("out/nested/copy.png")
+    assert saved == (workspace / "out/nested/copy.png").resolve()
+    assert saved.read_bytes() == png_bytes()
+    notes = Document.from_path("notes.md")
+    assert notes.save("notes-copy.md").read_text(encoding="utf-8") == notes.text
+    image.save("out/nested/copy.png")  # an existing file is replaced
+
+    with pytest.raises(PermissionError, match="refusing to write media to a secret file: .env"):
+        image.save(".env")
+    with pytest.raises(PermissionError, match="escapes the working directory"):
+        image.save("../outside.png")
+    with pytest.raises(IsADirectoryError, match="cannot save media over a directory: out"):
+        image.save("out")
+    with pytest.raises(MediaError, match="is held as a URL and has no bytes to save"):
+        Image.from_url("https://example.com/cat.png").save("url.png")
+    uploaded = Media.from_file_id("file-1", provider="openai", media_type="application/pdf")
+    with pytest.raises(MediaError, match="is held as an uploaded file and has no bytes"):
+        uploaded.save("uploaded.pdf")
+
+
+def test_media_module_save_procedure(workspace: Path) -> None:
+    from kedi.lang import compile_program, parse_program
+
+    source = (
+        "> import: media\n"
+        '[cat: Image] = `image("cat.png")`\n'
+        "[saved] = <save(`cat`, copies/cat.png)>\n"
+        "= <saved>\n"
+    )
+    assert compile_program(parse_program(source)).run_main() == str(
+        (workspace / "copies/cat.png").resolve()
+    )
+    assert (workspace / "copies/cat.png").read_bytes() == png_bytes()
+
+
+def test_media_round_trips_through_the_bridge_encoding(workspace: Path) -> None:
+    import json
+
+    from kedi.media import BRIDGE_KEY, bridge_type, from_bridge, to_bridge
+
+    values = [
+        Image.from_path("cat.png", name="cat"),
+        Document.from_bytes(b"# Notes\n", "text/markdown", name="notes"),
+        Audio.from_url("https://example.com/a.mp3"),
+        Video.from_url("https://www.youtube.com/watch?v=x1"),
+        Media.from_file_id("file-1", provider="openai", media_type="application/pdf"),
+    ]
+    for value in values:
+        wire = json.loads(json.dumps(to_bridge(value)))
+        back = from_bridge(wire[BRIDGE_KEY])
+        assert type(back) is type(value) and back == value
+        assert (back.name, back.filename, back.label) == (value.name, value.filename, value.label)
+    assert bridge_type("Media") is Media and bridge_type("Audio") is Audio
+    assert bridge_type("Path") is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ([], "must be an object"),
+        ({"type": "Media", "media_type": "image/png", "data": ""}, "Unknown bridged media type"),
+        ({"type": 1}, "Unknown bridged media type 1"),
+        ({"type": "Image", "media_type": "image/png", "data": 1}, "fields must be strings"),
+        ({"type": "Image", "media_type": "image/png", "data": "@@"}, "not valid base64"),
+        ({"type": "Audio", "media_type": "image/png", "data": "aGk="}, "not audio"),
+    ],
+)
+def test_bridge_decoding_checks_every_field(payload: object, message: str) -> None:
+    from kedi.media import from_bridge
+
+    with pytest.raises(MediaError, match=message):
+        from_bridge(payload)
+
+
+def test_bridge_decoding_bounds_the_data_before_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kedi import media
+
+    monkeypatch.setattr(media, "_MAX_BRIDGE_DATA_CHARS", 8)
+    with pytest.raises(MediaError, match="media values are limited to 20.0 MB"):
+        media.from_bridge({"type": "Image", "media_type": "image/png", "data": "A" * 12})

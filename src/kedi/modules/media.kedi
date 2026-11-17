@@ -65,11 +65,26 @@ from kedi.media import Audio, Document, Image, Media, Video
     ###
     = `Document.coerce(source)`
 
+@save(media: Media, path: str) -> str:
+    ###
+    Write a media value's bytes to a workspace path.
+
+    Args:
+        media (Media): An image, audio, video or document loaded from a path, bytes or a data URI.
+        path (str): A path relative to the working directory. Parent directories are created and an
+            existing file is replaced. KEDI_WORKSPACE_POLICY applies and .env files are refused.
+
+    Returns:
+        str: The written path.
+    ###
+    = `str(media.save(path))`
+
 > export:
   image
   audio
   video
   document
+  save
   Media
   Image
   Audio

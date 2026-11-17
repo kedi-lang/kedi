@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, cast
 import typing_extensions
 from pydantic import BaseModel, Field, create_model
 
+from .. import media
 from ..promise import KediPromise, force
 from .debug import ExecutorDebugEvent, ExecutorDebugExporter
 
@@ -238,7 +239,7 @@ class PlaygroundExecutor:
             ]
             for owner, name, value in validated:
                 write_owned_value(owner, name, value)
-            result = response.get("result")
+            result = _decode_bridge_value(response.get("result"))
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -423,6 +424,8 @@ def _json_value(value: Any) -> Any:
         return value
     if isinstance(value, PlaygroundReference):
         return {_REFERENCE_KEY: value.handle}
+    if isinstance(value, media.Media):
+        return media.to_bridge(value)
     if isinstance(value, BaseModel):
         return _json_value(value.model_dump(mode="json"))
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
@@ -453,6 +456,8 @@ def _decode_bridge_value(value: Any) -> Any:
         if not isinstance(handle, str):
             raise TypeError("Playground reference handle must be a string")
         return PlaygroundReference(handle)
+    if set(value) == {media.BRIDGE_KEY}:
+        return media.from_bridge(value[media.BRIDGE_KEY])
     return {name: _decode_bridge_value(item) for name, item in value.items()}
 
 
@@ -492,6 +497,12 @@ def _decode_type_descriptor(descriptor: Mapping[str, Any]) -> Any:
         return cast(Any, typing.Literal)[values]
     if kind == "pydantic_model":
         return _decode_pydantic_model(descriptor)
+    if kind == "media":
+        name = descriptor.get("name")
+        media_type = media.bridge_type(name) if isinstance(name, str) else None
+        if media_type is None:
+            raise TypeError(f"Unknown playground media type: {name!r}")
+        return media_type
     raise TypeError(f"Unsupported playground type descriptor: {kind!r}")
 
 
