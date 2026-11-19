@@ -613,7 +613,7 @@ class LangChainAdapter(HookRegistrationMixin):
                     report_invocation(
                         replace(run_state.usage, requests=run_state.native_usage.requests)
                     )
-            self._capture_conversation_messages(result, run_state=run_state)
+            self._capture_conversation_messages(result, run_state=run_state, response_complete=True)
             if invocation_observer() is not None and not run_state.usage.requests:
                 report_invocation(
                     _langchain_invocation_usage(
@@ -807,7 +807,11 @@ class LangChainAdapter(HookRegistrationMixin):
         return _langchain_with_cache_control(SystemMessage(content=prompt))
 
     def _capture_conversation_messages(
-        self, result: Any, *, run_state: LangChainRunState | None = None
+        self,
+        result: Any,
+        *,
+        run_state: LangChainRunState | None = None,
+        response_complete: bool = False,
     ) -> None:
         conversation = self._conversation_var.get()
         if conversation is None or not isinstance(result, Mapping):
@@ -822,7 +826,7 @@ class LangChainAdapter(HookRegistrationMixin):
 
         if all(isinstance(message, BaseMessage) for message in messages):
             messages = list(messages)
-            if messages and isinstance(last := messages[-1], ToolMessage):
+            if response_complete and messages and isinstance(last := messages[-1], ToolMessage):
                 messages[-1] = last.model_copy(
                     update={
                         "additional_kwargs": {
@@ -858,7 +862,8 @@ class LangChainAdapter(HookRegistrationMixin):
                 self._history_processor_runner.capture(
                     messages, conversation.result_state["langchain_messages"]
                 )
-                conversation.mark_completed()
+                if response_complete:
+                    conversation.mark_completed()
 
     def _create_agent(
         self,

@@ -20,6 +20,8 @@ from kedi.decisions import capture_decision_evidence
 def _capture_conversation_messages(
     conversation: AdapterConversationContext | SubagentConversationContext | None,
     result: Any,
+    *,
+    response_complete: bool = False,
 ) -> None:
     if conversation is None:
         return
@@ -34,7 +36,7 @@ def _capture_conversation_messages(
     from kedi.agent_adapter.request_budget import capture_history_usage
 
     messages = list(result.all_messages())
-    if messages and isinstance(last := messages[-1], ModelRequest):
+    if response_complete and messages and isinstance(last := messages[-1], ModelRequest):
         if any(isinstance(part, ToolReturnPart) for part in last.parts) and not any(
             isinstance(part, UserPromptPart) for part in last.parts
         ):
@@ -57,7 +59,7 @@ def _capture_conversation_messages(
                 trailing_messages=conversation.result_state["pydantic_messages"][index + 1 :],
             )
             break
-    if isinstance(conversation, AdapterConversationContext):
+    if response_complete and isinstance(conversation, AdapterConversationContext):
         conversation.mark_completed()
     if isinstance(conversation, AdapterConversationContext) and any(
         isinstance(part, CompactionPart)

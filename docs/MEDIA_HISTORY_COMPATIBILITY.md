@@ -26,7 +26,11 @@ the old cycle when a new request starts.
 
 Completion is recorded after a successful adapter run. Ordinary tool exchanges
 inside a running loop remain distinct, and unfinished calls/results remain
-protected. System messages, checkpoints, signed reasoning and provider-required
+protected. Snapshots captured during interruption, cancellation or failure do
+not mark the response or conversation as completed. Their initiating prompt stays
+protected when history is processed on the next attempt; closed intermediate tool
+exchanges remain eligible for normal trimming.
+System messages, checkpoints, signed reasoning and provider-required
 items retain their existing protections. A completed cycle containing those items
 can therefore still be retained. Legacy histories without completion metadata
 are treated conservatively; a tool name alone is not proof of a completed run.

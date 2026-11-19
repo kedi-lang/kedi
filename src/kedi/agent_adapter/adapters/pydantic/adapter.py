@@ -753,7 +753,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 ):
                     yield agent_run
                     if agent_run.result is not None:
-                        self._capture_conversation_messages(conversation, agent_run)
+                        self._capture_conversation_messages(
+                            conversation, agent_run, response_complete=True
+                        )
                         if event_resolver is not None:
                             event_resolver.complete_run(final_text=str(agent_run.result.output))
 
@@ -843,7 +845,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                             ),
                             usage=usage,
                         )
-                self._capture_conversation_messages(conversation, result)
+                self._capture_conversation_messages(conversation, result, response_complete=True)
             finally:
                 if usage is not None:
                     report_invocation(
@@ -912,8 +914,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         self,
         conversation: AdapterConversationContext | SubagentConversationContext | None,
         result: Any,
+        *,
+        response_complete: bool = False,
     ) -> None:
-        _messages._capture_conversation_messages(conversation, result)
+        _messages._capture_conversation_messages(
+            conversation, result, response_complete=response_complete
+        )
         if isinstance(conversation, AdapterConversationContext):
             self._history_processor_runner.capture(
                 result.all_messages(), conversation.result_state["pydantic_messages"]
