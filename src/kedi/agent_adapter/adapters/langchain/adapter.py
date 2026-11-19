@@ -101,6 +101,8 @@ from kedi.resolved_types import ResolvedKediType
 from kedi.run_budget import assert_run_budget_supported, current_run_budget
 
 if TYPE_CHECKING:
+    from langchain_core.messages import HumanMessage
+
     from .runtime import LangChainRunState
 
 
@@ -611,7 +613,7 @@ class LangChainAdapter(HookRegistrationMixin):
                     report_invocation(
                         replace(run_state.usage, requests=run_state.native_usage.requests)
                     )
-            self._capture_conversation_messages(result, run_state=run_state)
+            self._capture_conversation_messages(result, run_state=run_state, response_complete=True)
             if invocation_observer() is not None and not run_state.usage.requests:
                 report_invocation(
                     _langchain_invocation_usage(
@@ -734,7 +736,7 @@ class LangChainAdapter(HookRegistrationMixin):
             ) from exc
         return init_chat_model(model, **settings)
 
-    async def _user_content(self, prompt: str, model: Any) -> str | list[Any]:
+    async def _user_content(self, prompt: str, model: Any) -> str | HumanMessage:
         """Attach the request's media, unless the replayed history already holds it."""
         from kedi.agent_adapter.request import take_prompt_media
 
@@ -747,7 +749,7 @@ class LangChainAdapter(HookRegistrationMixin):
 
         check_media_limit(media, self.active_media_limit)
 
-        from .media import user_content
+        from .media import user_message
 
         conversation = self._conversation_var.get()
         reusable = history_keeps_media(
@@ -762,22 +764,27 @@ class LangChainAdapter(HookRegistrationMixin):
             else None
         )
         history = list(messages_from_dict(serialized)) if isinstance(serialized, list) else None
-        return await user_content(prompt, media, history=history, model=model)
+        return await user_message(prompt, media, history=history, model=model)
 
     def _messages_for_prompt(
-        self, prompt: str | list[Any], *, model: Any | None = None
+        self, prompt: str | list[Any] | HumanMessage, *, model: Any | None = None
     ) -> list[Any]:
+        from langchain_core.messages import HumanMessage, messages_from_dict
+
         conversation = self._conversation_var.get()
         if conversation is None:
-            return [{"role": "user", "content": prompt}]
-        from langchain_core.messages import HumanMessage, messages_from_dict
+            return (
+                [prompt]
+                if isinstance(prompt, HumanMessage)
+                else [{"role": "user", "content": prompt}]
+            )
 
         history: list[Any] = []
         serialized = conversation.resume_state.get("langchain_messages")
         if isinstance(serialized, list):
             history = list(messages_from_dict(serialized))
         history = [_langchain_without_cache_control(message) for message in history]
-        current = HumanMessage(content=prompt)
+        current = prompt if isinstance(prompt, HumanMessage) else HumanMessage(content=prompt)
         if _langchain_uses_explicit_cache_blocks(model):
             current = cast(HumanMessage, _langchain_with_cache_control(current))
         return [*history, current]
@@ -800,7 +807,11 @@ class LangChainAdapter(HookRegistrationMixin):
         return _langchain_with_cache_control(SystemMessage(content=prompt))
 
     def _capture_conversation_messages(
-        self, result: Any, *, run_state: LangChainRunState | None = None
+        self,
+        result: Any,
+        *,
+        run_state: LangChainRunState | None = None,
+        response_complete: bool = False,
     ) -> None:
         conversation = self._conversation_var.get()
         if conversation is None or not isinstance(result, Mapping):
@@ -808,11 +819,22 @@ class LangChainAdapter(HookRegistrationMixin):
         messages = result.get("messages")
         if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
             return
-        from langchain_core.messages import AIMessage, BaseMessage, message_to_dict
+        from langchain_core.messages import AIMessage, BaseMessage, ToolMessage, message_to_dict
 
+        from kedi.agent_adapter.compaction.models import RESPONSE_COMPLETE_METADATA_KEY
         from kedi.agent_adapter.request_budget import capture_history_usage
 
         if all(isinstance(message, BaseMessage) for message in messages):
+            messages = list(messages)
+            if response_complete and messages and isinstance(last := messages[-1], ToolMessage):
+                messages[-1] = last.model_copy(
+                    update={
+                        "additional_kwargs": {
+                            **last.additional_kwargs,
+                            RESPONSE_COMPLETE_METADATA_KEY: True,
+                        }
+                    }
+                )
             if run_state is not None and run_state.instruction_digest is not None:
                 conversation.result_state["langchain_instruction_digest"] = (
                     run_state.instruction_digest
@@ -840,7 +862,8 @@ class LangChainAdapter(HookRegistrationMixin):
                 self._history_processor_runner.capture(
                     messages, conversation.result_state["langchain_messages"]
                 )
-                conversation.mark_completed()
+                if response_complete:
+                    conversation.mark_completed()
 
     def _create_agent(
         self,

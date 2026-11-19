@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, TypeAlias
 if TYPE_CHECKING:
     from kedi.lang.ast import Span
 
+RESPONSE_COMPLETE_METADATA_KEY = "kedi_response_complete"
+
 CompactionBackendKind: TypeAlias = Literal["native", "kedi", "disabled"]
 CompactionMode: TypeAlias = Literal["auto", "native", "kedi", "disabled"]
 CheckpointAnchorKind: TypeAlias = Literal[
@@ -143,6 +145,7 @@ class NativeHistoryEntryRef:
     checkpoint: bool = False
     unknown: bool = False
     provider_required: bool = False
+    response_complete: bool = False
     searchable_text: str = field(default="", repr=False, compare=False)
     origins: tuple[HistoryOrigin, ...] = field(default=(), compare=False)
 
@@ -164,6 +167,7 @@ class HistoryUnit:
     checkpoint: bool = False
     unknown: bool = False
     provider_required: bool = False
+    response_complete: bool = False
     origins: tuple[HistoryOrigin, ...] = field(default=(), compare=False)
 
 

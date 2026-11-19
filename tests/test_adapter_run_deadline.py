@@ -3,7 +3,12 @@ import time
 
 import pytest
 
-from kedi.agent_adapter.execution import RunDeadlineExceeded, run_sync, use_run_deadline
+from kedi.agent_adapter.execution import (
+    RunDeadlineExceeded,
+    run_sync,
+    use_async_owner_loop,
+    use_run_deadline,
+)
 
 
 @pytest.mark.parametrize("inside_loop", [False, True])
@@ -50,23 +55,58 @@ def test_nested_scope_cannot_extend_deadline_and_resets_afterwards() -> None:
     assert run_sync(asyncio.sleep(0, result="ok")) == "ok"
 
 
-def test_real_pydantic_adapter_cancels_pending_model_request() -> None:
+@pytest.mark.asyncio
+async def test_real_pydantic_adapter_cancels_pending_model_request() -> None:
     from pydantic_ai.messages import ModelMessage, ModelResponse
     from pydantic_ai.models.function import AgentInfo, FunctionModel
 
     from kedi.agent_adapter.adapters import PydanticAdapter
 
     closed: list[bool] = []
+    started = asyncio.Event()
 
     async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        started.set()
         try:
-            await asyncio.sleep(10)
+            await asyncio.Event().wait()
             raise AssertionError("deadline did not cancel the model")
         finally:
             closed.append(True)
 
     adapter = PydanticAdapter(FunctionModel(respond))
-    with use_run_deadline(time.monotonic() + 0.2):
+    task = asyncio.create_task(adapter.invoke(prompt="wait"))
+
+    def wait_with_deadline() -> None:
+        with use_run_deadline(time.monotonic() + 0.02):
+            with pytest.raises(RunDeadlineExceeded):
+                run_sync(task)
+        assert closed == [True]
+
+    try:
+        # Arm the sync bridge's deadline only after the model is actually pending.
+        await asyncio.wait_for(started.wait(), 5)
+        with use_async_owner_loop():
+            await asyncio.wait_for(asyncio.to_thread(wait_with_deadline), 5)
+        assert task.cancelled()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_expired_deadline_does_not_start_pydantic_model_request() -> None:
+    from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from kedi.agent_adapter.adapters import PydanticAdapter
+
+    requests: list[str] = []
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        requests.append("started")
+        return ModelResponse(parts=[TextPart("unexpected response")])
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    with use_run_deadline(time.monotonic() - 1):
         with pytest.raises(RunDeadlineExceeded):
             adapter.invoke_sync(prompt="wait")
-    assert closed == [True]
+    assert requests == []

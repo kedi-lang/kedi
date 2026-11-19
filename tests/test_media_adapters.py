@@ -312,8 +312,8 @@ def test_langchain_blocks_for_urls_files_and_documents(monkeypatch: pytest.Monke
         _attach("paper", Document.from_url("https://example.com/paper.pdf")),
     ]
     content = asyncio.run(
-        langchain_media.user_content("Compare.", attachments, history=None, model=model)
-    )
+        langchain_media.user_message("Compare.", attachments, history=None, model=model)
+    ).content
     assert isinstance(content, list)
     link, bucket, stored, paper = content[1:8:2]
     assert link == {"type": "image", "url": "https://example.com/render?id=3"}
@@ -353,8 +353,8 @@ def _anthropic_wire(attachment: MediaAttachment) -> list[Any]:
 
     model = ChatAnthropic(model="claude-sonnet-5-5", api_key="test")
     content = asyncio.run(
-        langchain_media.user_content("Read it.", [attachment], history=None, model=model)
-    )
+        langchain_media.user_message("Read it.", [attachment], history=None, model=model)
+    ).content
     return model._get_request_payload([HumanMessage(content=content)])["messages"][0]["content"]
 
 
@@ -364,8 +364,8 @@ def _gemini_wire(attachment: MediaAttachment) -> list[Any]:
 
     model = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key="test")
     content = asyncio.run(
-        langchain_media.user_content("Read it.", [attachment], history=None, model=model)
-    )
+        langchain_media.user_message("Read it.", [attachment], history=None, model=model)
+    ).content
     request = model._prepare_request([HumanMessage(content=content)])
     (message,) = request["contents"]
     return [part.model_dump(exclude_none=True) for part in message.parts]
@@ -428,17 +428,19 @@ def test_langchain_profile_and_client_detection() -> None:
     pdf = _attach("paper", PDF)
     no_pdf = SimpleNamespace(profile={"pdf_inputs": False})
     with pytest.raises(MediaError, match="paper: the model does not accept PDF input"):
-        asyncio.run(langchain_media.user_content("Read.", [pdf], history=None, model=no_pdf))
+        asyncio.run(langchain_media.user_message("Read.", [pdf], history=None, model=no_pdf))
     # Without a profile, and for text documents, nothing is assumed.
     notes = _attach("notes", Document.from_bytes(b"ship", "text/plain"))
     content = asyncio.run(
-        langchain_media.user_content(
+        langchain_media.user_message(
             "Read.", [notes, pdf], history=None, model=SimpleNamespace(profile=None)
         )
     )
-    assert isinstance(content, list)
-    assert content[0]["text"].startswith('<attachments>\n<document id="notes" type="text/plain">')
-    assert asyncio.run(langchain_media.user_content("Read.", [notes], history=None, model=no_pdf))
+    assert isinstance(content.content, list)
+    assert content.content[0]["text"].startswith(
+        '<attachments>\n<document id="notes" type="text/plain">'
+    )
+    assert asyncio.run(langchain_media.user_message("Read.", [notes], history=None, model=no_pdf))
 
 
 def test_langchain_history_scan_reads_labels_urls_and_inline_files() -> None:

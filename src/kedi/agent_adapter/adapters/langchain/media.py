@@ -11,7 +11,7 @@ import base64
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from kedi.agent_adapter.request.media import (
@@ -25,6 +25,11 @@ from kedi.agent_adapter.request.media import (
     unsent_attachments,
 )
 from kedi.media import Media, MediaError, media_kind
+
+if TYPE_CHECKING:
+    from langchain_core.messages import HumanMessage
+
+_SOURCE_IDENTITIES = "kedi_media_sources"
 
 _BLOCK_TYPES = {"image": "image", "audio": "audio", "video": "video", "document": "file"}
 _PROFILE_FLAGS = {
@@ -47,18 +52,20 @@ _CLIENT_PROVIDERS: Mapping[str, MediaProvider] = {
 }
 
 
-async def user_content(
+async def user_message(
     prompt: str,
     attachments: Sequence[MediaAttachment],
     *,
     history: Sequence[Any] | None,
     model: Any,
-) -> str | list[Any]:
-    """Build the human message content for one run.
+) -> HumanMessage:
+    """Build a human message with replayable source identities for lowered media.
 
     ``history`` is the replayed message history when it is known to reach the model intact;
     attachments it already holds under the same name and content are not sent again.
     """
+
+    from langchain_core.messages import HumanMessage
 
     provider = langchain_media_provider(model)
     model_name = langchain_model_name(model)
@@ -70,13 +77,25 @@ async def user_content(
         attachments, None if history is None else sent_attachments(history)
     )
     if not pending:
-        return prompt
-    return [
+        return HumanMessage(content=prompt)
+    content: list[str | dict[str, Any]] = [
         {"type": "text", "text": piece}
         if isinstance(piece, str)
         else await _media_block(piece, model)
         for piece in attachment_content(prompt, pending)
     ]
+    message = HumanMessage(content=content)
+    lowered = sent_attachments([message])
+    # Downloading changes a URL identity to a byte digest. Bind its source identity
+    # to the media still present in this message, outside model-visible content.
+    sources = {
+        item.name: {"source": list(item.identity), "lowered": list(lowered[item.name])}
+        for item in pending
+        if item.name in lowered and item.identity != lowered[item.name]
+    }
+    if sources:
+        message.additional_kwargs[_SOURCE_IDENTITIES] = sources
+    return message
 
 
 def langchain_media_provider(model: Any) -> MediaProvider | None:
@@ -110,9 +129,22 @@ def sent_attachments(messages: Sequence[Any]) -> dict[str, tuple[str, ...]]:
     for message in messages:
         if not isinstance(message, HumanMessage) or not isinstance(message.content, list):
             continue
+        present: dict[str, tuple[str, ...]] = {}
         scan_sent_content(
-            list(message.content), index, text_of=_block_text, identity_of=_block_identity
+            list(message.content), present, text_of=_block_text, identity_of=_block_identity
         )
+        sources = message.additional_kwargs.get(_SOURCE_IDENTITIES, {})
+        if isinstance(sources, Mapping):
+            for name, identity in present.items():
+                source = sources.get(name)
+                if (
+                    isinstance(source, Mapping)
+                    and source.get("lowered") == list(identity)
+                    and isinstance(source.get("source"), list)
+                    and all(isinstance(part, str) for part in source["source"])
+                ):
+                    present[name] = tuple(source["source"])
+        index.update(present)
     return index
 
 
@@ -215,5 +247,5 @@ __all__ = [
     "langchain_media_provider",
     "langchain_model_name",
     "sent_attachments",
-    "user_content",
+    "user_message",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import (
     Any,
     Sequence,
@@ -10,6 +11,7 @@ from pydantic_ai.messages import (
     CompactionPart,
 )
 
+from kedi.agent_adapter.compaction.models import RESPONSE_COMPLETE_METADATA_KEY
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.decisions import capture_decision_evidence
@@ -18,18 +20,34 @@ from kedi.decisions import capture_decision_evidence
 def _capture_conversation_messages(
     conversation: AdapterConversationContext | SubagentConversationContext | None,
     result: Any,
+    *,
+    response_complete: bool = False,
 ) -> None:
     if conversation is None:
         return
-    from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
+    from pydantic_ai.messages import (
+        ModelMessagesTypeAdapter,
+        ModelRequest,
+        ModelResponse,
+        ToolReturnPart,
+        UserPromptPart,
+    )
 
     from kedi.agent_adapter.request_budget import capture_history_usage
 
+    messages = list(result.all_messages())
+    if response_complete and messages and isinstance(last := messages[-1], ModelRequest):
+        if any(isinstance(part, ToolReturnPart) for part in last.parts) and not any(
+            isinstance(part, UserPromptPart) for part in last.parts
+        ):
+            # Only a successful run establishes that an output-tool exchange ended
+            # the response. Ordinary tool returns inside a running loop do not.
+            messages[-1] = replace(
+                last, metadata={**(last.metadata or {}), RESPONSE_COMPLETE_METADATA_KEY: True}
+            )
     conversation.result_state["pydantic_messages"] = ModelMessagesTypeAdapter.dump_python(
-        result.all_messages(),
-        mode="json",
+        messages, mode="json"
     )
-    messages = result.all_messages()
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if isinstance(message, ModelResponse):
@@ -41,7 +59,7 @@ def _capture_conversation_messages(
                 trailing_messages=conversation.result_state["pydantic_messages"][index + 1 :],
             )
             break
-    if isinstance(conversation, AdapterConversationContext):
+    if response_complete and isinstance(conversation, AdapterConversationContext):
         conversation.mark_completed()
     if isinstance(conversation, AdapterConversationContext) and any(
         isinstance(part, CompactionPart)
