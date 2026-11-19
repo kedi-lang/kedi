@@ -14,6 +14,7 @@ from .codecs import (
     projected_json_bytes,
 )
 from .models import (
+    RESPONSE_COMPLETE_METADATA_KEY,
     CompactionCheckpoint,
     HistoryEntryKind,
     HistoryOrigin,
@@ -25,6 +26,10 @@ from .models import (
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelRequest, ModelResponse
+
+# OpenAIChatModel assigns these field names as IDs to ordinary, unsigned text.
+# They are not provider-owned Responses reasoning item IDs.
+_CHAT_THINKING_FIELD_IDS = frozenset({"reasoning", "reasoning_content", "content"})
 
 
 class PydanticHistoryCodec:
@@ -169,6 +174,9 @@ class PydanticHistoryCodec:
             artifact_refs=extract_artifact_refs(canonical),
             complete=getattr(message, "state", "complete") == "complete",
             checkpoint=checkpoint,
+            response_complete=bool(
+                message.metadata and message.metadata.get(RESPONSE_COMPLETE_METADATA_KEY) is True
+            ),
             unknown=unknown,
             provider_required=(
                 has_mixed_system_prompt
@@ -179,7 +187,11 @@ class PydanticHistoryCodec:
                 )
                 or any(
                     isinstance(part, ThinkingPart)
-                    and bool(part.signature or part.id or part.provider_details)
+                    and bool(
+                        part.signature
+                        or part.provider_details
+                        or (part.id and part.id not in _CHAT_THINKING_FIELD_IDS)
+                    )
                     for part in message.parts
                 )
                 or _contains_provider_replay_data(canonical)

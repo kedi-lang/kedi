@@ -13,6 +13,7 @@ from .codecs import (
     projected_json_bytes,
 )
 from .models import (
+    RESPONSE_COMPLETE_METADATA_KEY,
     CompactionCheckpoint,
     HistoryEntryKind,
     HistoryOrigin,
@@ -156,6 +157,7 @@ class LangChainHistoryCodec:
             artifact_refs=extract_artifact_refs(canonical),
             complete=not isinstance(message, AIMessageChunk),
             checkpoint=checkpoint,
+            response_complete=message.additional_kwargs.get(RESPONSE_COMPLETE_METADATA_KEY) is True,
             unknown=unknown,
             provider_required=_langchain_has_signed_reasoning(message),
             searchable_text=encoded.decode("utf-8", errors="replace"),

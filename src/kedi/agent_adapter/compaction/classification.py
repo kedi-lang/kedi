@@ -29,6 +29,7 @@ def _unit_for_entry(entry: NativeHistoryEntryRef) -> HistoryUnit:
         checkpoint=entry.checkpoint,
         unknown=entry.unknown,
         provider_required=entry.provider_required,
+        response_complete=entry.response_complete,
         origins=entry.origins,
     )
 
@@ -41,7 +42,11 @@ def _group_units(units: tuple[HistoryUnit, ...]) -> tuple[HistoryUnitGroup, ...]
         if not cycle:
             return
         kinds = {kind for unit in cycle for kind in unit.kinds}
-        if "user" in kinds and not kinds & {"assistant", "checkpoint"}:
+        if (
+            "user" in kinds
+            and not kinds & {"assistant", "checkpoint"}
+            and not any(unit.response_complete for unit in cycle)
+        ):
             # An unfinished cycle keeps its prompt protected, but each tool exchange it has
             # completed is its own group, so a long tool loop can be trimmed while it runs.
             for part, exchange in _split_unfinished_cycle(tuple(cycle)):
@@ -98,7 +103,11 @@ def _build_group(
     kinds = tuple(kind for unit in units for kind in unit.kinds)
     complete = all(unit.complete for unit in units)
     has_user = "user" in kinds
-    has_terminal_response = "assistant" in kinds or "checkpoint" in kinds
+    has_terminal_response = (
+        "assistant" in kinds
+        or "checkpoint" in kinds
+        or any(unit.response_complete for unit in units)
+    )
     reasons: list[str] = []
     if "system" in kinds:
         reasons.append("immutable-prefix")
