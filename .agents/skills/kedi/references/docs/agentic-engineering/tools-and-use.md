@@ -69,6 +69,11 @@ Retries wrap only procedure-body failures. Argument and result validation,
 hooks, approval, cancellation, `KeyboardInterrupt`, and `SystemExit` are not
 retried. Each native retry starts from a fresh copy of the validated arguments.
 Omitting `retry_on` makes ordinary `Exception` failures eligible.
+When the last attempt raises `ValueError`, `LookupError` or `OSError` (a rejected
+argument, a missing record, a timeout), the calling model receives the exception's
+message as a tool error and can correct its arguments or continue without the result;
+the framework's tool retry limit and the run budget bound how often. Any other
+exception, such as `TypeError` or `RuntimeError`, ends the run.
 The exception classes are captured when the procedure is defined. Reassigning
 an exception name later does not change an existing procedure's policy.
 
