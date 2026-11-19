@@ -314,7 +314,7 @@ def test_runtime_failures_are_not_reclassified(failure: Exception) -> None:
 @pytest.mark.parametrize("metadata", [{"kind": "artifact_management"}, {}])
 @pytest.mark.parametrize("framework", ["pydantic", "langchain", "claude"])
 @pytest.mark.parametrize(
-    "failure", [ValueError("internal bug"), ArtifactSerializationError("corrupt payload")]
+    "failure", [RuntimeError("internal bug"), ArtifactSerializationError("corrupt payload")]
 )
 def test_unexpected_tool_failures_still_propagate(
     framework: str, failure: Exception, metadata

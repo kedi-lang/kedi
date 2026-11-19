@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Generator, Mapping, Sequence, cast
 
 from jsonschema.validators import validator_for
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, ValidationError, create_model
 from pydantic_ai import UsageLimits
 from pydantic_ai.output import OutputDataT
 
@@ -72,7 +73,7 @@ from kedi.agent_adapter.models import (
     model_template_prompt_mode,
     typesafe_langchain_model,
 )
-from kedi.agent_adapter.output_schema import build_output_model
+from kedi.agent_adapter.output_schema import OutputCorrection, build_output_model
 from kedi.agent_adapter.prefix_cache import langchain_cache_settings
 from kedi.agent_adapter.responses_session import model_responses_session, model_responses_turn
 from kedi.agent_adapter.subagents import (
@@ -308,7 +309,7 @@ class LangChainAdapter(HookRegistrationMixin):
         if resolved_output_type is None:
             raise ValueError("Output spec must be provided.")
 
-        response_format, unwrap_response = _langchain_typed_output(resolved_output_type)
+        output_model, unwrap_response = _langchain_typed_output(resolved_output_type)
         instructions = cast(str | None, kwargs.pop("instructions", None))
         if instructions is None:
             instructions = self.active_profile.system
@@ -326,13 +327,17 @@ class LangChainAdapter(HookRegistrationMixin):
             agent = self._create_agent(
                 model=model,
                 tools=tools,
-                response_format=response_format,
+                # LangChain validates a Pydantic response format with validate_python, which
+                # rejects JSON text for strict fields such as dates. Give it the JSON Schema and
+                # validate the model's JSON ourselves, inside the correction loop.
+                response_format=output_model.model_json_schema(),
                 system_prompt=system_prompt,
                 middleware=self._middleware_for_run(
                     model,
                     tools,
                     codemode_enabled=projection.enabled,
                     structured=True,
+                    accept_output=lambda output: _accept_typed_output(output_model, output),
                 ),
             )
             content = await self._user_content(template, model)
@@ -344,6 +349,8 @@ class LangChainAdapter(HookRegistrationMixin):
                 input_messages=payload.get("messages"),
             )
             structured = _langchain_structured_response(result)
+            if structured is not None and not isinstance(structured, output_model):
+                structured = output_model.model_validate_json(json.dumps(structured))
             return cast(OutputDataT, unwrap_response(structured))
 
     @hooked_agent_run("template")
@@ -1104,6 +1111,16 @@ class LangChainAdapter(HookRegistrationMixin):
                 {"kedi.mcp.tool_count": len(tools)},
             )
             return tools
+
+
+def _accept_typed_output(output_model: type[BaseModel], output: Any) -> BaseModel:
+    """Validate structured output as JSON, the form the model produced, or ask for a correction."""
+    from kedi.agent_adapter.adapters.langchain.runtime import structured_output_feedback
+
+    try:
+        return output_model.model_validate_json(json.dumps(output))
+    except ValidationError as exc:
+        raise OutputCorrection(structured_output_feedback(exc)) from exc
 
 
 def _langchain_typed_output(

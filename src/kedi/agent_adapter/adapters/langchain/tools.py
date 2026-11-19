@@ -37,17 +37,11 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         "name": tool.name,
         "description": description,
         "args_schema": tool.json_schema,
+        # Only correctable failures become ToolException (see correctable_tool_error); LangChain
+        # returns those to the model and lets every other exception end the run.
+        "handle_tool_error": True,
     }
     metadata = tool.metadata or {}
-    if (metadata.get("kedi_tool_kind") or metadata.get("kind")) in {
-        "subagent",
-        "codemode_control",
-        "artifact_management",
-        "filesystem",
-        "terminal",
-        "dynamic_workflow",
-    }:
-        kwargs["handle_tool_error"] = True
     if _is_async_callable(tool.fn):
         kwargs["coroutine"] = _langchain_async_tool_function(tool)
     else:

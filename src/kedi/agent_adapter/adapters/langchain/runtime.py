@@ -307,23 +307,42 @@ class LangChainOutputCorrectionMiddleware(AgentMiddleware):
                 failed, feedback = [exc.ai_message], _structured_output_feedback(exc.source)
             else:
                 structured = response.structured_response
-                if structured is None or self.accept is None:
-                    return _with_corrections(response, corrections)
-                try:
-                    accepted = self.accept(structured)
-                except OutputCorrection as exc:
+                if structured is None and _answered_without_output(response.result):
+                    # A final text reply instead of the structured output (for example a tool
+                    # call written as text) gets a correction, like Pydantic AI's output retry.
                     if attempt >= self.retries:
-                        # The caller's final validation reports it, as without corrections.
                         return _with_corrections(response, corrections)
-                    failed, feedback = list(response.result), str(exc)
+                    failed, feedback = list(response.result), _MISSING_OUTPUT_FEEDBACK
+                elif structured is None or self.accept is None:
+                    return _with_corrections(response, corrections)
                 else:
-                    return _with_corrections(
-                        replace(response, structured_response=accepted), corrections
-                    )
+                    try:
+                        accepted = self.accept(structured)
+                    except OutputCorrection as exc:
+                        if attempt >= self.retries:
+                            # The caller's final validation reports it, as without corrections.
+                            return _with_corrections(response, corrections)
+                        failed, feedback = list(response.result), str(exc)
+                    else:
+                        return _with_corrections(
+                            replace(response, structured_response=accepted), corrections
+                        )
             attempt += 1
             correction = HumanMessage(content=feedback)
             corrections += [*failed, correction]
             request = request.override(messages=[*request.messages, *failed, correction])
+
+
+_MISSING_OUTPUT_FEEDBACK = (
+    "Your reply did not include the required structured output. Return the result in the "
+    "required structured format instead of plain text."
+)
+
+
+def _answered_without_output(messages: Sequence[Any]) -> bool:
+    """True when the model's last message is a final answer with no tool calls at all."""
+    last = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+    return last is not None and not last.tool_calls
 
 
 def _with_corrections(response: Any, corrections: list[Any]) -> Any:
@@ -331,11 +350,15 @@ def _with_corrections(response: Any, corrections: list[Any]) -> Any:
 
 
 def _structured_output_feedback(error: Exception) -> str:
-    cause = error.__cause__
-    if isinstance(cause, PydanticValidationError):
+    return structured_output_feedback(error.__cause__ or error)
+
+
+def structured_output_feedback(error: BaseException) -> str:
+    """Correction feedback for output that failed parsing or validation."""
+    if isinstance(error, PydanticValidationError):
         detail = "\n".join(
             f"{'.'.join(map(str, item['loc']))}: {item['msg'][:320]}"
-            for item in cause.errors(include_input=False, include_url=False)[:8]
+            for item in error.errors(include_input=False, include_url=False)[:8]
         )
     else:
         detail = str(error)

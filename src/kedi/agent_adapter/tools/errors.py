@@ -63,7 +63,23 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
         from kedi.artifacts.errors import artifact_tool_error_message
 
         return artifact_tool_error_message(original)
+    if kind is None and isinstance(original, _DOMAIN_ERRORS):
+        # An application tool (a Kedi procedure or Python tool) rejected its input or could not
+        # reach its data, after its own retries: the calling model sees why and can correct the
+        # arguments or continue without the result. The framework's tool retry limit and the
+        # run budget still bound how often that happens. Other exceptions stay fatal.
+        detail = str(original).strip()
+        return (
+            f"Tool {tool.name} failed: {type(original).__name__}"
+            + (f": {detail[:600]}" if detail else "")
+            + ". Correct the arguments if they caused this, or continue without this result."
+        )
     return None
+
+
+# ValueError and LookupError for rejected input or missing records, OSError for unreachable
+# data (timeouts, connections, files).
+_DOMAIN_ERRORS = (ValueError, LookupError, OSError)
 
 
 class RequiredToolCallError(RuntimeError):
