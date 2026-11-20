@@ -133,8 +133,10 @@ Portable mode rejects state that cannot be restored with equivalent semantics:
 - dynamic approval handlers, non-importable lifecycle hook handlers,
   process-bound tool/profile bindings, active
   artifacts, conversation turns, or adapter-native continuation state;
-- imports, inline Python preludes, executable type defaults, and runtime-scoped
-  declarations that would require old code to run during load.
+- imports of user modules, inline Python preludes, executable type defaults, and
+  runtime-scoped declarations that would require old code to run during load.
+  Imports of Kedi's bundled modules (`filesystem`, `media`, `decisions`, ...) are
+  part of Kedi, so a restored session replays them and binds their names again.
 
 Portable lifecycle hooks are stored without pickle. A handler is restorable only when
 its module and qualified name resolve back to that exact callable. Importable

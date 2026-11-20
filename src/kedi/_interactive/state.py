@@ -136,13 +136,20 @@ def _load_conversation(
 def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
     issues = list(session._persistence_blockers)
     programs: list[Any] = []
+    bundled_names: set[str] = set()
     for fragment in session._fragments:
         try:
             program = parse_program(fragment.source, source_path=fragment.source_name)
         except BaseException as exc:
             issues.append(f"fragment {fragment.source_name!r} no longer parses: {exc}")
             continue
-        issues.extend(_fragment_persistence_issues(program, fragment.source_name))
+        import_source_path = session._import_source_path(fragment.source_name)
+        issues.extend(
+            _fragment_persistence_issues(
+                program, fragment.source_name, import_source_path=import_source_path
+            )
+        )
+        bundled_names |= _bundled_import_names(session._compiler, program, import_source_path)
         programs.append(program)
 
     issues.extend(_conversation_persistence_issues(session._conversation_state))
@@ -157,16 +164,26 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
         issues.append("runtime has unfinished model work")
     if session._subagent_state_path is not None:
         issues.append("session uses external persistent subagent state")
-    issues.extend(_declaration_persistence_issues(session._compiler, programs))
+    issues.extend(_declaration_persistence_issues(session._compiler, programs, bundled_names))
 
     model_names = _kedi_model_names(session._compiler)
-    raw_environment = _materialize_environment(session._env, issues)
+    # Values bound by bundled imports come back when the restored session replays them.
+    replayed = _replayed_import_bindings(session, bundled_names)
+    raw_environment = {
+        name: value
+        for name, value in _materialize_environment(session._env, issues).items()
+        if name not in replayed
+    }
     decision_records: dict[str, dict[str, Any]] = {}
-    binding_metadata = _encode_binding_metadata(
-        session._env,
-        issues,
-        decision_records=decision_records,
-    )
+    binding_metadata = {
+        name: data
+        for name, data in _encode_binding_metadata(
+            session._env,
+            issues,
+            decision_records=decision_records,
+        ).items()
+        if name not in replayed
+    }
     preflight_encoder = SessionValueEncoder(kedi_models=model_names)
     preflight_encoder.bind_decision_records(decision_records)
     for name, value in raw_environment.items():
@@ -378,9 +395,10 @@ def _decode_binding_metadata(
 def _declaration_persistence_issues(
     compiler: ProgramCompiler,
     programs: list[Any],
+    imported: set[str],
 ) -> list[str]:
     issues: list[str] = []
-    expected_procedures = {
+    expected_procedures = imported | {
         procedure.name
         for program in programs
         for procedure in program.procedures
@@ -392,14 +410,16 @@ def _declaration_persistence_issues(
             "runtime contains procedures without restorable fragment source: "
             + ", ".join(sorted(extra_procedures))
         )
-    expected_types = {typedef.name for program in programs for typedef in program.type_defs}
+    expected_types = imported | {
+        typedef.name for program in programs for typedef in program.type_defs
+    }
     extra_types = set(_kedi_models(compiler)) - expected_types
     if extra_types:
         issues.append(
             "runtime contains types without restorable fragment source: "
             + ", ".join(sorted(extra_types))
         )
-    expected_profiles = {name for program in programs for name in program.profile_defs}
+    expected_profiles = imported | {name for program in programs for name in program.profile_defs}
     extra_profiles = set(compiler.rt._profile_registry) - expected_profiles
     if extra_profiles:
         issues.append(
@@ -442,7 +462,11 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
         if digest != entry["digest"]:
             raise SessionLoadError(f"Fragment {source_name!r} failed its integrity check")
         program = parse_program(source, source_path=source_name)
-        issues = _fragment_persistence_issues(program, source_name)
+        issues = _fragment_persistence_issues(
+            program,
+            source_name,
+            import_source_path=session._import_source_path(source_name),
+        )
         if issues:
             raise SessionLoadError("Unsafe fragment in snapshot:\n" + "\n".join(issues))
         session._compiler.prepare_fragment(
@@ -465,6 +489,10 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
     if not isinstance(session._env, ScopeFrame):
         raise SessionLoadError("Interactive environment is not a lexical scope frame")
     session._env.restore_locals(environment, metadata)
+    # Replayed bundled imports bind their values again, as executing the import did.
+    for name, value in session._compiler.rt._import_env.items():
+        if name not in environment:
+            session._env[name] = value
     session._compiler.rt._initial_globals_env = dict(environment)
     session._compiler.rt._globals_env = session._env
 
@@ -539,11 +567,16 @@ def _artifact_manager_persistence_issues(manager: Any, *, prefix: str) -> list[s
     return []
 
 
-def _fragment_persistence_issues(program: Any, source_name: str) -> list[str]:
+def _fragment_persistence_issues(
+    program: Any, source_name: str, *, import_source_path: Path
+) -> list[str]:
     from ..lang.ast import ProcDefStmt, TypeDefStmt
 
     issues: list[str] = []
-    if program.imports:
+    if any(
+        _bundled_module_path(module_import, import_source_path) is None
+        for module_import in program.imports
+    ):
         issues.append(
             f"fragment {source_name!r} imports modules whose initialization cannot be replayed"
         )
@@ -565,6 +598,52 @@ def _fragment_persistence_issues(program: Any, source_name: str) -> list[str]:
         elif isinstance(item, TypeDefStmt):
             issues.append(f"fragment {source_name!r} contains a runtime-scoped type definition")
     return issues
+
+
+_BUNDLED_MODULES = Path(__file__).resolve().parent.parent / "modules"
+
+
+def _bundled_module_path(module_import: Any, import_source_path: Path) -> Path | None:
+    """The module file when an import names one of Kedi's bundled modules, such as
+    `filesystem` or `media`. Their initialization is part of Kedi, so a restored session
+    replays the import; any other module may run code that cannot be replayed."""
+
+    from ..module_registry import resolve_module_path
+
+    try:
+        path = resolve_module_path(module_import.module, source_path=import_source_path).resolve()
+    except (FileNotFoundError, ValueError):
+        return None
+    return path if path.is_relative_to(_BUNDLED_MODULES) else None
+
+
+def _replayed_import_bindings(session: InteractiveSession, bundled_names: set[str]) -> set[str]:
+    """Environment names that still hold the value a bundled import bound."""
+
+    imports = session._compiler.rt._import_env
+    return {
+        name
+        for name in bundled_names
+        if name in imports and dict.get(session._env, name, _MISSING) is imports[name]
+    }
+
+
+_MISSING = object()
+
+
+def _bundled_import_names(
+    compiler: ProgramCompiler, program: Any, import_source_path: Path
+) -> set[str]:
+    """Declarations a fragment's bundled imports add to the runtime."""
+
+    names: set[str] = set()
+    for module_import in program.imports:
+        path = _bundled_module_path(module_import, import_source_path)
+        loaded = compiler.module_loader._loaded.get(path) if path is not None else None
+        if loaded is not None:
+            exported = compiler._export_names(loaded.program, loaded.runtime)
+            names.update(compiler._selected_import_names(module_import, exported))
+    return names
 
 
 def _walk_statements(statements: Any) -> Any:

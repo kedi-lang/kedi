@@ -7,7 +7,8 @@ from typing import Any
 
 from ..approvals.policy import ApprovalPolicy
 from ..approvals.reason import accepts_tool_reason, reason_schema, split_tool_reason
-from ..hooks.tool_wrapper import new_tool_call_id, with_hook_lifecycle
+from ..execution import run_in_worker
+from ..hooks.tool_wrapper import _is_async_callable, new_tool_call_id, with_hook_lifecycle
 from ..tools.execution import resolve_tool_arguments_async
 from ..tools.records import track_tool_call
 from ..tools.scope import defer_artifact_admission
@@ -228,9 +229,15 @@ class CodeModeToolSpecBridge:
             wrapped = with_hook_lifecycle(
                 tool, adapter_shortname=self._adapter_shortname, tool_call_id=call_id
             )
-            result = wrapped.fn(**final_arguments)
-            if inspect.isawaitable(result):
-                result = await result
+            if _is_async_callable(wrapped.fn):
+                result = await wrapped.fn(**final_arguments)
+            else:
+                # A synchronous body runs off the loop, so calls gathered in the generated code
+                # overlap and the loop keeps serving other Kedi work. Sequential tools are
+                # still ordered by the CodeMode gate before they get here.
+                result = await run_in_worker(wrapped.fn, **final_arguments)
+                if inspect.isawaitable(result):
+                    result = await result
         return result
 
 
