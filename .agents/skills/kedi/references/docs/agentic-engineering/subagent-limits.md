@@ -8,7 +8,7 @@ the others, and a profile cannot remove a runtime safety ceiling.
 | Boundary | Default | Upper bound / behavior |
 | --- | ---: | --- |
 | Descendant starts per profile invocation (`max_agents`) | 100 when omitted | At most 100; oversized explicit budgets are rejected. |
-| Active children (`subagent_max_concurrency`) | 4 | Clamped to 32; a full slot set rejects a new start rather than silently queueing it. |
+| Active children (`subagent_max_concurrency`) | 4 | Clamped to 32; a full slot set rejects a model-driven or Python start, while a `> task` waits for a free slot. |
 | Child depth (`subagent_max_depth`) | 5 | Clamped to 5. |
 | Child deadline (`subagent_timeout_seconds`) | 120 seconds | Positive values capped at 600; `None` disables this deadline. |
 | Model requests per child | 8 | Capped at 50. |

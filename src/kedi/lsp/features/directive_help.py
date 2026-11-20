@@ -646,6 +646,13 @@ def _setting_adapter_label(name: str) -> str:
             "may attach, such as 5MB, 512KB or a number of bytes (default: the 20 MB load limit). "
             "Overrides the adapter constructor in this scope; not sent to the model provider."
         )
+    if name == "context_limit":
+        return (
+            "Kedi request setting for Pydantic AI and LangChain: the model's context window in "
+            "tokens (default 200000, at least 32768). Kedi rejects a request whose conservative "
+            "size estimate exceeds 85% of it minus the output reserve, before sending it. "
+            "Not sent to the model provider."
+        )
     labels: list[str] = []
     if name in PYDANTIC_MODEL_SETTING_KEYS:
         labels.append("Pydantic AI `ModelSettings`")

@@ -131,6 +131,7 @@ def execute_request(
         cache_epoch=(None if request.conversation is None else request.conversation.cache_epoch),
         turn_sequence=request.metadata.turn_sequence,
     ) as agent_telemetry:
+        from kedi.agent_profile.settings import context_limit_tokens
         from kedi.agent_profile.telemetry import record_capability_snapshot
 
         record_capability_snapshot(profile)
@@ -155,6 +156,7 @@ def execute_request(
             request.prompt.content,
             context=tuple(context),
             media_tokens=estimate_attachment_tokens(media),
+            context_limit_tokens=context_limit_tokens(profile.settings),
             resume_state=resume_state,
             history_tokens=(
                 history_estimator.estimate_history_tokens(resume_state)

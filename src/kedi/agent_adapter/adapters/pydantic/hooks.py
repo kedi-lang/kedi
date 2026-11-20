@@ -42,7 +42,10 @@ from kedi.agent_adapter.adapters.pydantic.capabilities import (
     _KediRequiredToolCapability,
     _KediTelemetryCapability,
 )
-from kedi.agent_adapter.adapters.pydantic.tools import _external_tool_spec
+from kedi.agent_adapter.adapters.pydantic.tools import (
+    _external_tool_spec,
+    _model_retry_for_tool_error,
+)
 from kedi.agent_adapter.approvals.policy import ToolApprovalDenied
 from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeCapability
 from kedi.agent_adapter.hooks import (
@@ -59,6 +62,7 @@ from kedi.agent_adapter.hooks.tool_wrapper import (
     defer_result_observation,
     note_result_observer_failure,
 )
+from kedi.agent_adapter.tools.execution import validate_tool_arguments
 from kedi.agent_adapter.tools.records import (
     FailureStage,
     ToolCallTracker,
@@ -105,6 +109,12 @@ class _KediHookCapability(AbstractCapability[Any]):
             return args
         tool, origin = self.adapter._hook_tool_for_call(call.tool_name, tool_def)
         self.adapter._remember_hook_tool(call.tool_call_id, tool, origin)
+        try:
+            validate_tool_arguments(tool, args)
+        except ValueError as exc:
+            # Malformed arguments are rejected here, before the tool wrapper that reports them, so
+            # the same mapping applies: a correctable error goes back to the model as a retry.
+            raise _model_retry_for_tool_error(tool, exc) or exc
         try:
             final_arguments = await dispatch_pre_tool_use(
                 tool,

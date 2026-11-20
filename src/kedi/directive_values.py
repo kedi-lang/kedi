@@ -224,6 +224,9 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
     "settings": {
         "tool_reason": ACTIVATION,
         "media_limit": ValueRule("Largest media value sent to the model", kind="size"),
+        "context_limit": ValueRule(
+            "Model context window in tokens for Kedi's request ceiling", kind="int", minimum=32_768
+        ),
         "callbacks": PYTHON_OBJECT,
         "rate_limiter": PYTHON_OBJECT,
         "seed": INTEGER,

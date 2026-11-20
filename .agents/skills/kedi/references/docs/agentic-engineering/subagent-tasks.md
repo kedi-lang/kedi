@@ -83,8 +83,11 @@ For additional evidence or a change of scope while a task is running, see
 work; `> interrupt` replaces the current attempt without changing the handle.
 
 `max_agents` limits admitted descendant starts. It does not increase concurrent
-capacity. The separate `compile_program(subagent_max_concurrency=...)` limit rejects
-excess starts rather than silently queueing them. See
+capacity. The separate `compile_program(subagent_max_concurrency=...)` limit (four
+running children by default) bounds how many children run at once. A `> task`
+beyond it waits at its statement for a running child to finish, so a larger
+fan-out runs in waves within the invocation deadline. Model-driven delegation and
+Python `start()` calls are rejected at the limit instead of queueing. See
 [Limits, Isolation and Safety](subagent-limits.md) for configuration and defaults.
 Root and child model requests also share any declared [run budget](../runtime/run-budgets.md).
 

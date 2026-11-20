@@ -37,7 +37,7 @@ It is separate from the `history` conversation-continuity setting. See
 
 `configure` rebuilds current-context defaults. `context` overlays and restores
 them. `query`/`bind` override at the callable boundary; lexical Kedi directives
-still take effect inside the program. Settings such as `tool_reason`, `media_limit` and
+still take effect inside the program. Settings such as `tool_reason`, `media_limit`, `context_limit` and
 `decision_boolean_threshold` belong inside `settings`, not arbitrary top-level kwargs.
 
 ## Execution Parameters
