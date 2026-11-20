@@ -901,7 +901,9 @@ class LangChainAdapter(HookRegistrationMixin):
         if current_live_input() is not None:
             from langgraph.checkpoint.memory import InMemorySaver
 
-            kwargs["checkpointer"] = InMemorySaver()
+            from kedi.agent_adapter.adapters.langchain.checkpoint import KediCheckpointSerializer
+
+            kwargs["checkpointer"] = InMemorySaver(serde=KediCheckpointSerializer())
         return create_agent(**kwargs)
 
     async def _tools_for_run(self) -> list[Any]:

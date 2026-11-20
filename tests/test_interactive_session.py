@@ -456,6 +456,48 @@ def test_interactive_session_dump_rejects_fragments_that_require_reexecution(
             session.dump(tmp_path / "rejected.kedi-state")
 
 
+@pytest.mark.parametrize(
+    ("source", "restored"),
+    [
+        ("> import: filesystem", {"read_text_file", "filesystem", "readonlyfs"}),
+        ("> import: filesystem:\n  read_text_file", {"read_text_file"}),
+        ("> import: media", {"image", "Image"}),
+    ],
+)
+def test_interactive_session_snapshot_replays_bundled_module_imports(
+    tmp_path: Path, source: str, restored: set[str]
+) -> None:
+    snapshot = tmp_path / "session.kedi-state"
+    with kedi.interactive(cwd=tmp_path) as session:
+        session.execute(source)
+        session.execute("[value: int] = `42`")
+        session.dump(snapshot)
+
+    with kedi.InteractiveSession.load(snapshot) as loaded:
+        runtime = loaded._compiler.rt
+        names = {
+            *runtime._procedures,
+            *runtime._profile_registry,
+            *runtime._type_env_stack[0],
+            *loaded._env,
+        }
+        assert restored <= names
+        assert loaded._env["value"] == 42
+        loaded.dump(tmp_path / "again.kedi-state")
+
+
+def test_interactive_session_snapshot_keeps_a_rebound_bundled_import_name(tmp_path: Path) -> None:
+    snapshot = tmp_path / "session.kedi-state"
+    with kedi.interactive(cwd=tmp_path) as session:
+        session.execute("> import: media")
+        session.execute('[Video: str] = `"not the type"`')
+        session.dump(snapshot)
+
+    with kedi.InteractiveSession.load(snapshot) as loaded:
+        assert loaded._env["Video"] == "not the type"
+        assert loaded._env["Image"] is loaded._compiler.rt._import_env["Image"]
+
+
 def test_interactive_session_load_rejects_modified_snapshot(tmp_path: Path) -> None:
     snapshot = tmp_path / "session.kedi-state"
     with kedi.interactive() as session:

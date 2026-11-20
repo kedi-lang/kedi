@@ -957,7 +957,9 @@ def test_fragment_boundary_walks_runtime_scoped_declarations() -> None:
         ],
         toplevel_body=[],
     )
-    issues = state._fragment_persistence_issues(program, "nested.kedi")
+    issues = state._fragment_persistence_issues(
+        program, "nested.kedi", import_source_path=Path("nested.kedi")
+    )
     assert "runtime-scoped procedure definition" in issues[0]
     assert "runtime-scoped type definition" in issues[1]
 
@@ -975,3 +977,11 @@ def test_kedi_models_filters_hidden_and_non_model_types() -> None:
         )
     )
     assert state._kedi_models(cast(Any, compiler)) == {"SnapshotModel": SnapshotModel}
+
+
+def test_bundled_module_detection_rejects_unresolvable_and_user_modules(tmp_path: Path) -> None:
+    (tmp_path / "helper.kedi").write_text("[answer: int] = `42`\n", encoding="utf-8")
+    source = tmp_path / "cell.kedi"
+    assert state._bundled_module_path(SimpleNamespace(module="filesystem"), source) is not None
+    assert state._bundled_module_path(SimpleNamespace(module="helper"), source) is None
+    assert state._bundled_module_path(SimpleNamespace(module="missing_module"), source) is None
