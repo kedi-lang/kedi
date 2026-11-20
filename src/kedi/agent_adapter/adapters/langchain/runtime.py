@@ -11,7 +11,7 @@ from hashlib import sha256
 from typing import Any, Callable, Generator, Literal, Mapping, Sequence
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import AgentState, hook_config
+from langchain.agents.middleware.types import AgentState, ModelResponse, hook_config
 from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langgraph.runtime import Runtime
@@ -267,6 +267,10 @@ class LangChainRunMiddleware(AgentMiddleware):
             state.pending_tools -= 1
         call = request.tool_call
         message = _langchain_tool_message_for_call(result, call.get("id"))
+        if message is not None and message.content == []:
+            # LangChain keeps an empty list result as an empty content-parts array, which
+            # gateways reject; the model gets `[]` as text. The tool's native value is unchanged.
+            message.content = "[]"
         if message is not None:
             state.completed_tools[message.tool_call_id] = message
         if message is not None and message.status == "error":
@@ -298,6 +302,13 @@ class LangChainOutputCorrectionMiddleware(AgentMiddleware):
 
         corrections: list[Any] = []
         attempt = 0
+        deferred = _deferred_correction(request.messages)
+        if deferred is not None:
+            # The previous response's business tools have run; now the output correction.
+            attempt = 1
+            correction = HumanMessage(content=deferred)
+            corrections.append(correction)
+            request = request.override(messages=[*request.messages, correction])
         while True:
             try:
                 response = await handler(request)
@@ -327,10 +338,55 @@ class LangChainOutputCorrectionMiddleware(AgentMiddleware):
                         return _with_corrections(
                             replace(response, structured_response=accepted), corrections
                         )
+            business = _with_business_calls_only(failed, request.tools, feedback)
+            if business is not None:
+                # Business tool calls in the rejected response run first, as on Pydantic AI; the
+                # correction follows in the next model request instead of replacing them.
+                return ModelResponse(result=[*corrections, business], structured_response=None)
             attempt += 1
             correction = HumanMessage(content=feedback)
             corrections += [*failed, correction]
             request = request.override(messages=[*request.messages, *failed, correction])
+
+
+_DEFERRED_CORRECTION_KEY = "kedi_deferred_output_correction"
+
+
+def _with_business_calls_only(failed: list[Any], tools: Sequence[Any], feedback: str) -> Any:
+    """The rejected response without its output, when it also called business tools."""
+    last = next((m for m in reversed(failed) if isinstance(m, AIMessage)), None)
+    names = {_tool_name(tool) for tool in tools}
+    calls = [call for call in last.tool_calls if call["name"] in names] if last is not None else []
+    if not calls:
+        return None
+    assert last is not None
+    return last.model_copy(
+        update={
+            "tool_calls": calls,
+            "invalid_tool_calls": [],
+            "response_metadata": {**last.response_metadata, _DEFERRED_CORRECTION_KEY: feedback},
+        }
+    )
+
+
+def _deferred_correction(messages: Sequence[Any]) -> str | None:
+    """Feedback held by the last response, unless a later message already answered it."""
+    from langchain_core.messages import HumanMessage
+
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return None
+        if isinstance(message, AIMessage):
+            feedback = message.response_metadata.get(_DEFERRED_CORRECTION_KEY)
+            return feedback if isinstance(feedback, str) else None
+    return None
+
+
+def _tool_name(tool: Any) -> str | None:
+    if isinstance(tool, Mapping):
+        function = tool.get("function")
+        return function.get("name") if isinstance(function, Mapping) else tool.get("name")
+    return getattr(tool, "name", None)
 
 
 _MISSING_OUTPUT_FEEDBACK = (

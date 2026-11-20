@@ -3771,8 +3771,9 @@ def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_to
     run_kwargs = adapter._run_kwargs({}, tool_specs=adapter.scoped_tool_specs)
 
     assert isinstance(run_kwargs["toolsets"][0], ApprovalRequiredToolset)
-    assert len(run_kwargs["capabilities"]) == 2
+    assert len(run_kwargs["capabilities"]) == 3
     assert isinstance(run_kwargs["capabilities"][1], HandleDeferredToolCalls)
+    assert type(run_kwargs["capabilities"][2]).__name__ == "_KediEmptyToolResultCapability"
     assert PydanticAdapter.capabilities.supports("native_approvals")
     assert PydanticAdapter.capabilities.supports("native_approval_handler")
 
