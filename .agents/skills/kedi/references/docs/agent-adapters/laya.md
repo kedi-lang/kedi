@@ -22,6 +22,25 @@ for that adapter. Neither installation requires TypeSafe or a Jev API key.
 Installation does not download weights; the first inference loads the selected
 checkpoint. An existing local checkpoint directory avoids network downloads.
 
+## Images, Audio and Video
+
+`laya/vega` loads Laya's engine (laya 0.5+, PyTorch). It reads one image, audio
+or video per decision as data; the prompt text reaches each question as context.
+Other checkpoints read text only, and Kedi rejects media for them before the call.
+
+```kedi
+> adapter: pydantic
+> model: laya/vega
+> import: media
+
+[photo: Image] = `image("ticket.png")`
+[team: Literal["billing", "technical"]] << The team for the ticket in <<photo>> is?
+= `team`
+```
+
+Install the PyTorch extra (`kedi-laya[torch]` includes Laya's vision and audio
+extras); video also needs the `ffmpeg` binary.
+
 ## A Kedi Program
 
 ```kedi

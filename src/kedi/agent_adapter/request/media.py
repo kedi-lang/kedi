@@ -349,11 +349,13 @@ def check_media_support(
             )
         if provider is None:
             continue
-        if provider == "laya" or (provider == "typesafe" and media.kind != "image"):
-            accepted = "text" if provider == "laya" else "images and text documents"
+        if provider == "laya":
+            _check_laya_media(attachment, model)
+            continue
+        if provider == "typesafe" and media.kind != "image":
             raise MediaError(
-                f"{attachment.name}: {_provider_text(provider)} decision models read only "
-                f"{accepted}; {_model_text(model)} cannot read {media.label}"
+                f"{attachment.name}: Jev decision models read only images and text documents; "
+                f"{_model_text(model)} cannot read {media.label}"
             )
         if provider == "typesafe":
             _check_jev_image(attachment)
@@ -375,6 +377,25 @@ def check_media_support(
             raise MediaError(
                 f"{attachment.name}: OpenAI accepts only WAV and MP3 audio, not {media.media_type}"
             )
+
+
+LAYA_MEDIA_MODEL = "vega"
+"""Laya's engine checkpoint, the one Laya model that reads images, audio and video."""
+
+
+def _check_laya_media(attachment: MediaAttachment, model: str | None) -> None:
+    media = attachment.media
+    if model != LAYA_MEDIA_MODEL or media.kind not in {"image", "audio", "video"}:
+        raise MediaError(
+            f"{attachment.name}: Laya decision models read only text, except laya/vega, "
+            f"which also reads images, audio and video; {_model_text(model)} cannot read "
+            f"{media.label}"
+        )
+    if media.data is None:
+        raise MediaError(
+            f"{attachment.name}: Laya reads media data, not a URL or file ID; load "
+            f"{media.label} as a file first"
+        )
 
 
 # TypeSafe's limits for image input: https://docs.typesafe.ai/images

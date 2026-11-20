@@ -21,7 +21,7 @@ from kedi.agent_adapter.request.media import (
     media_provider,
 )
 from kedi.lang import compile_program, parse_program
-from kedi.media import Audio, Image, MediaError
+from kedi.media import Audio, Document, Image, MediaError, Video
 
 
 def png_bytes(width: int = 512, height: int = 512) -> bytes:
@@ -143,6 +143,33 @@ def test_decision_models_reject_media_they_cannot_read(system, media, message):
     attachment = MediaAttachment(name="evidence", media=media)
     with pytest.raises(MediaError, match=message):
         check_media_support([attachment], provider=media_provider(system), model="jev-latest")
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        Image.from_bytes(png_bytes()),
+        Audio.from_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt "),
+        Video.from_bytes(b"\x00\x00\x00\x18ftypmp42"),
+    ],
+)
+def test_laya_engine_reads_images_audio_and_video(media):
+    attachment = MediaAttachment(name="evidence", media=media)
+    check_media_support([attachment], provider=media_provider("laya"), model="vega")
+
+
+@pytest.mark.parametrize(
+    ("model", "media", "message"),
+    [
+        ("vega", Image.from_url("https://example.com/a.png"), "not a URL or file ID"),
+        ("vega", Document.from_bytes(b"%PDF-1.4"), "read only text, except laya/vega"),
+        ("laya-multilingual", Image.from_bytes(png_bytes()), "read only text, except laya/vega"),
+    ],
+)
+def test_laya_rejects_media_its_model_cannot_read(model, media, message):
+    attachment = MediaAttachment(name="evidence", media=media)
+    with pytest.raises(MediaError, match=message):
+        check_media_support([attachment], provider=media_provider("laya"), model=model)
 
 
 def test_jev_accepts_images_within_limits_and_checks_urls_after_download():
