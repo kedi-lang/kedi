@@ -2298,7 +2298,7 @@ dev = [
     { name = "coverage" },
     { name = "dspy" },
     { name = "groq" },
-    { name = "kedi-decisions" },
+    { name = "kedi-decisions", version = "0.1.6", source = { registry = "https://pypi.org/simple" } },
     { name = "kedi-laya", extra = ["langchain", "pydantic"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
     { name = "kedi-typesafe", extra = ["all"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
     { name = "langchain" },
@@ -2373,8 +2373,8 @@ dev = [
     { name = "coverage", specifier = "==7.17.2" },
     { name = "dspy", specifier = "==3.4.1" },
     { name = "groq", specifier = "==1.7.0" },
-    { name = "kedi-decisions", specifier = "==0.1.5" },
-    { name = "kedi-laya", extras = ["pydantic", "langchain"], specifier = "==0.1.1" },
+    { name = "kedi-decisions", specifier = "==0.1.6" },
+    { name = "kedi-laya", extras = ["pydantic", "langchain"], specifier = "==0.1.2" },
     { name = "kedi-typesafe", extras = ["all"], specifier = "==0.3.5" },
     { name = "langchain", specifier = "==1.4.9" },
     { name = "langchain-anthropic", specifier = "==1.7.10" },
@@ -2397,13 +2397,38 @@ dev = [
 name = "kedi-decisions"
 version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten'",
+]
 dependencies = [
-    { name = "jsonschema" },
-    { name = "pydantic" },
+    { name = "jsonschema", marker = "(python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "pydantic", marker = "(python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/cb/d8744bd94219e505f6229c10bae05041818fa85ff53d7435f449da79e06c/kedi_decisions-0.1.5.tar.gz", hash = "sha256:40468f83fce36df07d89e34dcf6a0f00bd7d2d68a110811f21c6ef1b3003a2d0", size = 265735, upload-time = "2026-11-12T22:08:45.545Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/28/89d86ceb249432140d93cb1315949eee781ab88af6b4f3df306c33abb617/kedi_decisions-0.1.5-py3-none-any.whl", hash = "sha256:6ca7c85a5e083a5e8bbce353c9e8afd1e465fcdbf7c1cf44bd80af04ede57d9e", size = 26980, upload-time = "2026-11-12T22:08:42.684Z" },
+]
+
+[[package]]
+name = "kedi-decisions"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten')",
+]
+dependencies = [
+    { name = "jsonschema", marker = "(python_full_version < '3.15' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench') or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "pydantic", marker = "(python_full_version < '3.15' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench') or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0d/06/72aacfb25952b4936933b3caafcc629e7b4f84176a2a7f008e5863dcfc95/kedi_decisions-0.1.6.tar.gz", hash = "sha256:df04850078e6a4e63580a5a4f078acd51bc08394eaece67fb0ca7e183a40be67", size = 294493, upload-time = "2026-11-20T13:51:25.817Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/91/13a7b5bbde6603550bdbb77fedaade65f4c1fab138df23573c034e5581e0/kedi_decisions-0.1.6-py3-none-any.whl", hash = "sha256:69e4ddcbe27fe16e65c7c862cb2d92e6f76b32b2d3717e64ba56a269eb155fb8", size = 28484, upload-time = "2026-11-20T13:51:24.332Z" },
 ]
 
 [package.optional-dependencies]
@@ -2416,22 +2441,22 @@ pydantic = [
 
 [[package]]
 name = "kedi-laya"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "kedi-decisions" },
+    { name = "kedi-decisions", version = "0.1.6", source = { registry = "https://pypi.org/simple" } },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/a1/6e69b25d6e0ae59900e773b43c57f68c4632d292535c29b1103f27baf908/kedi_laya-0.1.1.tar.gz", hash = "sha256:89e661ac8fdc423cc513af444e00adf7341fb7229a1a744386d965a3f085f19c", size = 13968, upload-time = "2026-10-16T17:55:17.818Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/3b/da5a719593643bd36302d6140db87299a54e56154b26450888fc16e8fffb/kedi_laya-0.1.2.tar.gz", hash = "sha256:3bfb5256e7d407d6cbc13a309eb75e64e2cd0f7cb2d9109d7d0ec7be75880fd2", size = 16723, upload-time = "2026-11-20T13:51:29.148Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/44/1363b001f000ef997fa35cef31fe5fea2be9b80de2625d0e574f13b7eebe/kedi_laya-0.1.1-py3-none-any.whl", hash = "sha256:85ec7787f1a4f944f5fff13bbc5d9257736a90eeefca7a8761ae695f9e2280c3", size = 9485, upload-time = "2026-10-16T17:55:14.042Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/cf/311b75373f9381bb7ba85f66d703dff3b25262376b780b09bb5e4525538f/kedi_laya-0.1.2-py3-none-any.whl", hash = "sha256:4fd960d786371679936fa44b832db028ebf44f792ae696e56b261df517f91816", size = 10567, upload-time = "2026-11-20T13:51:27.679Z" },
 ]
 
 [package.optional-dependencies]
 langchain = [
-    { name = "kedi-decisions", extra = ["langchain"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "kedi-decisions", version = "0.1.6", source = { registry = "https://pypi.org/simple" }, extra = ["langchain"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
 ]
 pydantic = [
-    { name = "kedi-decisions", extra = ["pydantic"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
+    { name = "kedi-decisions", version = "0.1.6", source = { registry = "https://pypi.org/simple" }, extra = ["pydantic"], marker = "extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
 ]
 
 [[package]]
@@ -2469,7 +2494,8 @@ name = "kedi-typesafe"
 version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "kedi-decisions" },
+    { name = "kedi-decisions", version = "0.1.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.15' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-codex-model' and extra == 'group-4-kedi-dev') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "kedi-decisions", version = "0.1.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.15' and extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench') or extra == 'group-4-kedi-dev' or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe')" },
     { name = "pydantic-ai-slim", extra = ["typesafe"], marker = "extra == 'extra-4-kedi-typesafe' or extra == 'group-4-kedi-dev' or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench')" },
     { name = "typesafe-sdk" },
 ]
