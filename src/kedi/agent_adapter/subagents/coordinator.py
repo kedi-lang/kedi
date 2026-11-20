@@ -160,6 +160,7 @@ class SubagentCoordinator:
         self._state_lock = Lock()
         self._persistence_lock = Lock()
         self._active_runs = 0
+        self._slot_waiters: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
         self._closed = False
         self._budget_stack: ContextVar[tuple[DelegationBudget, ...]] = ContextVar(
             f"kedi_subagent_budget_stack_{id(self)}",
@@ -511,6 +512,7 @@ class SubagentCoordinator:
 
         with self._coordination_lock:
             self._closed = True
+            self._wake_slot_waiters()
         with self._task_lock:
             active = tuple(
                 (run_id, owned_task)
@@ -782,6 +784,33 @@ class SubagentCoordinator:
                 raise RuntimeError("Subagent concurrency slot underflow")
             concurrency.active -= 1
             self._active_runs -= 1
+            self._wake_slot_waiters()
+
+    async def wait_for_start_slot(self, parent_concurrency: DelegationConcurrency) -> None:
+        """Wait until a child start would fit the concurrency limit, for `> task`, which has no
+        model to report a rejection to. Model-driven and Python starts are still rejected at once."""
+
+        loop = asyncio.get_running_loop()
+        while True:
+            with self._coordination_lock:
+                concurrency = self._concurrency.get() or parent_concurrency
+                if (
+                    self._closed
+                    or concurrency.active < concurrency.limit
+                    and self._active_runs < self.max_concurrency
+                ):
+                    return
+                released: asyncio.Future[None] = loop.create_future()
+                self._slot_waiters.append((loop, released))
+            await released
+
+    def _wake_slot_waiters(self) -> None:
+        """Called with the coordination lock held; waiters re-check the limit themselves."""
+
+        waiters, self._slot_waiters = self._slot_waiters, []
+        for loop, released in waiters:
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(_resolve_slot_waiter, released)
 
     async def _run_child(
         self,
@@ -1018,3 +1047,8 @@ def _schedule_owned_cancellation(
             completed.set_result(None)
 
     owned_task.loop.call_soon_threadsafe(cancel)
+
+
+def _resolve_slot_waiter(released: asyncio.Future[None]) -> None:
+    if not released.done():
+        released.set_result(None)

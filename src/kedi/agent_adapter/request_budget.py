@@ -4,7 +4,7 @@ import hashlib
 import json
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from threading import RLock
 from typing import Any, Generator, Iterable, Mapping, Protocol, runtime_checkable
 
@@ -192,6 +192,7 @@ class ModelRequestBudget:
         resume_state: Mapping[str, Any] | None = None,
         history_tokens: int | None = None,
         media_tokens: int = 0,
+        context_limit_tokens: int | None = None,
     ) -> ModelRequestReservation:
         if history_tokens is not None and (
             not isinstance(history_tokens, int)
@@ -208,21 +209,29 @@ class ModelRequestBudget:
             + (history_tokens or 0)
             + media_tokens
         )
+        limits = (
+            self.limits
+            if context_limit_tokens is None
+            else replace(self.limits, context_limit_tokens=context_limit_tokens)
+        )
         from kedi.artifacts.telemetry import model_context_preflight_span
 
         with model_context_preflight_span(
             estimated_input_tokens=estimated_tokens,
-            safe_input_tokens=self.limits.safe_input_tokens,
+            safe_input_tokens=limits.safe_input_tokens,
             cumulative_input_limit=self.limits.cumulative_input_tokens,
             request_limit=self.limits.request_limit,
         ) as span:
             with self._lock:
-                if estimated_tokens > self.limits.safe_input_tokens:
+                if estimated_tokens > limits.safe_input_tokens:
                     span.set_attribute("kedi.context.decision", "context_rejected")
                     raise ModelRequestBudgetError(
                         "estimated model request is "
                         f"{estimated_tokens} tokens, exceeding the safe context ceiling of "
-                        f"{self.limits.safe_input_tokens} tokens"
+                        f"{limits.safe_input_tokens} tokens for a "
+                        f"{limits.context_limit_tokens}-token context window. The estimate "
+                        "counts one token per byte; set context_limit in > settings: to the "
+                        "model's real context window if it is larger"
                     )
                 next_requests = self._requests + 1
                 if next_requests > self.limits.request_limit:

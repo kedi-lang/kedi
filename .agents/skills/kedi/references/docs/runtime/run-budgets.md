@@ -139,3 +139,27 @@ limits, deadlines, or context/token guards. Those remain independently enforced;
 whichever boundary is reached first stops its operation. See
 [Subagent Limits](../agentic-engineering/subagent-limits.md) and
 [Capability Matrix](../reference/capability-matrix.md).
+
+## Request Size Ceiling
+
+Before each model request, Kedi estimates its size and rejects a request that
+would not fit the model's context window, without sending it. The estimate is
+deliberately conservative: text counts one token per byte, three to four times
+the real count for English text. A request is admitted while the estimate stays
+within 85% of the context window minus a 16,384-token output reserve. With the
+default 200,000-token window that is 153,616 estimated tokens, about 150 KB of
+prompt, history and tool definitions.
+
+On Pydantic AI and LangChain, `context_limit` in `> settings:` sets the window in
+tokens for the requests in its scope (at least 32,768). Set it to the model's
+real context window to send larger documents or longer histories:
+
+```kedi
+> settings:
+    context_limit: 1000000
+
+>> Summarize <<report>> as [summary: str].
+```
+
+The setting is not sent to the model provider and does not change the
+provider's own limit.

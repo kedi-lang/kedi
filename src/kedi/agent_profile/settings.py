@@ -8,7 +8,9 @@ from kedi.directive_values import ADAPTER_RULES, parse_scalar, validate_field
 SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
 
-KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset({"tool_reason", "media_limit"})
+KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset(
+    {"tool_reason", "media_limit", "context_limit"}
+)
 
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -138,6 +140,14 @@ def media_limit_bytes(settings: SettingsMap, *, default: int | None = None) -> i
     value = settings.get("media_limit", default)
     if value is not None:
         validate_field("settings", "media_limit", value)
+    return value
+
+
+def context_limit_tokens(settings: SettingsMap) -> int | None:
+    """The model's context window in tokens for Kedi's request ceiling; ``None`` keeps 200,000."""
+    value = settings.get("context_limit")
+    if value is not None:
+        validate_field("settings", "context_limit", value)
     return value
 
 

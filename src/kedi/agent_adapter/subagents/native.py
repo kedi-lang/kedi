@@ -184,6 +184,7 @@ class NativeSubagentOwner:
         parent_profile: AgentProfile,
         final_schema: dict[str, Any] | None = None,
         output_adapter: TypeAdapter[Any] | None = None,
+        wait_for_slot: bool = False,
     ) -> SubagentTask:
         from .groups import check_process_cancelled, register_process_child
 
@@ -213,6 +214,8 @@ class NativeSubagentOwner:
             if output_adapter is None and child_profile.output_type is not None:
                 output_adapter = TypeAdapter(child_profile.output_type)
         output_state = SubagentOutputState(output_adapter) if output_adapter is not None else None
+        if wait_for_slot:
+            await self.runtime._subagent_coordinator.wait_for_start_slot(self._concurrency)
         with (
             live_input_scope(current_live_input() or self.inbox),
             track_delegation_attempt(requested_profile=subagent, task=task),
@@ -252,6 +255,7 @@ class NativeSubagentOwner:
                 parent_profile=parent_profile,
                 final_schema=final_schema,
                 output_adapter=output_adapter,
+                wait_for_slot=True,
             )
         )
 
