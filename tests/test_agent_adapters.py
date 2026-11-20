@@ -534,7 +534,9 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
             response_format = self.kwargs.get("response_format")
             if response_format is None:
                 return {"messages": [SimpleNamespace(content="plain langchain text")]}
-            return {"structured_response": response_format(answer="ok")}
+            # Kedi gives LangChain the JSON Schema, which LangChain returns unvalidated.
+            assert response_format["properties"]["answer"]["type"] == "string"
+            return {"structured_response": {"answer": "ok"}}
 
     class FakeStructuredTool:
         def __init__(self, **kwargs: Any) -> None:

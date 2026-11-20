@@ -121,7 +121,7 @@ def _correction(request: dict[str, Any], failed_output: Any) -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("initial", "feedback"),
-    [({"wrong": "x"}, "code: Field required"), ("The code is X7.", "expected valid JSON")],
+    [({"wrong": "x"}, "code: Field required"), ("The code is X7.", "Expecting value")],
     ids=["missing-field", "not-json"],
 )
 async def test_native_typed_output_gets_one_counted_correction_turn(
@@ -168,14 +168,16 @@ async def test_subagent_output_is_corrected_against_its_json_schema(
 @pytest.mark.parametrize(
     ("source", "outputs", "output_retries", "error"),
     [
-        (TEMPLATE, [{"wrong": "x"}, {"wrong": "y"}], 1, "Failed to parse structured output"),
-        (TEMPLATE, [{"wrong": "x"}, {"code": "X7"}], 0, "Failed to parse structured output"),
+        (TEMPLATE, [{"wrong": "x"}, {"wrong": "y"}], 1, "validation error for _OutputModel"),
+        (TEMPLATE, [{"wrong": "x"}, {"code": "X7"}], 0, "validation error for _OutputModel"),
+        (TEMPLATE, ["not json", "still not json"], 1, "Failed to parse structured output"),
         (DELEGATION, [MISNESTED], 1, "'task_summary' was unexpected"),
         (DELEGATION, [MISNESTED, GOOD], 0, "'task_summary' was unexpected"),
     ],
     ids=[
         "typed-invalid-twice",
         "typed-uncorrected",
+        "typed-unparsable-twice",
         "subagent-invalid-twice",
         "subagent-uncorrected",
     ],

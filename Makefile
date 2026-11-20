@@ -6,7 +6,7 @@ UV ?= uv
 PYTHON_VERSIONS ?= 3.11 3.12 3.13 3.14
 MATRIX_ENV_ROOT ?= /tmp/kedi-python-matrix
 
-.PHONY: all format check-formatted lint ty basedpyright check check-docs check-release tests coverage check-coverage check-matrix playground-tree-sitter prod
+.PHONY: all format check-formatted lint ty basedpyright check check-docs check-skill-docs check-locks check-release tests coverage check-coverage check-matrix playground-tree-sitter prod
 
 all: format check tests
 
@@ -42,6 +42,20 @@ check-docs:
 	@cmp -s docs/KEDI_DSL.md kedi-zed/docs/KEDI_DSL.md
 	@cmp -s docs/KEDI_DSL.md kedi-vscode/docs/KEDI_DSL.md
 	@printf "$(GREEN)✔ Extension DSL docs are synced.$(RESET)\n"
+
+check-skill-docs:
+	@printf "$(BLUE)==>$(RESET) Checking the Kedi skill docs mirror...\n"
+	@python3 .agents/skills/kedi/scripts/sync_docs.py --check
+	@printf "$(GREEN)✔ Skill docs mirror is synced.$(RESET)\n"
+
+check-locks:
+	@printf "$(BLUE)==>$(RESET) Checking dependency pins and Python locks...\n"
+	@python3 scripts/check_dependency_pins.py
+	@$(UV) lock --check
+	@$(UV) lock --check --project notebook
+	@$(UV) lock --check --project kedi-otel
+	@$(UV) lock --check --project tree-sitter-kedi
+	@printf "$(GREEN)✔ Dependency pins and locks are current.$(RESET)\n"
 
 .PHONY: check-distribution
 check-distribution:
@@ -85,4 +99,4 @@ check-matrix:
 	done
 	@printf "$(GREEN)✔ Matrix checking complete.$(RESET)\n"
 
-prod: check check-coverage
+prod: check check-docs check-skill-docs check-locks check-coverage
