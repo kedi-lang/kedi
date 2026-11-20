@@ -782,16 +782,23 @@ def test_file_store_restores_session_and_fixed_expiry(
         monotonic=lambda: clock.monotonic,
         wall_clock=lambda: clock.wall,
     )
-    duplicate = second.artifactize("persisted", policy=policy)
+    same = second.artifactize("persisted", policy=policy)
+    assert isinstance(same, ArtifactHandle)
+    assert same.ref.ref_id == ref_id
+    duplicate = second.artifactize("persisted again", policy=policy)
     assert isinstance(duplicate, ArtifactHandle)
     assert duplicate.ref.ref_id != ref_id
     assert second.get_value(ref_id) == "persisted"
-    assert duplicate.get_value() == "persisted"
+    assert duplicate.get_value() == "persisted again"
     clock.tick(7)
     assert second.cleanup_expired() == 1
     with pytest.raises(ArtifactExpiredError):
         second.get_value(ref_id)
-    assert duplicate.get_value() == "persisted"
+    assert duplicate.get_value() == "persisted again"
+    assert second.artifactize("persisted", policy=policy).ref.ref_id not in {
+        ref_id,
+        duplicate.ref.ref_id,
+    }
     second.close()
 
 

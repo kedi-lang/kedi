@@ -206,7 +206,11 @@ Structured output that fails parsing or validation, including a subagent result'
 JSON Schema, gets a correction turn like Pydantic AI's output retry: the failed
 response and its validation feedback go back to the model, `output_retries=1` times
 by default. Each correction is a counted model request. A truncated response is
-reported as incomplete rather than corrected.
+reported as incomplete rather than corrected. When the rejected response also
+called business tools, those calls run first and the correction follows with
+their results, as on Pydantic AI. An empty list tool result is sent as the text
+`[]`, because an empty content-parts array is rejected by some gateways; the
+program and hooks still see the native value.
 
 ## Exact History Archives
 

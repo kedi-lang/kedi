@@ -19,6 +19,7 @@ from pydantic_ai.tools import (
 
 from kedi.agent_adapter.adapters.pydantic.capabilities import (
     _KediArtifactCapability,
+    _KediEmptyToolResultCapability,
     _KediRequiredToolCapability,
     _KediTelemetryCapability,
 )
@@ -253,6 +254,9 @@ def _run_kwargs(
         caller_toolsets or toolsets is not None or deferred or self._has_native_approval_tools()
     ):
         capabilities = self._with_external_approval_capability(capabilities)
+    capabilities = _with_capability(
+        capabilities, _KediEmptyToolResultCapability, _KediEmptyToolResultCapability
+    )
     if any((tool.metadata or {}).get("required_before_output") is True for tool in tool_specs):
         capabilities = _with_capability(
             capabilities,
@@ -274,9 +278,7 @@ def _run_kwargs(
             model=selected_model,
             settings=compaction,
         )
-    capabilities = self._with_telemetry_capability(capabilities)
-    if capabilities:
-        run_kwargs["capabilities"] = capabilities
+    run_kwargs["capabilities"] = self._with_telemetry_capability(capabilities)
     return run_kwargs
 
 

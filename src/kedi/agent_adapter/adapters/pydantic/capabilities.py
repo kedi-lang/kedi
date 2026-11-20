@@ -20,11 +20,15 @@ from pydantic_ai.exceptions import (
     ModelRetry,
 )
 from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
     ModelResponse,
     TextPart,
     ToolCallPart,
     ToolReturn,
+    ToolReturnPart,
 )
+from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import (
     RunContext,
     ToolDefinition,
@@ -163,6 +167,36 @@ class _KediArtifactCapability(AbstractCapability[Any]):
         if isinstance(result, ToolReturn):
             return replace(result, return_value=admitted, content=None)
         return admitted
+
+
+class _KediEmptyToolResultCapability(AbstractCapability[Any]):
+    """Send an empty list tool result as `[]`: Pydantic AI reads a list as content parts and would
+    send no text at all, which reads as a failed call. Only the outgoing request changes."""
+
+    async def before_model_request(
+        self, ctx: RunContext[Any], request_context: ModelRequestContext
+    ) -> ModelRequestContext:
+        del ctx
+        request_context.messages = [
+            _with_empty_results_as_text(message) for message in request_context.messages
+        ]
+        return request_context
+
+
+def _with_empty_results_as_text(message: ModelMessage) -> ModelMessage:
+    if not isinstance(message, ModelRequest) or not any(
+        _is_empty_list_result(part) for part in message.parts
+    ):
+        return message
+    parts = [
+        replace(part, content="[]") if _is_empty_list_result(part) else part
+        for part in message.parts
+    ]
+    return replace(message, parts=parts)
+
+
+def _is_empty_list_result(part: Any) -> bool:
+    return isinstance(part, ToolReturnPart) and part.content == []
 
 
 class _KediRequiredToolCapability(AbstractCapability[Any]):

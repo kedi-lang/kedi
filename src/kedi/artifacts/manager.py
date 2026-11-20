@@ -179,6 +179,17 @@ class ArtifactManager:
                 )
                 self._maybe_cleanup_locked()
                 store = self._store_for_policy(effective)
+                reused = self._reusable_record(
+                    store,
+                    serialized=serialized,
+                    policy=effective,
+                    source=source,
+                    sensitive=sensitive,
+                    provenance=provenance,
+                )
+                if reused is not None:
+                    reused.last_accessed_monotonic = self._monotonic()
+                    return ArtifactHandle(ref=reused.ref, manager=self)
                 try:
                     self._enforce_quota(effective, serialized.size_bytes)
                 except ArtifactQuotaExceededError:
@@ -996,6 +1007,37 @@ class ArtifactManager:
             state.abort(exc)
             stream.close()
             raise
+
+    def _reusable_record(
+        self,
+        store: ArtifactStore,
+        *,
+        serialized: SerializedArtifact,
+        policy: ArtifactPolicy,
+        source: str | None,
+        sensitive: bool,
+        provenance: dict[str, Any] | None,
+    ) -> ArtifactRecord | None:
+        """An active artifact holding the same content from the same source, so admitting one
+        value again (a later turn, a repeated tool result) keeps its reference ID."""
+
+        if serialized.digest is None or provenance is not None:
+            return None
+        now = self._monotonic()
+        return next(
+            (
+                record
+                for record in store.records(self.session_id)
+                if record.status is ArtifactStatus.ACTIVE
+                and record.digest == serialized.digest
+                and record.source == source
+                and record.provenance is None
+                and record.ref.sensitive == sensitive
+                and self._ref_policies.get(record.ref_id) == policy
+                and not _is_expired(record, now=now)
+            ),
+            None,
+        )
 
     def _new_ref_id(self, source: str | None) -> str:
         kind = _artifact_kind(source)

@@ -112,6 +112,11 @@ The fixed TTL is measured from creation and never moves. `idle_ttl` is measured
 from the last successful leased access. An artifact expires at the earlier of
 the two deadlines.
 
+Admitting the same content again from the same source while its artifact is
+active, for example the same variable in a later turn, returns the same ref with
+its original expiry instead of a new copy. A released or expired artifact, other
+sensitivity, or a derived artifact gets a new ref.
+
 Reads acquire a lease. If release or expiry occurs during an active read, the
 record enters `pending_release` or `expired`, the current reader may finish, and
 the payload is deleted when the final lease closes. New reads fail immediately.
