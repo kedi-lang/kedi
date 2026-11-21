@@ -10,7 +10,7 @@ import sys
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
-from threading import Event, current_thread
+from threading import Event, Thread, current_thread
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -411,6 +411,44 @@ def test_acp_client_write_and_reader_edge_paths() -> None:
     assert list(client._stderr_tail)[-2:] == ["one", "two"]
 
 
+def test_acp_client_write_to_closed_stdin_raises_disconnected() -> None:  # 3.6
+    client = ACPClient(("fake",))
+    closed_stdin = io.StringIO()
+    closed_stdin.close()
+    client._process = cast(
+        Any,
+        SimpleNamespace(stdin=closed_stdin, stdout=None, stderr=None, poll=lambda: None),
+    )
+
+    with pytest.raises(ACPDisconnected):
+        client._write({"method": "x"})
+
+
+def test_acp_reader_failure_fails_pending_requests() -> None:  # 3.6
+    client = ACPClient(("fake",))
+    request_line = (
+        '{"jsonrpc": "2.0", "id": 7, "method": "session/request_permission", "params": {}}\n'
+    )
+    closed_stdin = io.StringIO()
+    closed_stdin.close()
+    client._process = cast(
+        Any,
+        SimpleNamespace(
+            stdin=closed_stdin, stdout=iter([request_line]), stderr=None, poll=lambda: None
+        ),
+    )
+    pending: Future[dict[str, Any] | None] = Future()
+    client._pending[99] = pending
+
+    reader = Thread(target=client._read_stdout, daemon=True)
+    reader.start()
+    reader.join(timeout=5)
+
+    assert not reader.is_alive()
+    with pytest.raises(ACPDisconnected):
+        pending.result(timeout=1)
+
+
 def test_acp_client_close_without_process_is_safe() -> None:
     client = ACPClient(("fake",))
 
@@ -587,6 +625,40 @@ def test_acp_client_running_uninitialized_process_initializes() -> None:
     client._ensure_started()
 
     assert called == [True]
+
+
+def test_acp_restart_reinitializes_after_process_death(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # 3.7
+    spawned: list[FakeProcess] = []
+
+    def fake_popen(*_: Any, **__: Any) -> FakeProcess:
+        process = FakeProcess()
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr("kedi.agent_adapter.adapters.acp.subprocess.Popen", fake_popen)
+    client = ACPClient(("fake",))
+    initialized: list[bool] = []
+
+    def initialize() -> None:
+        initialized.append(True)
+        client._initialized = True
+
+    client._initialize = cast(Any, initialize)
+    client._ensure_started(initialize=True)
+    assert initialized == [True]
+
+    # Simulate the process dying, then restart without initializing.
+    client._process = cast(Any, SimpleNamespace(poll=lambda: 1))
+    client._ensure_started(initialize=False)
+    assert len(spawned) == 2
+    assert client._process is spawned[1]
+    assert not client._initialized
+
+    # A later initialize=True call must send initialize to the new process.
+    client._ensure_started(initialize=True)
+    assert initialized == [True, True]
 
 
 def test_acp_client_close_terminates_and_kills_running_process(monkeypatch) -> None:

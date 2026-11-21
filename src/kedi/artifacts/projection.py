@@ -4,6 +4,7 @@ import base64
 import codecs
 import json
 import os
+import secrets
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,7 @@ class _ProjectionIndex:
 
 
 def _atomic_write(path: Path, payload: bytes, *, mode: int) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
     descriptor = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,

@@ -248,7 +248,7 @@ class _ArtifactHostBridge:
                 cursor = index + len(pattern)
             if page.complete or page.next_offset is None:
                 break
-            overlap = window[-max(0, len(pattern) - 1) :]
+            overlap = window[len(window) - (len(pattern) - 1) :] if len(pattern) > 1 else ""
             offset = page.next_offset
         return matches
 

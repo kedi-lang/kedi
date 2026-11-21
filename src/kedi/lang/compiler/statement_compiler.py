@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Callable
@@ -299,6 +300,15 @@ class StatementCompiler:
         ):
             if "\n" in code or code.strip().startswith("return"):
                 return execute_python_block(code, self.rt, kwargs, span=stmt.loc)
+            try:
+                ast.parse(code, mode="eval")
+            except SyntaxError:
+                # A one-line compound statement is a block, not an
+                # expression: run it like the equivalent multi-line
+                # ``` block so it returns the same value — or raises the
+                # same clear error when it has no explicit return — instead
+                # of silently returning ''.
+                return execute_python_block(code, self.rt, kwargs, span=stmt.loc)
             return evaluate_python_inline(self.rt, code, kwargs, span=stmt.loc)
 
     def execute_variable_init(self, stmt: VariableInitStmt, closure_env: dict[str, Any]) -> None:
@@ -511,7 +521,7 @@ class StatementExecutor:
 
         # Track nested procedures for cleanup
         saved_procs: dict[str, Any] = {}
-        new_proc_names: list[str] = []
+        new_proc_names: set[str] = set()
 
         # Inherit parent type environment
         parent_stack = self.rt._type_env_stack
@@ -567,7 +577,7 @@ class StatementExecutor:
         closure_env: dict[str, Any],
         type_scope: dict[str, Any],
         saved_procs: dict[str, Any],
-        new_proc_names: list[str],
+        new_proc_names: set[str],
         active: AgentProfile,
         profile_registry: dict[str, Any],
     ) -> tuple[Any, AgentProfile]:
@@ -677,7 +687,7 @@ class StatementExecutor:
         closure_env: dict[str, Any],
         type_scope: dict[str, Any],
         saved_procs: dict[str, Any],
-        new_proc_names: list[str],
+        new_proc_names: set[str],
         active: AgentProfile,
         profile_registry: dict[str, Any] | None = None,
     ) -> Any:
@@ -848,10 +858,14 @@ class StatementExecutor:
             fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
 
             procs = self.rt._procedures
-            if child.name in procs and child.name not in saved_procs:
+            if (
+                child.name in procs
+                and child.name not in saved_procs
+                and child.name not in new_proc_names
+            ):
                 saved_procs[child.name] = procs[child.name]
             elif child.name not in procs:
-                new_proc_names.append(child.name)
+                new_proc_names.add(child.name)
             procs[child.name] = fn_nested
             return _NO_RETURN
 

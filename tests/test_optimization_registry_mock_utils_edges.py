@@ -105,7 +105,9 @@ def test_optimization_utils_render_and_normalize_edges() -> None:
     assert template_line_to_string(line) == "A <<photo>>[raw]<`x + 1`><expr>"
 
     empty_span = make_optimize_span("empty", [])
-    assert normalize_optimized_prompt_prefix(empty_span, None) == ""
+    # 5.6: normalize takes str only; a missing extraction is signalled by the
+    # caller before this runs, so None no longer normalizes to "".
+    assert normalize_optimized_prompt_prefix(empty_span, "") == ""
     assert normalize_optimized_prompt_prefix(empty_span, "custom") == "custom"
 
     base_span = make_optimize_span("base", [TextSegment(text="Base")])

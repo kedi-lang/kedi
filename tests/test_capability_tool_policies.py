@@ -42,6 +42,23 @@ def capability(name, *, tools=("read_document",), approval=None, hooks=None, nes
     )
 
 
+def test_active_capability_policy_survives_deferred_sibling_nesting_it() -> None:
+    # 5.3: a deferred capability that nests an active one must not hide the
+    # active capability's policy when deferred capabilities are excluded.
+    active = capability("a", tools=("t",), approval=ApprovalPolicy.allow())
+    deferred = AppliedCapability(
+        identity="fixture::d",
+        name="d",
+        description=None,
+        profile=AgentProfile(tools=(), capabilities=(active,)),
+        deferred=True,
+    )
+    profile = AgentProfile(capabilities=(active, deferred))
+    policy = capability_tool_policy(profile, "t", include_deferred=False)
+    assert policy is not None
+    assert policy.owners == ("fixture::a",)
+
+
 def test_policy_does_not_change_caller_default_or_unrelated_tools():
     owned = capability("reader", approval=ApprovalPolicy.allow())
     profile = AgentProfile(approval=ApprovalPolicy.deny(), capabilities=(owned,))

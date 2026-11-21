@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import threading
+import typing
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -17,7 +18,7 @@ from typing import Annotated, Any, cast
 from uuid import uuid4
 
 import pytest
-from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl, ValidationError
 from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.messages import (
     ModelRequest,
@@ -3292,6 +3293,28 @@ def test_claude_helpers_cover_mcp_and_serialization() -> None:
     assert adapters_module._output_json_schema(float) == {"type": "number"}
     assert adapters_module._output_json_schema(bool) == {"type": "boolean"}
     assert adapters_module._output_json_schema(object) == {"type": "object"}
+
+    # 3.11: generic output types get a real schema and validated values.
+    assert adapters_module._output_json_schema(list[str]) == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    assert adapters_module._output_json_schema(typing.List[str]) == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    assert adapters_module._output_json_schema(dict[str, int]) == {
+        "type": "object",
+        "additionalProperties": {"type": "integer"},
+    }
+    assert adapters_module._output_json_schema(typing.Dict[str, int]) == {
+        "type": "object",
+        "additionalProperties": {"type": "integer"},
+    }
+    assert claude_messages_module._structured_output_value(["a", "b"], list[str]) == ["a", "b"]
+    assert claude_messages_module._structured_output_value({"a": 1}, dict[str, int]) == {"a": 1}
+    with pytest.raises(ValidationError, match="Input should be a valid string"):
+        claude_messages_module._structured_output_value(["a", 1], list[str])
 
     @dataclass
     class Payload:

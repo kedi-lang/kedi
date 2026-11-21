@@ -454,7 +454,7 @@ def _emit_variable_init_stmt(
         if region is not None:
             builder.add_mapped_region(region, indent + "    ")
         else:
-            builder.add(f"{indent}    return cast({typ}, _kedi_placeholder())")
+            builder.add(f"{indent}    cast({typ}, _kedi_placeholder())")
         builder.add(f"{indent})")
     else:
         line = builder.add(f"{indent}{stmt.name}: {typ} = cast({typ}, _kedi_placeholder())")

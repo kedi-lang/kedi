@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import dspy
-from dspy import LM
 from dspy.adapters.json_adapter import JSONAdapter
 
 from ...model_normalization import normalize_for_litellm
@@ -50,51 +47,6 @@ class DSPyConfigurationService:
         self._reporter.emit("🔧 Configuring main DSPy LM:")
         self._reporter.emit(f"   Model: {model}")
         self._reporter.emit(f"   Max tokens: {max_tokens}")
-
-        # WORKAROUND: Monkey-patch DSPy's LM class BEFORE creating any instances
-        # This fixes DSPy's bug where internal LM instances use hardcoded max_tokens=4000
-        if not hasattr(LM, "_kedi_patched"):
-            lm_cls = cast(Any, LM)
-            original_init = lm_cls.__init__
-            configured_max_tokens = max_tokens
-
-            def patched_init(
-                self,
-                model,
-                model_type="chat",
-                temperature=0.0,
-                max_tokens=4000,
-                cache=True,
-                callbacks=None,
-                num_retries=3,
-                provider=None,
-                finetuning_model=None,
-                launch_kwargs=None,
-                train_kwargs=None,
-                **kwargs,
-            ):
-                # Override the default max_tokens with our configured value
-                if max_tokens == 4000:  # If using default, replace with our config
-                    max_tokens = configured_max_tokens
-                return original_init(
-                    self,
-                    model,
-                    model_type,
-                    temperature,
-                    max_tokens,
-                    cache,
-                    callbacks,
-                    num_retries,
-                    provider,
-                    finetuning_model,
-                    launch_kwargs,
-                    train_kwargs,
-                    **kwargs,
-                )
-
-            lm_cls.__init__ = patched_init
-            setattr(LM, "_kedi_patched", True)
-            self._reporter.emit(f"   🔧 Patched DSPy LM to use max_tokens={max_tokens} by default")
 
         # Create LM with configured settings
         # Enable JSON mode for more reliable structured outputs

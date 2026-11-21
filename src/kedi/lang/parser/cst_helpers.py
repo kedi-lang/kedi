@@ -169,15 +169,20 @@ def _validate_block_comments(self: _Walker) -> None:
     block_open_line: Optional[int] = None
     for i, line in enumerate(lines):
         stripped = line.strip()
-        # Toggle python-block mode on any line that opens or
-        # closes a triple-backtick fence. Legacy `strip_comments`
-        # uses the loose `endswith("```")` heuristic to handle
-        # cases like `= ``` ` (an opening fence with leading `=`
-        # on the same line) and `[x] = ``` `.
-        if stripped == "```" or ("```" in stripped and stripped.endswith("```")):
-            in_python = not in_python
-            continue
         if in_python:
+            # Inside Python, only a bare fence line closes the block: a
+            # ``` at the end of a comment line (e.g. `# ex ``` `) must not
+            # toggle the state. This matches the tree-sitter scanner, which
+            # likewise requires a bare closing fence.
+            if stripped == "```":
+                in_python = False
+            continue
+        # Toggle python-block mode on any line that opens a triple-backtick
+        # fence. Legacy `strip_comments` uses the loose `endswith("```")`
+        # heuristic to handle cases like `= ``` ` (an opening fence with
+        # leading `=` on the same line) and `[x] = ``` `.
+        if stripped == "```" or ("```" in stripped and stripped.endswith("```")):
+            in_python = True
             continue
         if stripped == "###":
             if not in_block:

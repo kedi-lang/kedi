@@ -29,6 +29,7 @@ from kedi.agent_adapter.subagents.budget import (
 )
 from kedi.agent_adapter.subagents.communication import control_for_run
 from kedi.agent_adapter.subagents.control import (
+    INTERRUPT_CLEANUP_SECONDS,
     InputReceipt,
     LiveInput,
     current_live_input,
@@ -340,25 +341,25 @@ class SubagentCoordinator:
             self._deactivate_conversation(conversation_id, run_id)
             self._release_slot(concurrency)
             raise
+        coroutine = self._execute_run(
+            run_id=run_id,
+            root_run_id=root_run_id,
+            parent_run_id=parent_run_id,
+            child_depth=child_depth,
+            definition=definition,
+            evaluated_profile=evaluated_profile,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            output_state=output_state,
+            parent_profile=parent_profile,
+            parent_ceiling=parent_ceiling,
+            budgets=budgets,
+            concurrency=concurrency,
+            stack=stack,
+            conversation_id=conversation_id,
+        )
         try:
-            coroutine = self._execute_run(
-                run_id=run_id,
-                root_run_id=root_run_id,
-                parent_run_id=parent_run_id,
-                child_depth=child_depth,
-                definition=definition,
-                evaluated_profile=evaluated_profile,
-                subagent=subagent,
-                task=task,
-                final_schema=final_schema,
-                output_state=output_state,
-                parent_profile=parent_profile,
-                parent_ceiling=parent_ceiling,
-                budgets=budgets,
-                concurrency=concurrency,
-                stack=stack,
-                conversation_id=conversation_id,
-            )
             task_context = copy_context()
             task_handle = _create_subagent_task(
                 coroutine,
@@ -367,6 +368,7 @@ class SubagentCoordinator:
             )
             owner_loop = task_handle.get_loop()
         except BaseException as exc:
+            coroutine.close()
             with self._task_lock:
                 self._retained_native_runs.discard(run_id)
             control.close()
@@ -498,7 +500,13 @@ class SubagentCoordinator:
             # the callback with the child task's retained creation context.
             completed: Future[None] = Future()
             _schedule_owned_cancellation(owned_task, completed)
-            completed.result()
+            try:
+                completed.result(timeout=INTERRUPT_CLEANUP_SECONDS)
+            except TimeoutError as exc:
+                raise KediExecutionError(
+                    f"Subagent {run_id!r} cancel did not complete within "
+                    f"{INTERRUPT_CLEANUP_SECONDS} seconds"
+                ) from exc
         return True
 
     def status(self, run_id: str) -> SubagentRunStatus:

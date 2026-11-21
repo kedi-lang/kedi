@@ -139,6 +139,10 @@ class CodexAppServerClient:
         self._state_lock = Lock()
         self._pending: dict[int, Future[JsonObject]] = {}
         self._turns: dict[str, _TurnState] = {}
+        # Turn ids this client already finished (bounded): a late notification for one
+        # must not resurrect its state. A notification for a turn whose start
+        # response is still in flight is not finished yet, so it still creates state.
+        self._finished_turn_ids: deque[str] = deque(maxlen=1024)
         self._thread_tools: dict[str, dict[str, _ToolBinding]] = {}
         self._thread_approvals: dict[str, _ApprovalBinding] = {}
         self._thread_event_resolvers: dict[str, AgentMessageResolver] = {}
@@ -431,6 +435,7 @@ class CodexAppServerClient:
                 self._thread_event_resolvers.pop(resolved_thread_id, None)
                 if turn_id is not None:
                     self._turns.pop(turn_id, None)
+                    self._finished_turn_ids.append(turn_id)
             try:
                 lifetime.close()
             finally:
@@ -771,7 +776,9 @@ class CodexAppServerClient:
         turn_id = params.get("turnId")
         if isinstance(turn_id, str):
             with self._state_lock:
-                self._turns.setdefault(turn_id, _TurnState()).tool_calls += 1
+                state = self._known_turn_state_locked(turn_id)
+                if state is not None:
+                    state.tool_calls += 1
         try:
             result = _invoke_binding(binding, **dict(arguments))
             self._tool_response(request_id, True, _tool_result_text(result))
@@ -847,8 +854,8 @@ class CodexAppServerClient:
                     total_tokens = total.get("totalTokens")
                     if isinstance(total_tokens, int) and not isinstance(total_tokens, bool):
                         with self._state_lock:
-                            state = self._turns.setdefault(turn_id, _TurnState())
-                            if state.usage_total != total_tokens:
+                            state = self._known_turn_state_locked(turn_id)
+                            if state is not None and state.usage_total != total_tokens:
                                 state.usage_total = total_tokens
                                 state.model_requests += 1
                                 for key, value in last.items():
@@ -862,7 +869,9 @@ class CodexAppServerClient:
             and item.get("type") == "contextCompaction"
         ):
             with self._state_lock:
-                self._turns.setdefault(turn_id, _TurnState()).compacted = True
+                state = self._known_turn_state_locked(turn_id)
+                if state is not None:
+                    state.compacted = True
         if method == "item/agentMessage/delta" and resolver is not None:
             item_id = params.get("itemId")
             delta = params.get("delta")
@@ -878,10 +887,11 @@ class CodexAppServerClient:
                 text = item.get("text")
                 if isinstance(text, str):
                     message_id = item.get("id")
+                    known = self._known_turn_state(turn_id)
                     resolved_message_id = (
                         message_id
                         if isinstance(message_id, str)
-                        else f"{turn_id}:message:{len(self._turn_state(turn_id).messages) + 1}"
+                        else f"{turn_id}:message:{len(known.messages) + 1 if known is not None else 1}"
                     )
                     phase = _message_phase(item.get("phase"))
                     self._append_turn_message(
@@ -910,6 +920,22 @@ class CodexAppServerClient:
             if isinstance(turn, dict) and isinstance(turn.get("id"), str):
                 self._complete_turn(turn)
 
+    def _known_turn_state(self, turn_id: str) -> _TurnState | None:
+        """State for a notification, or None once the turn finished."""
+        with self._state_lock:
+            return self._known_turn_state_locked(turn_id)
+
+    def _known_turn_state_locked(self, turn_id: str) -> _TurnState | None:
+        """Like ``_known_turn_state``; caller must hold ``_state_lock``.
+
+        A finished turn never comes back, but a notification for a turn whose
+        start response is still in flight still creates its state: the reader
+        thread can process it before the turn's owner registers the turn.
+        """
+        if turn_id in self._finished_turn_ids:
+            return None
+        return self._turns.setdefault(turn_id, _TurnState())
+
     def _turn_state(self, turn_id: str) -> _TurnState:
         with self._state_lock:
             state = self._turns.setdefault(turn_id, _TurnState())
@@ -926,12 +952,16 @@ class CodexAppServerClient:
 
     def _append_turn_message(self, turn_id: str, message: _TurnMessage) -> None:
         with self._state_lock:
-            self._turns.setdefault(turn_id, _TurnState()).messages.append(message)
+            state = self._known_turn_state_locked(turn_id)
+            if state is not None:
+                state.messages.append(message)
 
     def _complete_turn(self, turn: JsonObject) -> None:
         turn_id = cast(str, turn["id"])
         with self._state_lock:
-            state = self._turns.setdefault(turn_id, _TurnState())
+            state = self._known_turn_state_locked(turn_id)
+            if state is None:
+                return
             state.turn = turn
             state.done.set()
 
@@ -940,7 +970,9 @@ class CodexAppServerClient:
         turn_id: str,
     ) -> tuple[BaseException | None, JsonObject | None, tuple[_TurnMessage, ...], bool]:
         with self._state_lock:
-            state = self._turns.setdefault(turn_id, _TurnState())
+            state = self._turns.get(turn_id)
+            if state is None:
+                return None, None, (), False
             return state.error, state.turn, tuple(state.messages), state.compacted
 
     def _request_turn_control(self, method: str, params: JsonObject, state: _TurnState) -> bool:

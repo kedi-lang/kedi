@@ -1002,6 +1002,28 @@ def test_state_directory_rejects_unsafe_paths(tmp_path: Path, case: str) -> None
         asyncio.run(_test_state(root, identity="program-1", max_tasks_per_principal=2).open())
 
 
+def test_state_store_accepts_question_mark_in_state_path(tmp_path: Path) -> None:
+    # 214 group D item 4.12: the SQLite URL must not swallow a `?` in the
+    # state directory path — the tables belong in the database next to the
+    # state dir, not in a truncated path. (The file itself is created by
+    # open(), so existence alone does not prove the engine used it.)
+    async def scenario() -> None:
+        root = tmp_path / "we?ird" / "state"
+        state = _test_state(root, identity="program-1", max_tasks_per_principal=2)
+        await state.open()
+        try:
+            tables = (
+                sqlite3.connect(root / "state.sqlite3")
+                .execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetchall()
+            )
+            assert tables, "expected the A2A tables in state.sqlite3"
+        finally:
+            await state.close()
+
+    asyncio.run(scenario())
+
+
 def test_state_store_rejects_soft_lock(tmp_path: Path, monkeypatch: Any) -> None:
     async def scenario() -> None:
         state = _test_state(tmp_path / "state", identity="program-1", max_tasks_per_principal=2)

@@ -63,10 +63,17 @@ def normalize_for_langchain(model: str) -> str:
     """Use LangChain's provider-prefixed chat model id form."""
     if not model or "://" in model:
         return model
-    if model.startswith("openai-chat:"):
-        return "openai:" + model[len("openai-chat:") :]
-    si = model.find("/")
-    ci = model.find(":")
-    if si == -1 or (ci != -1 and ci < si):
+    slash = model.find("/")
+    colon = model.find(":")
+    if slash == -1 and colon == -1:
         return model
-    return model[:si] + ":" + model[si + 1 :]
+    if slash == -1:
+        sep = colon
+    elif colon == -1:
+        sep = slash
+    else:
+        sep = min(slash, colon)
+    provider = model[:sep]
+    if provider in {"openai-responses", "openai-chat"}:
+        provider = "openai"
+    return provider + ":" + model[sep + 1 :]

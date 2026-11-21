@@ -547,3 +547,11 @@ def test_python_ranges_picks_up_fenced_block():
 def test_python_ranges_empty_for_no_python():
     src = "@p():\n  = ok\n"
     assert python_regions_module.compute_python_ranges(src) == []
+
+
+def test_semantic_tokens_tolerate_unterminated_fence_at_eof() -> None:
+    """#214 6.20: a document ending in an unterminated fence must not raise."""
+    src = "@p() -> str:\n  [x: int] = ```\n  return 1\n"
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    assert tokens.data is not None
+    assert len(tokens.data) % 5 == 0

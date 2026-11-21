@@ -57,6 +57,7 @@ echo "==> Building and packaging kedi-zed extension..."
   ' "$wasm_path"
 
   staging="$(mktemp -d)"
+  trap 'rm -rf "$staging"' EXIT
   cp extension.toml "$staging/"
   cp "$wasm_path" "$staging/extension.wasm"
   cp -R languages snippets debug_adapter_schemas LICENSE "$staging/"
@@ -64,11 +65,11 @@ echo "==> Building and packaging kedi-zed extension..."
   cp embedded-python-proxy/server.mjs "$staging/embedded-python-proxy/"
 
   mkdir -p "$ROOT/dist"
+  rm -f "$ROOT/$zed_archive"
   (
     cd "$staging"
     zip -qr "$ROOT/$zed_archive" .
   )
-  rm -rf "$staging"
 
   echo "Created $ROOT/$zed_archive"
 )

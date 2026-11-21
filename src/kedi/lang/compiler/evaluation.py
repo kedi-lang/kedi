@@ -73,6 +73,27 @@ def evaluate_python_inline(
         return rt.executor.evaluate_inline(rt, code, local_env)
 
 
+def _evaluate_python_segment(
+    rt: KediRuntime,
+    seg: PythonExprSegment | PythonExprNativeSegment,
+    local_env: dict[str, Any],
+    *,
+    cache: dict[int, Any] | None = None,
+    span=None,
+) -> Any:
+    """Evaluate an inline Python segment, memoized per segment in ``cache``.
+
+    Same contract as ``evaluate_call``: within one ``render_expression``
+    (prepare + stringify passes) a segment with side effects runs once.
+    """
+    if cache is not None and id(seg) in cache:
+        return cache[id(seg)]
+    result = evaluate_python_inline(rt, seg.code, local_env, span=span)
+    if cache is not None:
+        cache[id(seg)] = result
+    return result
+
+
 def execute_python_block(code: str, rt: KediRuntime, kwargs: dict[str, Any], *, span=None) -> Any:
     """Execute a multi-line Python block with return value."""
     with rt.trace_frame(KediTraceFrame(kind="python_block", label="python block", span=span)):
@@ -191,7 +212,7 @@ def prepare_segments(
             pytype = kedi_type.resolve_required(rt, kwargs)
             expr.append(rt.o(seg.name, pytype, binding_contract=kedi_type))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
-            value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
+            value = force(_evaluate_python_segment(rt, seg, kwargs, cache=call_cache, span=seg.loc))
             _append_computed(expr, parts, substitution_text(value, f"`{seg.code}`"), context)
 
     return expr, "".join(parts)
@@ -349,7 +370,7 @@ def _segment_parts(
             else:
                 parts.append("")
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
-            value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
+            value = force(_evaluate_python_segment(rt, seg, kwargs, cache=call_cache, span=seg.loc))
             parts.append(substitution_text(value, f"`{seg.code}`"))
 
     return parts

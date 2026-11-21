@@ -620,6 +620,10 @@ class A2AAdapter(HookRegistrationMixin):
             unsupported.append("effort")
         if profile.mcp_servers:
             unsupported.append("mcp")
+        if profile.tools:
+            unsupported.append("tools")
+        if profile.tool_bindings:
+            unsupported.append("tool_bindings")
         if profile.settings:
             unsupported.append("settings")
         codemode = profile.codemode

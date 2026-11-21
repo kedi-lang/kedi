@@ -774,3 +774,14 @@ def test_skill_instructions_without_store_do_not_claim_an_inventory() -> None:
     instructions = skill_instructions()
     assert "Use list_skills when a task may benefit" in instructions
     assert "available_skills" not in instructions
+
+
+def test_grounding_instruction_is_attached_to_mcp_only_profiles() -> None:
+    # 1.4: the grounding gate checked a non-existent `mcp` attribute instead
+    # of `mcp_servers`, so MCP-only profiles never got the instruction.
+    from kedi.agent_profile.mcp import McpServerSpec
+
+    runtime = KediRuntime(adapter=MockAdapter())
+    profile = AgentProfile(mcp_servers=(McpServerSpec(command="mcp-server"),))
+    parts = runtime._agent_instruction_parts(profile, runtime.adapter)
+    assert sum(p.identity == "grounding.instructions" for p in parts) == 1

@@ -200,11 +200,12 @@ class GEPASession:
         self._reporter.emit("\n🔍 Extracting optimized prompt...")
         previous_instruction = span_to_instruction(span)
         extracted = self._prompt_extractor.extract_prompts(optimized_module, [span])
-        optimized_prompt = normalize_optimized_prompt_prefix(span, extracted.get(span.name))
-        if optimized_prompt is None:
+        raw_prompt = extracted.get(span.name)
+        if raw_prompt is None:
             self._reporter.emit("   ❌ No optimized prompt found")
             warnings.warn(f"No optimized prompt found for span '{span.name}'", UserWarning)
             return GEPASpanResult(prompt=None, score=0.0)
+        optimized_prompt = normalize_optimized_prompt_prefix(span, raw_prompt)
 
         optimized_prompts[span.name] = optimized_prompt
         if span.template_lines:

@@ -34,6 +34,48 @@ from kedi.optimization.services.prompt_loader import OptimizedPromptLoader
 from tests.optimization_helpers import make_optimize_span
 
 
+def test_dspy_config_two_max_tokens_each_take_effect(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 5.9: two configs with different max_tokens each take effect on the
+    # configured LM, and the dspy.LM class itself is never patched.
+    class FakeLM:
+        def __init__(
+            self,
+            model: str,
+            model_type: str = "chat",
+            temperature: float = 0.0,
+            max_tokens: int = 4000,
+            cache: bool = True,
+            callbacks: Any = None,
+            num_retries: int = 3,
+            provider: Any = None,
+            finetuning_model: Any = None,
+            launch_kwargs: Any = None,
+            train_kwargs: Any = None,
+            **kwargs: Any,
+        ) -> None:
+            self.kwargs = {"max_tokens": max_tokens, **kwargs}
+            self.model = model
+
+    monkeypatch.setattr(dspy_config_module, "ThinkingStrippingLM", FakeLM)
+    monkeypatch.setattr(dspy_config_module.dspy, "configure_cache", lambda **kwargs: None)
+    # NB: dspy.settings.context() shadows configure() calls made inside it,
+    # so save and restore the LM manually instead.
+    previous_lm = dspy_config_module.dspy.settings.lm
+    try:
+        DSPyConfigurationService(
+            OptimizerConfig(optimizer_model="openai/gpt-4o", optimizer_model_max_tokens=1111)
+        ).configure_main_lm()
+        assert dspy_config_module.dspy.settings.lm.kwargs["max_tokens"] == 1111
+        DSPyConfigurationService(
+            OptimizerConfig(optimizer_model="openai/gpt-4o", optimizer_model_max_tokens=2222)
+        ).configure_main_lm()
+        assert dspy_config_module.dspy.settings.lm.kwargs["max_tokens"] == 2222
+    finally:
+        dspy_config_module.dspy.settings.configure(lm=previous_lm)
+    assert not hasattr(dspy.LM, "_kedi_patched")
+    assert dspy.LM(model="openai/gpt-4o").kwargs.get("max_tokens") is None
+
+
 def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     config = OptimizerConfig(optimizer_model=None, reflection_model=None)
     service = DSPyConfigurationService(config)
@@ -68,9 +110,6 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
             self.kwargs = {"max_tokens": max_tokens, **kwargs}
             self.model = model
 
-    if hasattr(FakeLM, "_kedi_patched"):
-        delattr(FakeLM, "_kedi_patched")
-    monkeypatch.setattr(dspy_config_module, "LM", FakeLM)
     monkeypatch.setattr(dspy_config_module, "ThinkingStrippingLM", FakeLM)
     monkeypatch.setattr(dspy_config_module.dspy, "configure_cache", lambda **kwargs: None)
     service = DSPyConfigurationService(
@@ -78,15 +117,12 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     service.configure_main_lm()
     assert (
-        dspy_config_module.LM("later").kwargs["max_tokens"]
+        dspy_config_module.dspy.settings.lm.kwargs["max_tokens"]
         == service.config.get_optimizer_max_tokens()
     )
     reflection_lm = service.configure_reflection_lm()
     assert isinstance(reflection_lm, FakeLM)
     assert reflection_lm.kwargs["timeout"] == 300
-
-    class PatchedLM(FakeLM):
-        _kedi_patched = True
 
     class QuietSettings:
         lm = SimpleNamespace(model="quiet")
@@ -94,8 +130,6 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
         def configure(self, **_: Any) -> None:
             return None
 
-    monkeypatch.setattr(dspy_config_module, "LM", PatchedLM)
-    monkeypatch.setattr(dspy_config_module, "ThinkingStrippingLM", PatchedLM)
     monkeypatch.setattr(dspy_config_module.dspy, "settings", QuietSettings())
     DSPyConfigurationService(OptimizerConfig(optimizer_model="openai/gpt-4o")).configure_main_lm()
 

@@ -462,9 +462,12 @@ def test_codegen_orchestrator_happy_path(tmp_path: Path) -> None:
     assert results and all(c.success for s in results for c in s.cases)
 
 
-def test_codegen_orchestrator_success_with_no_cache_removes_generated_cache(
+def test_codegen_orchestrator_success_with_no_cache_keeps_generated_cache_for_run(
     tmp_path: Path,
 ) -> None:
+    # 1.2 (Tekir Q 1.2 decision): a successful generation keeps the cache so
+    # the program run that follows can load the generated procedure. Cleanup
+    # with use_cache=False happens in app.py after the run, not here.
     src = tmp_path / "g.kedi"
     src.write_text(
         "@f():\n  > auto: \n    implement a function returning ok\n\n= <f()>\n",
@@ -473,6 +476,27 @@ def test_codegen_orchestrator_success_with_no_cache_removes_generated_cache(
     mgr = CodegenManager(MockPassingAgent(), use_cache=False)
 
     assert mgr.orchestrate_generation(src, "@f():", "implement", "spec")
+    cache = tmp_path / "g.cache.kedi"
+    assert cache.exists()
+    assert "# >>> kedi-codegen: f" in cache.read_text(encoding="utf-8")
+
+
+def test_no_cache_test_run_keeps_generated_cache_until_after_run(tmp_path: Path) -> None:
+    # 1.2 end-to-end: with use_cache=False the generated procedure must
+    # still run (the cache is present during the run) and the cache file
+    # must be gone afterwards.
+    from kedi.app import run_tests_cli
+
+    src = tmp_path / "g.kedi"
+    src.write_text(
+        "@f():\n  > auto: \n    implement a function returning ok\n\n= <f()>\n",
+        encoding="utf-8",
+    )
+    code, out = run_tests_cli(str(src), codegen_agent="mock", use_cache=False)
+    assert code == 0, out
+    # The generated tests must actually have run — on base the cache is
+    # deleted before the run, so the suite is empty and nothing runs.
+    assert "f::basic: OK" in out and "f::return_type: OK" in out
     assert not (tmp_path / "g.cache.kedi").exists()
 
 
@@ -678,7 +702,14 @@ def test_codegen_keeps_one_loop_for_tests_and_implementation(
         assert asyncio.run(async_generate()) if async_host else generate()
     assert len(loops) == 2
     assert loops[0].is_closed()
-    assert not source.with_suffix(".cache.kedi").exists()
+    if fail_implementation:
+        # A failed generation cleans its own cache block.
+        assert not source.with_suffix(".cache.kedi").exists()
+    else:
+        # 1.2 (Tekir Q 1.2 decision): a successful generation keeps the
+        # cache for the run that follows; the caller (app.py) removes it
+        # after the run, so run_codegen on its own leaves it behind.
+        assert source.with_suffix(".cache.kedi").exists()
 
 
 def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(
@@ -775,4 +806,61 @@ def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(
             False,
             2,
         ),
+    ]
+
+
+def test_reconstruct_header_keeps_parameter_defaults() -> None:
+    # 1.12a: _reconstruct_header dropped parameter defaults.
+    from kedi.codegen import runner as runner_module
+    from kedi.lang import parse_program
+
+    prog = parse_program('@f(x: int = `3`, name: str = `"a"`) -> int:\n  = `x`\n')
+    assert runner_module._reconstruct_header(prog.procedures[0]) == (
+        '@f(x: int = `3`, name: str = `"a"`) -> int:'
+    )
+
+
+def test_python_impl_keeps_blank_lines_in_multiline_strings() -> None:
+    # 1.12b: blank lines inside multi-line strings were deleted, changing
+    # the string value.
+    from kedi.lang import compile_program, parse_program
+
+    out = python_impl_to_kedi_impl('s = """a\n\nb"""\nreturn s\n', "@f() -> str:")
+    # The blank line survives in the generated block (the 2-space Kedi
+    # indent on the continuation line is stripped back by the parser).
+    assert "\n\n" in out
+    rt = compile_program(parse_program(out))
+    assert rt._invoke_procedure(rt._get_proc("f"), []) == "a\n\nb"
+    # Without a trailing newline there is no artifact blank line either:
+    # the block ends right after the last code line.
+    assert python_impl_to_kedi_impl('s = """a\n\nb"""\nreturn s', "@f() -> str:") == (
+        '@f() -> str:\n  = ```\n  s = """a\n\n  b"""\n  return s\n  ```'
+    )
+
+
+def test_python_impl_rejects_self_recursive_wrapper() -> None:
+    # 1.12c: a self-recursive `def` wrapper passed the guard (its name is
+    # referenced by the recursion) and was embedded but never called, so the
+    # procedure silently returned None.
+    with pytest.raises(ValueError, match="function body only"):
+        python_impl_to_kedi_impl(
+            "def f(x):\n    return f(x - 1) if x > 0 else 0\n", "@f(x: int) -> int:"
+        )
+
+
+def test_python_impl_rejects_bare_fence_line() -> None:
+    # 1.12d: a bare ``` line inside the impl closed the fence early and
+    # broke the generated Kedi.
+    with pytest.raises(ValueError, match="```"):
+        python_impl_to_kedi_impl('print("a")\n```\nprint("b")\nreturn "x"\n', "@f() -> str:")
+
+
+def test_split_top_level_commas_handles_escaped_quotes() -> None:
+    # 1.12e: _split_top_level_commas split inside a string at an escaped
+    # quote instead of treating \" as an escaped character.
+    from kedi.codegen.translator import _split_top_level_commas
+
+    assert _split_top_level_commas('a: str = "x\\",y", b: int') == [
+        'a: str = "x\\",y"',
+        " b: int",
     ]

@@ -20,7 +20,10 @@ def _reconstruct_header(proc: ProcedureDef) -> str:
         t = None
         if proc.param_type_annotations is not None:
             t = proc.param_type_annotations.get(p)
-        params_parts.append(f"{p}: {t}" if t else p)
+        part = f"{p}: {t}" if t else p
+        if proc.param_defaults is not None and p in proc.param_defaults:
+            part += f" = `{proc.param_defaults[p]}`"
+        params_parts.append(part)
     header = f"@{proc.name}(" + ", ".join(params_parts) + ")"
     if proc.return_type_annotation:
         header += f" -> {proc.return_type_annotation}"

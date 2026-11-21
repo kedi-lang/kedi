@@ -10,6 +10,17 @@ from kedi.tests_runner import _load_program_with_validations, run_evals, run_tes
 from kedi.utils import AttrDict
 
 
+def test_load_program_with_validations_accepts_file_path_with_at_sign(tmp_path: Path) -> None:
+    # 5.12: a file path containing "@" is a path, not source text.
+    source = tmp_path / "a@b" / "prog.kedi"
+    source.parent.mkdir()
+    source.write_text("@id(x):\n  = <x>\n", encoding="utf-8")
+
+    runtime = _load_program_with_validations(str(source), adapter=None)
+
+    assert runtime._get_proc("id")("ok") == "ok"
+
+
 def test_load_program_with_validations_accepts_file_path(tmp_path: Path) -> None:
     source = tmp_path / "plain.kedi"
     source.write_text("@id(x):\n  = <x>\n", encoding="utf-8")

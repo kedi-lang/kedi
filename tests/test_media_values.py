@@ -372,6 +372,35 @@ def test_data_uri_errors_and_labels_for_every_source() -> None:
     assert str(named.with_name(None)) == "<image data · image/png · 2 KB>"
 
 
+def test_oversize_data_uri_is_rejected_before_decoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 214 group D item 4.10: the size check must run before the payload is
+    # decoded, so an oversize URI cannot allocate the decoded bytes.
+    calls: list[bytes] = []
+    original = base64.b64decode
+
+    def spy(data: bytes, *args: object, **kwargs: object) -> bytes:
+        calls.append(bytes(data))
+        return original(data, *args, **kwargs)
+
+    monkeypatch.setattr(base64, "b64decode", spy)
+    payload = base64.b64encode(b"x" * (MAX_MEDIA_BYTES + 1)).decode()
+    with pytest.raises(MediaError, match="exceeds"):
+        Image.from_data_uri(f"data:image/png;base64,{payload}")
+    assert calls == []
+
+
+@pytest.mark.parametrize("media_type", [123, True, ["image/png"], {"type": "image/png"}])
+def test_media_json_rejects_non_string_media_type(media_type: object) -> None:
+    # 214 group D item 4.10: a non-string media_type must be a MediaError,
+    # not a raw AttributeError from normalize_media_type.
+    adapter = TypeAdapter(Image)
+    payload = json.dumps({"file_id": "abc", "provider": "p", "media_type": media_type})
+    with pytest.raises(ValidationError, match="media_type must be a string"):
+        adapter.validate_json(payload)
+
+
 def test_coercion_from_bytes_and_unsupported_values(workspace: Path) -> None:
     from kedi.media import is_text_media_type
 

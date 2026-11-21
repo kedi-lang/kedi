@@ -45,8 +45,12 @@ class GEPAMetricWrapper:
         self._prediction_cache: "weakref.WeakKeyDictionary[Any, tuple[float, Optional[str]]]" = (
             weakref.WeakKeyDictionary()
         )
-        # Fallback cache keyed by id() for objects that are not weakref-able
-        self._prediction_id_cache: dict[int, tuple[float, Optional[str]]] = {}
+        # Fallback cache keyed by id() for objects that are not weakref-able.
+        # The prediction itself is kept alongside the value: without a strong
+        # reference a deleted prediction's id can be reused by a new object,
+        # which would then read the dead prediction's score. Lookups compare
+        # identity, so a stale entry never hits.
+        self._prediction_id_cache: dict[int, tuple[Any, tuple[float, Optional[str]]]] = {}
         # Serializes apply/restore of span.template_lines mutations across
         # concurrent metric callbacks. See class docstring.
         self._span_lock = threading.Lock()
@@ -298,11 +302,18 @@ class GEPAMetricWrapper:
             cached = None
         if cached is not None:
             return cached
-        # Fallback by id()
+        # Fallback by id(); the stored prediction must be this object, since
+        # an id can be reused once its owner is gone.
         try:
-            return self._prediction_id_cache.get(id(prediction))
+            entry = self._prediction_id_cache.get(id(prediction))
         except Exception:
             return None
+        if entry is None:
+            return None
+        stored, data = entry
+        if stored is not prediction:
+            return None
+        return data
 
     def _store_cached_feedback(
         self,
@@ -322,8 +333,9 @@ class GEPAMetricWrapper:
         try:
             self._prediction_cache[prediction] = data
         except TypeError:
-            # Not weakref-able; store by id()
-            self._prediction_id_cache[id(prediction)] = data
+            # Not weakref-able; store by id() with a strong reference so the
+            # id cannot be reused by another object while the entry lives.
+            self._prediction_id_cache[id(prediction)] = (prediction, data)
 
     def _extract_current_instructions(self, module: dspy.Module) -> str | None:
         """Extract current optimized instructions from GEPA's module."""

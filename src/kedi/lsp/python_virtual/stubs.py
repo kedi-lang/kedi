@@ -183,8 +183,12 @@ def _emit_python_class_stub(builder: VirtualBuilder, stmt: py_ast.ClassDef) -> N
         builder.add(f"    {name}: {typ}")
     has_explicit_init = any(method.name == "__init__" for method in methods)
     if fields and not has_explicit_init:
+        # Required params must precede defaulted ones, or the stub is
+        # not valid Python. Stable sort keeps declaration order otherwise.
+        ordered_fields = sorted(fields, key=lambda field: field[2])
         params = ", ".join(
-            _python_class_init_param(name, typ, has_default) for name, typ, has_default in fields
+            _python_class_init_param(name, typ, has_default)
+            for name, typ, has_default in ordered_fields
         )
         builder.add(f"    def __init__(self, {params}) -> None: ...")
     for method in methods:
@@ -331,6 +335,10 @@ def _emit_proc_stub(builder: VirtualBuilder, proc: ProcedureDef, prefix: str = "
 def _docstring_lines(docstring: str, indent: str) -> list[str]:
     escaped = docstring.replace('"""', '\\"""')
     lines = escaped.splitlines() or [""]
+    if lines[-1].endswith(('"', "\\")):
+        # A trailing quote or backslash would swallow the closing quotes
+        # (or escape one of them), so fall back to a repr() literal.
+        return [f"{indent}{docstring!r}"]
     if len(lines) == 1:
         return [f'{indent}"""{lines[0]}"""']
     out = [f'{indent}"""{lines[0]}']
@@ -484,5 +492,8 @@ def _type_field_to_python(field: TypeField) -> str:
 def _type_init_params(typedef: TypeDef) -> str:
     if not typedef.fields:
         return "self"
-    fields = ", ".join(_type_field_to_python(field) for field in typedef.fields)
+    # Required fields first (stable): a defaulted field before a required
+    # one makes the __init__ signature invalid Python.
+    ordered = sorted(typedef.fields, key=lambda field: field.default_expr is not None)
+    fields = ", ".join(_type_field_to_python(field) for field in ordered)
     return f"self, {fields}"

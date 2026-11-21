@@ -258,6 +258,18 @@ def test_interactive_session_rejects_reentry_and_execution_after_close() -> None
         session.__enter__()
 
 
+def test_interactive_session_reuses_source_name_after_parse_error() -> None:
+    # 5.14: a parse error must not burn the source_name; the same name can
+    # be used again for a valid fragment.
+    from kedi.lang.parser import KediParseError
+
+    with kedi.interactive() as session:
+        with pytest.raises(KediParseError):
+            session.execute("@f(:\n", source_name="cell-1")
+        session.execute("[v: int] = `1`", source_name="cell-1")
+        assert inspect_fragment(session, "[inspection_value: int] = `v`", source_name="cell-2") == 1
+
+
 def test_interactive_session_rejects_duplicate_sources_and_close_while_executing() -> None:
     session = kedi.interactive()
     try:

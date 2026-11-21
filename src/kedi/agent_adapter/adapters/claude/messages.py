@@ -5,7 +5,7 @@ from dataclasses import asdict, is_dataclass
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from kedi.agent_adapter.codemode.tool_specs import append_codemode_instructions
 from kedi.agent_adapter.events import AgentMessageResolver
@@ -110,29 +110,20 @@ def _set_claude_system_prompt(
 
 
 def _output_json_schema(output_type: type[Any]) -> dict[str, Any]:
-    if issubclass(output_type, BaseModel):
+    if isinstance(output_type, type) and issubclass(output_type, BaseModel):
         return output_type.model_json_schema()
-    return {"type": _json_schema_type_name(output_type)}
-
-
-def _json_schema_type_name(output_type: type[Any]) -> str:
-    if output_type is str:
-        return "string"
-    if output_type is int:
-        return "integer"
-    if output_type is float:
-        return "number"
-    if output_type is bool:
-        return "boolean"
-    return "object"
+    schema = TypeAdapter(output_type).json_schema()
+    # An unconstrained type has no schema of its own; keep the object shape the
+    # SDK expects instead of sending an empty schema.
+    return schema or {"type": "object"}
 
 
 def _structured_output_value(value: Any, output_type: type[Any]) -> Any:
-    if issubclass(output_type, BaseModel):
+    if isinstance(output_type, type) and issubclass(output_type, BaseModel):
         if isinstance(value, output_type):
             return value
         return output_type.model_validate(value)
-    return value
+    return TypeAdapter(output_type).validate_python(value)
 
 
 def _claude_text_response(message: Any) -> str:

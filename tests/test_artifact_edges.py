@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -113,6 +114,13 @@ def test_parse_byte_size_accepts_whole_numeric_and_binary_units() -> None:
     assert parse_byte_size("1.5KiB") == 1536
 
 
+def test_parse_byte_size_rejects_overflowing_string() -> None:
+    # 214 group D item 4.14: a huge digit string overflows float -> int, so it
+    # must surface as an ArtifactPolicyError, not a raw OverflowError.
+    with pytest.raises(ArtifactPolicyError, match="whole bytes"):
+        parse_byte_size("9" * 400 + "gb")
+
+
 @pytest.mark.parametrize(
     ("value", "allow_none", "message"),
     [
@@ -139,6 +147,14 @@ def test_parse_duration_accepts_supported_forms() -> None:
     assert parse_duration(timedelta(milliseconds=250)) == 0.25
     assert parse_duration(2) == 2.0
     assert parse_duration("1.5m") == 90.0
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_parse_duration_rejects_non_finite_numbers(value: float) -> None:
+    # 214 group D item 4.14: NaN slips past `<= 0` and Inf is unbounded; both
+    # must be rejected as durations.
+    with pytest.raises(ArtifactPolicyError, match="finite"):
+        parse_duration(value)
 
 
 @pytest.mark.parametrize(
@@ -486,6 +502,37 @@ def test_atomic_write_removes_temporary_file_on_replace_failure(
     with pytest.raises(OSError, match="cannot replace"):
         artifacts_projection_module._atomic_write(target, b"value", mode=0o600)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_atomic_write_ignores_stale_temporary_file(tmp_path: Path) -> None:
+    # 214 group D item 4.8: a leftover temp file from a crashed writer must
+    # not block the next write to the same path.
+    target = tmp_path / "target"
+    stale = tmp_path / f".target.{os.getpid()}.tmp"
+    stale.write_bytes(b"stale")
+    artifacts_projection_module._atomic_write(target, b"value", mode=0o600)
+    assert target.read_bytes() == b"value"
+
+
+def test_atomic_write_supports_concurrent_writes_to_the_same_path(tmp_path: Path) -> None:
+    # 214 group D item 4.8: writers sharing one PID must not collide on the
+    # temporary name.
+    target = tmp_path / "target"
+    errors: list[BaseException] = []
+
+    def write() -> None:
+        try:
+            artifacts_projection_module._atomic_write(target, b"value", mode=0o600)
+        except BaseException as exc:  # noqa: BLE001 - collected for the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert target.read_bytes() == b"value"
 
 
 def test_store_size_counts_only_active_and_pending_records() -> None:

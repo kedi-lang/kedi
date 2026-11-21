@@ -205,6 +205,7 @@ def _resource_policy(
     nested_ids = {
         child.identity
         for capability in profile.capabilities
+        if not (capability.deferred and not include_deferred)
         for child in capability.profile.capabilities
     }
     for capability in profile.capabilities:

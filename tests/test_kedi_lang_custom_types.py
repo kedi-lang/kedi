@@ -327,3 +327,16 @@ def test_mixed_positional_and_keyword_args():
     )
     out = _run(src)
     assert out == "30"
+
+
+def test_annotated_str_with_none_metadata_resolves() -> None:
+    # 1.10: `None` doubled as the "unresolved" sentinel, so a backtick
+    # metadata value of `None` in Annotated[str, `None`] read as unresolved.
+    src = '@f() -> str:\n  [v: Annotated[str, `None`]] = `"x"`\n  = `v`\n= `f()`\n'
+    assert _run(src) == "x"
+
+
+def test_literal_none_still_resolves_and_validates() -> None:
+    # 1.10: Literal[None] keeps working alongside the Annotated fix.
+    src = "@f():\n  [v: Literal[None]] = `None`\n  = `repr(v)`\n= `f()`\n"
+    assert _run(src) == "None"

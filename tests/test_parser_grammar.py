@@ -1338,3 +1338,12 @@ def test_line_continuation_collapses_to_single_space():
 def test_line_continuation_keeps_escaped_whitespace(source: str, expected: str) -> None:
     # Only source whitespace collapses at the join; \s, \t and \n are content.
     assert compile_program(parse_program(source)).run_main() == expected
+
+
+def test_fence_in_python_comment_does_not_toggle_block_state() -> None:
+    # 1.14: a ``` at the end of a comment line inside a Python block toggled
+    # in_python off, so a later ### line was misread as a block comment.
+    src = "```\nx = 1  # ex ```\n###\n```\n= `x`\n"
+    parse_program(src)
+    src_block_open = "###\ncomment\n= ```\n# ex ```\n```\n###\n= `1`\n"
+    parse_program(src_block_open)

@@ -274,3 +274,27 @@ def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> No
     settings_module = importlib.reload(kedi.settings)
     assert settings_module.settings.adapter == "pydantic"
     assert settings_module.settings.debug is False
+
+
+def test_settings_adapter_accepts_cli_adapter_choices() -> None:
+    # 5.17: Settings.adapter accepts exactly the CLI's adapter choices, from
+    # the same list the CLI uses; a2a stays out (it is a separate path).
+    from pydantic import ValidationError
+
+    import kedi.cli as cli_module
+    import kedi.settings as settings_module
+
+    assert settings_module.ADAPTER_CHOICES == (
+        "pydantic",
+        "langchain",
+        "claude",
+        "codex",
+        "acp",
+    )
+    for choice in settings_module.ADAPTER_CHOICES:
+        assert settings_module.Settings(adapter=choice).adapter == choice
+    with pytest.raises(ValidationError):
+        settings_module.Settings(adapter="a2a")
+    # The CLI offers exactly the same choices (one source of truth).
+    adapter_option = next(param for param in cli_module.main.params if param.name == "adapter")
+    assert list(adapter_option.type.choices) == list(settings_module.ADAPTER_CHOICES)

@@ -98,16 +98,31 @@ def artifact_tool_specs(
             artifact_refs=artifact_refs,
         )
         effective_policy = (policy or ArtifactPolicy()).resolved()
+        sensitive = any(manager.metadata(ref)["sensitive"] for ref in execution.source_refs)
+        provenance = artifact_code_provenance(
+            code,
+            execution.source_refs,
+            derivation_depth=manager.derivation_depth(execution.source_refs),
+        )
         stored = manager.artifactize(
             execution.result,
             policy=effective_policy,
             source="artifact_code",
-            provenance=artifact_code_provenance(
-                code,
-                execution.source_refs,
-                derivation_depth=manager.derivation_depth(execution.source_refs),
-            ),
+            sensitive=sensitive,
+            provenance=provenance,
         )
+        if not isinstance(stored, ArtifactHandle):
+            # The inline path has no byte bound of its own: route it through
+            # the same bound tool results use, so an oversize value is stored
+            # (or rejected when artifacts are disabled) instead of going
+            # inline into model history.
+            stored = manager.admit_tool_result(
+                execution.result,
+                policy=effective_policy,
+                source="artifact_code",
+                sensitive=sensitive,
+                provenance=provenance,
+            )
         result = (
             stored.as_ref().model_dump(mode="json")
             if isinstance(stored, ArtifactHandle)

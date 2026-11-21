@@ -60,6 +60,19 @@ def test_no_slash_no_change_for_pydantic() -> None:
     assert normalize_for_pydantic_ai("openai:gpt-4o") == "openai-chat:gpt-4o"
 
 
+def test_openai_provider_prefixes_map_to_openai_for_langchain() -> None:
+    # 5.11: split on the first ":" or "/" and map openai-responses/openai-chat
+    # to the canonical "openai" provider.
+    assert normalize_for_langchain("openai-responses:gpt-5") == "openai:gpt-5"
+    assert normalize_for_langchain("openai-responses/gpt-5") == "openai:gpt-5"
+    assert normalize_for_langchain("openai-chat/gpt-5") == "openai:gpt-5"
+    assert normalize_for_langchain("openai-chat:gpt-5") == "openai:gpt-5"
+    assert normalize_for_langchain("openai/gpt-5") == "openai:gpt-5"
+    assert normalize_for_langchain("anthropic/claude-x") == "anthropic:claude-x"
+    assert normalize_for_langchain("anthropic:claude-x") == "anthropic:claude-x"
+    assert normalize_for_langchain("gpt-5") == "gpt-5"
+
+
 def test_slash_to_colon_for_langchain() -> None:
     assert normalize_for_langchain("openrouter/google/gemini-3-flash-preview") == (
         "openrouter:google/gemini-3-flash-preview"

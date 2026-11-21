@@ -1634,6 +1634,65 @@ def test_codex_client_tool_request_system_exit_and_notifications(
     assert state.error is disconnect
 
 
+def test_codex_late_notifications_do_not_recreate_finished_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # 3.8
+    client = CodexAppServerClient((sys.executable,))
+    # Simulate finished turns: entries created during each turn, popped when done.
+    for turn_id in ("turn-1", "turn-2", "turn-3", "turn-4"):
+        client._turn_state(turn_id)
+    for turn_id in ("turn-1", "turn-2", "turn-3", "turn-4"):
+        client._turns.pop(turn_id)
+        client._finished_turn_ids.append(turn_id)
+    assert client._turns == {}
+
+    client._handle_notification(
+        "thread/tokenUsage/updated",
+        {
+            "turnId": "turn-1",
+            "threadId": "th-1",
+            "tokenUsage": {"last": {"inputTokens": 5}, "total": {"totalTokens": 5}},
+        },
+    )
+    client._handle_notification(
+        "item/completed",
+        {
+            "turnId": "turn-2",
+            "threadId": "th-1",
+            "item": {"type": "agentMessage", "text": "late", "id": "m1"},
+        },
+    )
+    client._handle_notification(
+        "item/completed",
+        {
+            "turnId": "turn-3",
+            "threadId": "th-1",
+            "item": {"type": "contextCompaction"},
+        },
+    )
+    client._handle_notification("turn/completed", {"turn": {"id": "turn-4", "status": "completed"}})
+
+    # A late dynamic tool call for a finished turn still runs, but must not
+    # resurrect the turn entry either.
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(client, "_send", sent.append)
+    client._thread_tools["th-1"] = {
+        "echo": codex_server_module._ToolBinding(
+            fn=lambda: "ok",
+            context=contextvars.copy_context(),
+            await_result=client._await_sync_result,
+        )
+    }
+    client._handle_server_request(
+        1,
+        "item/tool/call",
+        {"threadId": "th-1", "tool": "echo", "arguments": {}, "turnId": "turn-1"},
+    )
+    assert sent and sent[0]["result"]["success"] is True
+
+    assert client._turns == {}
+
+
 def test_codex_client_waiter_and_stop_process_edges() -> None:
     client = CodexAppServerClient((sys.executable,))
     pending: Future[dict[str, Any]] = Future()

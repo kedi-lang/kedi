@@ -27,7 +27,12 @@ from .package_manifest import (
     validate_package_metadata,
     validate_package_name,
 )
-from .registry_api import HTTPRegistryAPIClient, RegistryPackageRecord
+from .registry_api import (
+    _SPARSE_UNSAFE,
+    _SPARSE_UNSAFE_MESSAGE,
+    HTTPRegistryAPIClient,
+    RegistryPackageRecord,
+)
 
 KEDI_HOME_ENV = "KEDI_HOME"
 MOCK_REGISTRY_ROOT_ENV = "KEDI_REGISTRY_MOCK_ROOT"
@@ -195,7 +200,7 @@ def _package_source_relative_path(
     # is a directory name, not a sparse-checkout expression, so rejecting
     # pattern/control characters prevents a package from widening the
     # temporary checkout beyond its declared source tree.
-    if any(character in declared_source for character in "*?[]!\\\r\n"):
+    if any(character in declared_source for character in _SPARSE_UNSAFE):
         raise error_type("package source must not contain Git sparse-checkout pattern characters")
 
     relative_path = Path(declared_source)
@@ -714,8 +719,11 @@ def _checkout_registry_commit(
         [
             "-C",
             str(checkout),
-            "-c",
-            "protocol.file.allow=always",
+            *(
+                ["-c", "protocol.file.allow=always"]
+                if urlsplit(repository).scheme == "file"
+                else []
+            ),
             "fetch",
             "--quiet",
             "--depth",
@@ -766,8 +774,8 @@ def _checkout_registry_commit(
     package_source = _package_source_relative_path(metadata.source, error_type=PackageRegistryError)
     manifest_relative = PurePosixPath(record.package_manifest_path)
     repository_source = manifest_relative.parent / PurePosixPath(package_source.as_posix())
-    if any(character in repository_source.as_posix() for character in "*?["):
-        raise PackageRegistryError("Registry package source path must not contain glob syntax")
+    if any(character in repository_source.as_posix() for character in _SPARSE_UNSAFE):
+        raise PackageRegistryError(_SPARSE_UNSAFE_MESSAGE)
 
     _run_git(
         ["-C", str(checkout), "sparse-checkout", "init", "--no-cone"],

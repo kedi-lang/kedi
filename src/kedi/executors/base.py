@@ -89,25 +89,13 @@ class DefaultExecutor:
         eval_filename = self._python_filename(rt, "inline", code)
         eval_source = self._python_source(rt, code)
         try:
-            from ..decisions import decision_environment
-            from ..lang.compiler.environment import running_python
-
-            with decision_environment(local_env), running_python(rt, env):
-                result = eval(
-                    compile(eval_source, eval_filename, "eval", dont_inherit=True),
-                    env,
-                    env,
-                )
-            self._emit_debug(
-                "execution_completed",
-                "evaluate_inline",
-                code=code,
-                local_env=local_env,
-                output=result,
-                mode="eval",
-            )
-            return result
+            compiled = compile(eval_source, eval_filename, "eval", dont_inherit=True)
         except SyntaxError:
+            # Not an expression: fall through to the exec path below. Only a
+            # compile-time SyntaxError selects it; a SyntaxError raised while
+            # evaluating must not re-execute the code.
+            compiled = None
+        if compiled is None:
             try:
                 self._run_wrapped_block(rt, "inline", code, local_env)
                 self._emit_debug(
@@ -130,6 +118,21 @@ class DefaultExecutor:
                     mode="exec_after_syntax_error",
                 )
                 raise
+        try:
+            from ..decisions import decision_environment
+            from ..lang.compiler.environment import running_python
+
+            with decision_environment(local_env), running_python(rt, env):
+                result = eval(compiled, env, env)
+            self._emit_debug(
+                "execution_completed",
+                "evaluate_inline",
+                code=code,
+                local_env=local_env,
+                output=result,
+                mode="eval",
+            )
+            return result
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",

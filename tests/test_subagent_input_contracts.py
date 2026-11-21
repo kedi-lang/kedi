@@ -515,6 +515,30 @@ async def test_parent_delivery_failure_does_not_silently_complete_the_attempt() 
 
 
 @pytest.mark.asyncio
+async def test_cancelled_delivery_returns_input_to_the_queue() -> None:
+    # 2.10: a delivery cancelled mid-flight must not strand the items.
+    entered = asyncio.Event()
+    control = LiveInput("worker")
+    control.configure(input=True)
+
+    async def operation() -> str:
+        entered.set()
+        await asyncio.sleep(5)
+        return "unreachable"
+
+    async def deliver(items: tuple[AgentInput, ...]) -> bool:
+        raise asyncio.CancelledError("delivery cancelled")
+
+    task = asyncio.create_task(controlled_attempt(control, operation(), deliver=deliver))
+    await entered.wait()
+    control.admit("hello", sender_id="parent")
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert control.pending
+    assert control.delivered == ()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("interrupt", [False, True])
 async def test_input_after_native_response_prevents_obsolete_final_publication(
     interrupt: bool,

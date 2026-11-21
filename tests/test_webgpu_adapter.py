@@ -8,7 +8,7 @@ from typing import Annotated, Any, Iterator
 
 import pytest
 from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import kedi.agent_adapter.adapters.webgpu as webgpu_module
 from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
@@ -129,6 +129,28 @@ def test_webgpu_adapter_profile_scope_and_settings() -> None:
     }
 
 
+def test_webgpu_adapter_capabilities_declare_only_supported_settings() -> None:  # 3.13
+    from kedi.agent_adapter.adapters.webgpu import WEBGPU_SETTING_KEYS
+
+    assert WebGPUAdapter.capabilities.settings == {
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "seed",
+        "stop_sequences",
+        "timeout",
+    }
+    assert WebGPUAdapter.capabilities.settings == WEBGPU_SETTING_KEYS
+
+    adapter = WebGPUAdapter(QueueBridge(), model="bonsai")
+    with adapter.profile_override(AgentProfile(settings={"thinking": True})):
+        with pytest.raises(
+            ValueError,
+            match="Unsupported WebGPU model settings: thinking",
+        ):
+            adapter.produce_sync(template="answer", output_schema={"answer": str})
+
+
 def test_webgpu_adapter_profile_rejects_unknown_model_and_setting() -> None:
     adapter = WebGPUAdapter(
         QueueBridge(),
@@ -149,7 +171,7 @@ def test_webgpu_adapter_profile_rejects_unknown_model_and_setting() -> None:
 @pytest.mark.parametrize(
     ("response", "message"),
     [
-        ({"kind": "final", "data": "nope"}, "data must be an object"),
+        ({"kind": "final", "data": "nope"}, "Input should be a valid dictionary"),
         ({"kind": "error", "error": "browser failed"}, "browser failed"),
         ({"kind": "other"}, "Unknown browser model response kind"),
     ],
@@ -369,12 +391,6 @@ def test_webgpu_adapter_returns_tool_failure_to_model() -> None:
             "arguments": {"country": "Miyawland"},
         },
         {"kind": "final", "data": {"population": 2_000_000}},
-        {
-            "kind": "tool_call",
-            "name": "get_capital_population",
-            "arguments": {"capital": "Pawcity"},
-        },
-        {"kind": "final", "data": {"population": 12_560_000}},
     )
     adapter = WebGPUAdapter(bridge, model="bonsai")
     tool = ToolSpec(
@@ -392,12 +408,28 @@ def test_webgpu_adapter_returns_tool_failure_to_model() -> None:
             output_schema={"population": int},
         )
 
-    assert result.population == 12_560_000
+    # The failure is returned to the model, but the failed tool is not forced
+    # on the model again: the next final answer is accepted as-is. (3.9)
+    assert result.population == 2_000_000
     assert '"ok": false' in bridge.payloads[1]["messages"][-1]["content"]
     assert "unexpected keyword argument 'country'" in bridge.payloads[1]["messages"][-1]["content"]
-    assert bridge.payloads[1]["requiredTools"] == ["get_capital_population"]
-    assert "Call the explicitly requested tool" in bridge.payloads[2]["messages"][-1]["content"]
-    assert bridge.payloads[3]["requiredTools"] == []
+    assert bridge.payloads[1]["requiredTools"] == []
+    assert len(bridge.payloads) == 2
+    assert all(
+        "Call the explicitly requested tool" not in message.get("content", "")
+        for payload in bridge.payloads
+        for message in payload["messages"]
+    )
+
+
+def test_webgpu_adapter_validates_non_dict_final_data() -> None:  # 3.9
+    bridge = QueueBridge({"kind": "final", "data": ["a", "b"]})
+    adapter = WebGPUAdapter(bridge, model="bonsai")
+    assert adapter.produce_sync(template="List two.", output_type=list[str]) == ["a", "b"]
+
+    failing = WebGPUAdapter(QueueBridge({"kind": "final", "data": "nope"}), model="bonsai")
+    with pytest.raises(ValidationError, match="Input should be a valid list"):
+        failing.produce_sync(template="List two.", output_type=list[str])
 
 
 def test_webgpu_adapter_formats_tool_catalog_as_xml() -> None:

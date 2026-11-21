@@ -629,3 +629,38 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
         assert str(exc) == "boom"
     else:
         raise AssertionError("run_main errors should propagate")
+
+
+def test_run_evals_cli_no_cache_removes_cache_after_run(tmp_path: Path, monkeypatch) -> None:
+    # 1.2 (Tekir Q 1.2 decision): with use_cache=False the cache is removed
+    # in app.py after the run, in a finally.
+    src = tmp_path / "prog.kedi"
+    src.write_text("= ok\n", encoding="utf-8")
+    cache = src.with_suffix(".cache.kedi")
+
+    def fake_codegen(*args, **kwargs):
+        cache.write_text("# >>> kedi-codegen: f\n", encoding="utf-8")
+        return True, None
+
+    monkeypatch.setattr(app, "maybe_run_codegen", fake_codegen)
+    monkeypatch.setattr(app, "_build_runtime_adapter", lambda adapter, model: object())
+    monkeypatch.setattr(app, "run_evals", lambda *args, **kwargs: [])
+
+    code, out = app.run_evals_cli(str(src), use_cache=False)
+
+    assert code == 0
+    assert "Evals:" in out
+    assert not cache.exists()
+
+
+def test_run_program_cli_no_cache_removes_cache_after_run(tmp_path: Path) -> None:
+    # 1.2 (Tekir Q 1.2 decision): with use_cache=False the cache is removed
+    # in app.py after the run, in a finally — even when the run fails.
+    src = tmp_path / "prog.kedi"
+    src.write_text("= ok\n", encoding="utf-8")
+    cache = src.with_suffix(".cache.kedi")
+    cache.write_text("@cached():\n  = ok\n", encoding="utf-8")
+
+    code, _out = app.run_program_cli(str(src), adapter="pydantic", model=None, use_cache=False)
+    assert code == 0
+    assert not cache.exists()

@@ -14,6 +14,7 @@ from kedi.artifacts import (
     ArtifactHandle,
     ArtifactManager,
     ArtifactPolicy,
+    ToolOutputTooLargeError,
     artifact_tool_specs,
 )
 from kedi.artifacts import codemode as codemode_module
@@ -254,6 +255,61 @@ def test_artifact_code_has_no_host_access(
         manager.close()
 
 
+def test_run_artifact_code_tool_propagates_sensitive(tmp_path: Path) -> None:
+    # 214 group D item 4.7: a derived artifact inherits `sensitive` from its
+    # source artifacts.
+    manager = ArtifactManager(session_id="code-tool-sensitive")
+    policy = _policy(store="file", path=tmp_path)
+    stored = manager.artifactize("abcdefgh", policy=policy, source="tool:test", sensitive=True)
+    assert isinstance(stored, ArtifactHandle)
+    specs = artifact_tool_specs(manager, policy)
+    run = next(spec for spec in specs if spec.name == "run_artifact_code")
+    try:
+        result = run.fn(
+            code=f"get_artifact({stored.ref.ref_id!r}) * 2",
+            artifact_refs=[stored.ref.ref_id],
+        )
+        ref = result["result"]
+        assert manager.metadata(ref["ref_id"])["sensitive"] is True
+    finally:
+        manager.close()
+
+
+def test_run_artifact_code_tool_bounds_oversize_inline_result() -> None:
+    # 214 group D item 4.7: with artifacts disabled, a 200 KB result must not
+    # come back inline past the tool-result byte bound.
+    manager = ArtifactManager(session_id="code-tool-inline-bound")
+    source = _artifact(manager, "x")
+    specs = artifact_tool_specs(manager, ArtifactPolicy(enabled=False))
+    run = next(spec for spec in specs if spec.name == "run_artifact_code")
+    try:
+        with pytest.raises(ToolOutputTooLargeError, match="inline safety limit"):
+            run.fn(
+                code=f"get_artifact({source.ref.ref_id!r}) * 200000",
+                artifact_refs=[source.ref.ref_id],
+            )
+    finally:
+        manager.close()
+
+
+def test_run_artifact_code_tool_artifactizes_oversize_inline_result(tmp_path: Path) -> None:
+    # 214 group D item 4.7: with artifacts enabled but a high threshold, a
+    # 200 KB result is stored instead of coming back inline.
+    manager = ArtifactManager(session_id="code-tool-inline-store")
+    source = _artifact(manager, "abcdefgh", policy=_policy(store="file", path=tmp_path))
+    specs = artifact_tool_specs(manager, _policy(store="file", path=tmp_path, threshold="10mb"))
+    run = next(spec for spec in specs if spec.name == "run_artifact_code")
+    try:
+        result = run.fn(
+            code=f"get_artifact({source.ref.ref_id!r}) * 25000",
+            artifact_refs=[source.ref.ref_id],
+        )
+        ref = result["result"]
+        assert manager.get_value(ref["ref_id"]) == "abcdefgh" * 25000
+    finally:
+        manager.close()
+
+
 def test_run_artifact_code_tool_recursively_artifactizes_large_result(tmp_path: Path) -> None:
     manager = ArtifactManager(session_id="code-tool")
     source = _artifact(manager, "abcdefgh", policy=_policy(store="file", path=tmp_path))
@@ -460,5 +516,43 @@ def test_artifact_code_find_stops_at_limit_and_deduplicates_overlap(
         monkeypatch.setattr(manager, "read", repeated_read)
         matches = bridge.find(artifact.ref.ref_id, "alpha")
         assert matches == [{"offset": 0, "match": "alpha", "context": "alpha"}]
+    finally:
+        manager.close()
+
+
+def test_artifact_code_find_with_single_character_pattern_keeps_empty_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 214 group D item 4.5: a one-character pattern cannot span pages, so the
+    # overlap between pages must stay empty instead of keeping the whole window.
+    manager = ArtifactManager(session_id="code-find-single-char")
+    artifact = _artifact(manager, "alpha")
+    pages = [
+        type(
+            "Page",
+            (),
+            {"content": "A" * 4000, "complete": False, "next_offset": 4000},
+        )(),
+        type(
+            "Page",
+            (),
+            {"content": "Q" + "B" * 3999, "complete": True, "next_offset": None},
+        )(),
+    ]
+
+    def paged_read(
+        _ref_id: str,
+        *,
+        offset: int = 0,
+        max_chars: int = -1,
+        **_kwargs: Any,
+    ) -> Any:
+        return pages[0] if offset == 0 else pages[1]
+
+    bridge = _ArtifactHostBridge(manager, (artifact.ref.ref_id,), ArtifactCodeLimits())
+    try:
+        monkeypatch.setattr(manager, "read", paged_read)
+        matches = bridge.find(artifact.ref.ref_id, "Q")
+        assert matches == [{"offset": 4000, "match": "Q", "context": "Q" + "B" * 120}]
     finally:
         manager.close()

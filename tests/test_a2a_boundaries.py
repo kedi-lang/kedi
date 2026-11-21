@@ -49,6 +49,27 @@ def test_basic_auth_rejects_malformed_or_wrong_credentials(header):
     assert auth.authenticate({"authorization": header}) is None
 
 
+def test_basic_auth_compares_both_credentials_for_wrong_username(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 214 group D item 4.13: the username check must not short-circuit the
+    # secret check, or a wrong username leaks one comparison bit.
+    import kedi.a2a.auth as auth_module
+
+    calls: list[tuple[str, str]] = []
+    original = auth_module._credentials_match
+
+    def spy(value: str, expected: str) -> bool:
+        calls.append((value, expected))
+        return original(value, expected)
+
+    monkeypatch.setattr(auth_module, "_credentials_match", spy)
+    auth = A2AServerAuth(scheme="basic", username="user", secret="secret")
+    header = "Basic " + base64.b64encode(b"wrong:secret").decode()
+    assert auth.authenticate({"authorization": header}) is None
+    assert [value for value, _ in calls] == ["wrong", "secret"]
+
+
 def test_bearer_auth_requires_matching_scheme():
     auth = A2AServerAuth(scheme="bearer", secret="secret")
     assert auth.authenticate({"authorization": "Basic secret"}) is None

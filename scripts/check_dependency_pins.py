@@ -7,10 +7,16 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+# Stdlib only: the dependency-locks CI job runs this script with a bare
+# setup-python (no third-party packages installed).
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_REF = re.compile(r"^\s*uses:\s*([^\s#]+)@([^\s#]+)", re.MULTILINE)
 EXACT_ACTION_REF = re.compile(r"[0-9a-f]{40}")
 REQUIREMENT_OPERATOR = re.compile(r"(?:===|==|~=|!=|<=|>=|<|>)")
+EXACT_SEMVER = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?")
+_REQUIREMENT_NAME = re.compile(r"[A-Za-z0-9._-]+(?:\[[^\]]*\])?")
+_SPECIFIER = re.compile(r"(===|==|~=|!=|<=|>=|<|>)\s*([^\s,;]+)")
+_VERSION = re.compile(r"[0-9][0-9A-Za-z._+!]*")
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -25,7 +31,28 @@ def _requirement_has_bound(requirement: str) -> bool:
 
 def _requirement_is_exact(requirement: str) -> bool:
     requirement = requirement.split(";", 1)[0].strip()
-    return "==" in requirement and "!=" not in requirement
+    name_match = _REQUIREMENT_NAME.match(requirement)
+    if name_match is None:
+        return False
+    rest = requirement[name_match.end() :].strip()
+    if not rest:
+        return False
+    specifiers: list[tuple[str, str]] = []
+    for part in rest.split(","):
+        match = _SPECIFIER.fullmatch(part.strip())
+        if match is None:
+            return False
+        specifiers.append((match.group(1), match.group(2)))
+    return (
+        len(specifiers) == 1
+        and specifiers[0][0] == "=="
+        and "*" not in specifiers[0][1]
+        and _VERSION.fullmatch(specifiers[0][1]) is not None
+    )
+
+
+def _version_is_exact(version: str) -> bool:
+    return EXACT_SEMVER.fullmatch(version) is not None
 
 
 def _check_python_metadata(errors: list[str]) -> None:
@@ -81,7 +108,7 @@ def _check_javascript_metadata(errors: list[str]) -> None:
         data = json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
         for group in ("dependencies", "devDependencies"):
             for name, version in data.get(group, {}).items():
-                if version.startswith(("^", "~", ">", "<", "*")) or version == "latest":
+                if not _version_is_exact(version):
                     errors.append(
                         f"{relative_path}: {group} dependency {name} is not exact: {version}"
                     )

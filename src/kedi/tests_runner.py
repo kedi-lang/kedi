@@ -44,18 +44,24 @@ def _load_program_with_validations(
     runtime_globals: dict[str, Any] | None = None,
     forms: Mapping[str, Form] | None = None,
 ) -> Any:
-    # src_main may be the full source content or a filesystem path
+    # src_main may be the full source content or a filesystem path. A path
+    # wins over the "@" heuristic: an existing file is a path even when its
+    # name contains "@".
+    try:
+        is_path = Path(src_main).is_file()
+    except (OSError, ValueError):
+        is_path = False
     text: str
-    if "\n" in src_main or "@" in src_main:
-        text = src_main
-        source_path = None
-        source_map = None
-    else:
+    if is_path or ("\n" not in src_main and "@" not in src_main):
         p = Path(src_main)
         loaded = load_kedi_source_bundle(p.resolve())
         text = loaded.text
         source_path = str(p.resolve())
         source_map = loaded.source_map
+    else:
+        text = src_main
+        source_path = None
+        source_map = None
     prog = parse_program(text, source_path=source_path, source_map=source_map)
     rt = compile_program(prog, adapter=adapter, runtime_globals=runtime_globals, forms=forms)
     return rt

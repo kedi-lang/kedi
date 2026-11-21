@@ -9,7 +9,8 @@ import dspy
 
 # Matches [[ ## field_name ## ]] with flexible whitespace.
 # Multi-word field names (e.g. "first name") are supported.
-_THINKING_MARKER_RE = re.compile(r"\[\[\s*##\s+\w+(?:\s+\w+)*\s*##\s*\]\]")
+# Group 1 captures the field name for exact comparison.
+_THINKING_MARKER_RE = re.compile(r"\[\[\s*##\s+(\w+(?:\s+\w+)*)\s*##\s*\]\]")
 
 # XML-style thinking blocks: ``  thinking ...  ``  (DeepSeek, o-series, Anthropic).
 # Also handles ``  thought ...  `` and ``  reasoning ...  `` variants.
@@ -97,9 +98,10 @@ def _strip_thinking(raw: str) -> _StrippedResult:
        wrapper tags are also stripped from the cleaned output.
 
     2. **Field-marker fallback**: When no XML thinking tags are detected,
-       find the last ``[[ ## field ## ]]`` marker that is NOT
-       ``[[ ## completed ## ]]`` and split on it — everything before is
-       the thinking trace.
+       find the first ``[[ ## field ## ]]`` marker and split on it —
+       everything before it is the thinking trace. A field literally named
+       ``completed`` is the terminator, not a field, so it never starts
+       the output.
 
     If neither heuristic matches, the output is returned as-is with an
     empty thinking trace.
@@ -124,11 +126,12 @@ def _strip_thinking(raw: str) -> _StrippedResult:
     if not matches:
         return _StrippedResult(thinking="", output=raw)
 
-    # Walk backwards to find the last marker that is NOT [[ ## completed ## ]]
+    # The first field marker starts the structured output; only the text
+    # before it is thinking. A marker named exactly "completed" is the
+    # terminator, not a field, so it never starts the output.
     pivot: re.Match[str] | None = None
-    for m in reversed(matches):
-        text = m.group()
-        if "completed" not in text:
+    for m in matches:
+        if m.group(1) != "completed":
             pivot = m
             break
 

@@ -852,3 +852,63 @@ def test_mixed_space_escapes_and_regular_spaces(monkeypatch: Any) -> None:
     # The \s becomes a space, and regular spaces are also preserved
     assert " Escaped space    Regular spaces    Escaped space" in out
     assert "Escaped spacE   " not in out
+
+
+def test_nested_procedure_defined_in_loop_does_not_leak(monkeypatch: Any) -> None:
+    # 1.5: redefining @helper in a loop saved the iteration-1 helper and the
+    # procedure-level finally restored it globally.
+    src = (
+        "@outer() -> str:\n"
+        '  [v: str] = `""`\n'
+        "  > loop [n]: `range(3)`:\n"
+        "    @helper() -> str:\n"
+        "      = `f'helper {n}'`\n"
+        "    [v] := `helper()`\n"
+        "  = `v`\n"
+    )
+    rt = _compile(src)
+    assert rt._invoke_procedure(rt._get_proc("outer"), []) == "helper 2"
+    assert "helper" not in rt._procedures
+
+
+def test_loop_redefined_procedure_restores_preexisting_global(
+    monkeypatch: Any,
+) -> None:
+    # 1.5: a pre-existing global procedure shadowed inside a loop must be
+    # restored afterwards, not replaced by the loop's last iteration.
+    src = (
+        "@helper() -> str:\n"
+        "  = `'global'`\n"
+        "@outer() -> str:\n"
+        '  [v: str] = `""`\n'
+        "  > loop [n]: `range(3)`:\n"
+        "    @helper() -> str:\n"
+        "      = `f'helper {n}'`\n"
+        "    [v] := `helper()`\n"
+        "  = `v`\n"
+        "= `outer()`\n"
+    )
+    rt = _compile(src)
+    assert rt.run_main() == "helper 2"
+    assert rt._invoke_procedure(rt._get_proc("helper"), []) == "global"
+
+
+def test_one_line_compound_return_block_matches_multiline_block(
+    monkeypatch: Any,
+) -> None:
+    # 1.8: a one-line compound return block silently returned '' instead of
+    # behaving like the equivalent multi-line ``` block.
+    single = "@f() -> str:\n  = `x = 1; return str(x + 1)`\n= `f()`\n"
+    assert _run(monkeypatch, single) == "2"
+
+
+def test_one_line_return_block_without_return_raises_like_multiline(
+    monkeypatch: Any,
+) -> None:
+    # 1.8: without an explicit return, the one-line form must raise the same
+    # clear error as the multi-line block instead of silently returning ''.
+    from kedi.errors import KediTypeExecutionError
+
+    single = "@f() -> str:\n  = `x = 1; str(x + 1)`\n= `f()`\n"
+    with pytest.raises(KediTypeExecutionError, match="does not match annotated type"):
+        _run(monkeypatch, single)

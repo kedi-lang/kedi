@@ -324,6 +324,25 @@ def test_native_objects_optional_python_values_and_sandbox_aliases():
         parse_field("settings", "callbacks", "callback")
 
 
+def test_parse_scalar_keeps_trailing_underscore_fraction_as_string() -> None:
+    # 5.16: "1._" is not a float; it stays the string "1._".
+    from kedi.directive_values import parse_scalar
+
+    assert parse_scalar("1._") == "1._"
+    assert parse_scalar("1.5_") == "1.5_"
+    assert parse_scalar("1.") == 1.0
+    assert parse_scalar("1.5") == 1.5
+    assert parse_scalar("1_000.5") == 1000.5
+    assert parse_scalar("1_000") == 1000
+
+
+def test_string_rules_keep_literal_with_trailing_underscore_fraction() -> None:
+    # 5.16: string rules must not route through parse_scalar's float coercion.
+    from kedi.directive_values import parse_field
+
+    assert parse_field("settings", "api_key", "1._") == "1._"
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -654,3 +673,14 @@ def test_media_limit_takes_sizes_in_bytes_kb_and_mb():
     assert media_limit_bytes({"media_limit": 20}, default=10) == 20
     with pytest.raises(ValueError, match="positive number of bytes"):
         media_limit_bytes({"media_limit": "5MB"})
+
+
+def test_budget_limits_accept_zero() -> None:
+    # D6: 0 is a live value for `> budget:` limits ("0 prohibits new
+    # operations"), so the field rule must not demand a positive integer.
+    from kedi.directive_values import parse_field, validate_field
+
+    assert parse_field("budget", "request_limit", "0") == 0
+    assert parse_field("budget", "tool_attempt_limit", "0") == 0
+    assert parse_field("budget", "request_limit", "5") == 5
+    assert validate_field("budget", "request_limit", 0) == 0

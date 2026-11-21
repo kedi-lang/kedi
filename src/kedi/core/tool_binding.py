@@ -285,7 +285,7 @@ def _agent_instruction_parts(self: KediRuntime, profile: Any, adapter: Any) -> t
     skills = self._skills_settings(profile)
     if (
         getattr(profile, "tools", ())
-        or getattr(profile, "mcp", ())
+        or profile.mcp_servers
         or (skills is not None and skills.enabled)
     ):
         from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION

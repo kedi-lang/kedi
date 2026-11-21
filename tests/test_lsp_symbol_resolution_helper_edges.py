@@ -1031,3 +1031,41 @@ def test_range_and_overlap_helpers() -> None:
         )
         is False
     )
+
+
+# ---------------------------------------------------------------------
+# #214 group G: name-token spans (6.9)
+# ---------------------------------------------------------------------
+
+
+def test_name_token_span_on_line_requires_word_boundary() -> None:
+    """#214 6.9: `helper` must not match inside `helper2` on the same line."""
+    from kedi.lsp.parsing import parse_program
+
+    src = "> profile: reviewer:\n  > use:\n    helper2\n    helper\n"
+    prog = parse_program(src, source_path=None)
+    assert (
+        lsp_symbols_module._name_token_span_on_line(
+            prog, line_number=3, source_path=None, name="helper"
+        )
+        is None
+    )
+    span = lsp_symbols_module._name_token_span_on_line(
+        prog, line_number=4, source_path=None, name="helper"
+    )
+    assert span is not None
+    assert src.split("\n")[3][span.start_col - 1 : span.end_col - 1] == "helper"
+
+
+def test_name_token_span_on_line_returns_inner_backtick_span() -> None:
+    """#214 6.9: a backticked name's span covers the name, not the backticks."""
+    from kedi.lsp.parsing import parse_program
+
+    src = "> profile: reviewer:\n  > use: `helper`\n"
+    prog = parse_program(src, source_path=None)
+    span = lsp_symbols_module._name_token_span_on_line(
+        prog, line_number=2, source_path=None, name="helper"
+    )
+    assert span is not None
+    line = src.split("\n")[1]
+    assert line[span.start_col - 1 : span.end_col - 1] == "helper"

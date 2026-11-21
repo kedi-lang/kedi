@@ -43,9 +43,12 @@ class ValueRule:
             value = parse_size(raw)
             self.validate(value)
             return value
-        value = parse_scalar(raw)
+        # String-like rules keep the literal: routing them through
+        # parse_scalar would coerce (or reject) values that are plain text.
         if self.kind in {"option", "string", "path"}:
             value = raw
+        else:
+            value = parse_scalar(raw)
         self.validate(value)
         return value
 
@@ -120,7 +123,8 @@ def parse_scalar(raw: str) -> Any:
     if re.fullmatch(r"[+-]?[0-9]+(?:_[0-9]+)*", value):
         return int(value)
     if re.fullmatch(
-        r"[+-]?(?:[0-9]+(?:_[0-9]+)*(?:\.[0-9_]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value
+        r"[+-]?(?:[0-9]+(?:_[0-9]+)*(?:\.(?:[0-9]+(?:_[0-9]+)*)?)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+        value,
     ):
         return float(value)
     return value
@@ -220,7 +224,7 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
     },
     "auth": {"scheme": ValueRule("A2A authentication scheme", ("basic", "bearer", "api_key"))},
     "tool": {"risk": ValueRule("Tool side-effect risk", ("read_only", "mutating", "sensitive"))},
-    "budget": {"request_limit": POSITIVE_INT, "tool_attempt_limit": POSITIVE_INT},
+    "budget": {"request_limit": NONNEGATIVE_INT, "tool_attempt_limit": NONNEGATIVE_INT},
     "settings": {
         "tool_reason": ACTIVATION,
         "media_limit": ValueRule("Largest media value sent to the model", kind="size"),

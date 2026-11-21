@@ -195,7 +195,7 @@ def _execute_process(
                         frame,
                         type_scope,
                         {},
-                        [],
+                        set(),
                         profile,
                         rt._profile_registry,
                     )

@@ -75,32 +75,57 @@ def _cli_default_profile() -> AgentProfile:
     return AgentProfile(approval=ApprovalPolicy.dynamic(CliApprovalHandler()))
 
 
+def _remove_codegen_cache(source: str) -> None:
+    """Remove the codegen cache file for ``source``.
+
+    Called after a run with ``use_cache=False`` (``--no-cache``): the cache
+    is needed during the run — the generated procedures live in it — but
+    must not survive the run.
+    """
+    Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
+
+
 def run_tests_cli(
     source: str,
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    codegen_agent: str | None = None,
+    codegen_model: str | None = None,
+    codegen_retries: int | None = None,
+    quiet: bool = False,
     use_cache: bool = True,
     runtime_args: CliArgs | None = None,
     forms: Mapping[str, Form] | None = None,
 ) -> Tuple[int, str]:
-    ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
-    if not ok:
-        return 1, (err or "Code generation failed")
-    kwargs: dict[str, Any] = {
-        "adapter": _build_lazy_runtime_adapter(adapter, model),
-        "forms": forms,
-    }
-    if runtime_args is not None:
-        kwargs["runtime_globals"] = _runtime_globals(runtime_args)
-    results = run_tests(source, **kwargs)
-    failed = sum(1 for s in results for c in s.cases if not c.success)
-    lines = ["Tests:"]
-    for suite in results:
-        for case in suite.cases:
-            status = "OK" if case.success else f"FAIL: {case.error}"
-            lines.append(f"- {suite.procedure}::{case.name}: {status}")
-    return (1 if failed else 0, "\n".join(lines))
+    try:
+        ok, err = maybe_run_codegen(
+            source,
+            agent=codegen_agent,
+            model=codegen_model,
+            retries=codegen_retries,
+            use_cache=use_cache,
+            quiet=quiet,
+        )
+        if not ok:
+            return 1, (err or "Code generation failed")
+        kwargs: dict[str, Any] = {
+            "adapter": _build_lazy_runtime_adapter(adapter, model),
+            "forms": forms,
+        }
+        if runtime_args is not None:
+            kwargs["runtime_globals"] = _runtime_globals(runtime_args)
+        results = run_tests(source, **kwargs)
+        failed = sum(1 for s in results for c in s.cases if not c.success)
+        lines = ["Tests:"]
+        for suite in results:
+            for case in suite.cases:
+                status = "OK" if case.success else f"FAIL: {case.error}"
+                lines.append(f"- {suite.procedure}::{case.name}: {status}")
+        return (1 if failed else 0, "\n".join(lines))
+    finally:
+        if not use_cache:
+            _remove_codegen_cache(source)
 
 
 def _gepa_checkpoint_root(source_path: Path) -> Path:
@@ -362,25 +387,29 @@ def run_evals_cli(
             return code, msg
 
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=codegen_model, use_cache=use_cache, quiet=quiet)
-    if not ok:
-        return 1, (err or "Code generation failed")
+    try:
+        ok, err = maybe_run_codegen(source, model=codegen_model, use_cache=use_cache, quiet=quiet)
+        if not ok:
+            return 1, (err or "Code generation failed")
 
-    kwargs: dict[str, Any] = {
-        "adapter": _build_runtime_adapter(adapter, adapter_model),
-        "forms": forms,
-    }
-    if runtime_args is not None:
-        kwargs["runtime_globals"] = _runtime_globals(runtime_args)
-    results = run_evals(str(source_path), **kwargs)
+        kwargs: dict[str, Any] = {
+            "adapter": _build_runtime_adapter(adapter, adapter_model),
+            "forms": forms,
+        }
+        if runtime_args is not None:
+            kwargs["runtime_globals"] = _runtime_globals(runtime_args)
+        results = run_evals(str(source_path), **kwargs)
 
-    lines = ["Evals:"]
-    for suite in results:
-        # Display metrics (evaluated only on test data)
-        for metric in suite.metrics:
-            fb = "" if metric.feedback is None else f" | {metric.feedback}"
-            lines.append(f"- {suite.procedure}::{metric.name}: {metric.score:.4f}{fb}")
-    return (0, "\n".join(lines))
+        lines = ["Evals:"]
+        for suite in results:
+            # Display metrics (evaluated only on test data)
+            for metric in suite.metrics:
+                fb = "" if metric.feedback is None else f" | {metric.feedback}"
+                lines.append(f"- {suite.procedure}::{metric.name}: {metric.score:.4f}{fb}")
+        return (0, "\n".join(lines))
+    finally:
+        if not use_cache:
+            _remove_codegen_cache(source)
 
 
 def maybe_run_codegen(
@@ -407,7 +436,7 @@ def maybe_run_codegen(
 
         # Use provided values or fall back to defaults (already handled in CLI)
         agent_kind = agent or "pydantic_ai"
-        max_retries = retries or 5
+        max_retries = 5 if retries is None else retries
 
         ok = run_codegen(
             Path(source_path),
@@ -433,6 +462,7 @@ def run_program_cli(
     model: str | None,
     runtime_args: CliArgs | None = None,
     forms: Mapping[str, Form] | None = None,
+    use_cache: bool = True,
 ) -> Tuple[int, str]:
     from pathlib import Path
 
@@ -478,6 +508,9 @@ def run_program_cli(
         except BaseException as exc:
             active.set_attribute("error.type", type(exc).__name__)
             raise
+        finally:
+            if not use_cache:
+                _remove_codegen_cache(source)
         active.set_attribute("kedi.result.type", qualified_type_name(out))
         return 0, ("" if out is None else str(out))
 

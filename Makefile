@@ -68,7 +68,7 @@ check-release: check-distribution
 
 playground-tree-sitter:
 	@printf "$(BLUE)==>$(RESET) Building browser Tree-sitter assets...\n"
-	@bash scripts/build_playground_tree_sitter.sh
+	@bash scripts/build_notebook_tree_sitter.sh
 	@printf "$(GREEN)✔ Browser Tree-sitter assets built.$(RESET)\n"
 
 tests:

@@ -260,6 +260,14 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
         kedi_sc = (base_col + sc) if sl == 0 else sc
         kedi_el = base_line + el
         kedi_ec = (base_col + ec) if el == 0 else ec
+        # An embedded sub-tree may end past the document (e.g. a fence at
+        # EOF); clamp to the last line and its end instead of indexing
+        # out of range.
+        last_line = len(src_lines) - 1
+        kedi_sl = min(max(kedi_sl, 0), last_line)
+        kedi_el = min(max(kedi_el, 0), last_line)
+        kedi_sc = min(max(kedi_sc, 0), len(src_lines[kedi_sl].encode("utf-8")))
+        kedi_ec = min(max(kedi_ec, 0), len(src_lines[kedi_el].encode("utf-8")))
         _emit_token_spans_for_range(
             src_lines=src_lines,
             emit=emit,

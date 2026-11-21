@@ -18,9 +18,16 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from kedi.agent_adapter import LangChainAdapter, PydanticAdapter
 from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.explain import explain_program
-from kedi.groups import form_fingerprint, module_name
+from kedi.groups import _model_call_ordinals, form_fingerprint, module_name
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import GroupStmt, IfStmt, RawInvokeStmt, TemplateBlock
+from kedi.lang.ast import (
+    GroupStmt,
+    IfStmt,
+    RawInvokeStmt,
+    TaskGroupStmt,
+    TaskStmt,
+    TemplateBlock,
+)
 from kedi.lang.parser import KediParseError
 from kedi.lsp.features.hover import compute_hover
 from kedi.lsp.features.navigation import compute_definition
@@ -182,6 +189,67 @@ def test_group_model_calls_belong_to_the_form_not_to_source_lines() -> None:
 
     _, shifted = _run("# A new line above the group\n\n" + PLANNER)
     assert _identities(shifted) == _identities(assets)
+
+
+def test_task_and_send_statements_get_group_ordinals() -> None:
+    # 5.13: TaskStmt and SendStmt model calls are numbered in source order,
+    # alongside plain templates.
+    source = (
+        "@f(x: str) -> str:\n"
+        "  > evolve: work:\n"
+        "    > task [first]: worker:\n"
+        "      >> Do the first thing: [done: str]\n"
+        "    >> Summarize <done>: [summary: str]\n"
+        "    > send: first:\n"
+        "      >> Ping back.\n"
+        "  = <summary>\n"
+        '= <f(`"x"`)>\n'
+    )
+    group = parse_program(source).groups["f.work"]
+    assert [type(stmt).__name__ for stmt in group.body] == [
+        "TaskStmt",
+        "TemplateBlock",
+        "SendStmt",
+    ]
+    ordinals = _model_call_ordinals(group.body)
+    assert ordinals[id(group.body[0])] == 0
+    assert ordinals[id(group.body[1])] == 1
+    assert ordinals[id(group.body[2])] == 2
+
+
+def test_task_group_arms_get_group_ordinals() -> None:
+    # 5.13: templates inside TaskGroupStmt arms are numbered too.
+    source = (
+        "@f(x: str) -> str:\n"
+        "  > evolve: work:\n"
+        "    > task [first]: worker:\n"
+        "      >> First: [done: str]\n"
+        "    > task_group:\n"
+        "      > await [a]: first\n"
+        "      > process:\n"
+        "        >> Summarize <a>: [summary: str]\n"
+        "  = <summary>\n"
+        '= <f(`"x"`)>\n'
+    )
+    group = parse_program(source).groups["f.work"]
+    assert isinstance(group.body[0], TaskStmt)
+    assert isinstance(group.body[1], TaskGroupStmt)
+    ordinals = _model_call_ordinals(group.body)
+    assert ordinals[id(group.body[0])] == 0
+    arm_body = group.body[1].arms[0].body
+    assert arm_body is not None and len(arm_body) == 1
+    assert ordinals[id(arm_body[0])] == 1
+
+
+def test_nested_group_statements_get_group_ordinals() -> None:
+    # 5.13: a GroupStmt nested inside a group body has its model calls
+    # numbered too. The parser forbids nested groups, so the nesting is
+    # built directly from parsed statements.
+    program = parse_program("> evolve: outer:\n  >> Hello: [hi: str]\n= <hi>\n")
+    template = program.groups["outer"].body[0]
+    inner = GroupStmt(kind="evolve", name="inner", body=[template])
+    ordinals = _model_call_ordinals([inner])
+    assert ordinals[id(template)] == 0
 
 
 def test_nested_statements_and_optimize_spans_have_group_ordinals() -> None:
