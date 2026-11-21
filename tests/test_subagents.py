@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import os
+import time
+import warnings
 from collections.abc import Coroutine
 from concurrent.futures import Future
 from contextlib import contextmanager
@@ -72,6 +75,7 @@ from kedi.agent_adapter.subagents.budget import (
 )
 from kedi.agent_adapter.subagents.coordinator import (
     MAX_SUBAGENT_CONVERSATION_TURNS,
+    SubagentCoordinator,
     _OwnedSubagentTask,
     _schedule_owned_cancellation,
     _unwrap_task,
@@ -105,7 +109,9 @@ from kedi.agent_adapter.subagents.workflow import (
     _dynamic_workflow_span,
     _execute_dynamic_child,
     _profile_description,
+    _sandbox_name,
     _sandbox_names,
+    _type_check_stubs,
     _validate_child_arguments,
     _workflow_error,
     _workflow_result,
@@ -411,6 +417,54 @@ def test_subagent_foreign_thread_cancel_preserves_contextvars(
         )
         assert runtime._subagent_coordinator.status(run_id) == "cancelled"
     finally:
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        owner_thread.join(timeout=2)
+
+
+def test_cross_thread_subagent_cancel_times_out_when_owner_loop_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2.14: a foreign-thread cancel must not wait forever on a blocked owner loop.
+    monkeypatch.setattr(
+        agent_adapter_subagents_coordinator_module, "INTERRUPT_CLEANUP_SECONDS", 0.05
+    )
+    owner_loop = asyncio.new_event_loop()
+    owner_thread = Thread(target=owner_loop.run_forever, daemon=True)
+    owner_thread.start()
+    coord = object.__new__(SubagentCoordinator)
+    coord._task_lock = Lock()
+    coord._cancel_requested = set()
+    child_fut = asyncio.run_coroutine_threadsafe(asyncio.sleep(60), owner_loop)
+    owned = _OwnedSubagentTask(
+        task=SimpleNamespace(done=lambda: False, cancel=lambda: child_fut.cancel()),
+        loop=owner_loop,
+    )
+    coord._tasks = {"r1": owned}
+    coord.runs = SimpleNamespace(get=lambda rid: SimpleNamespace(status="running"))
+    # Block the owner loop for 1s; the foreign cancel must fail fast instead.
+    owner_loop.call_soon_threadsafe(time.sleep, 1)
+    errors: list[BaseException] = []
+
+    def foreign_cancel() -> None:
+        try:
+            coord.cancel("r1")
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    worker = Thread(target=foreign_cancel)
+    started = time.monotonic()
+    worker.start()
+    worker.join(timeout=10)
+    elapsed = time.monotonic() - started
+    try:
+        assert not worker.is_alive()
+        assert elapsed < 0.5
+        assert len(errors) == 1
+        assert isinstance(errors[0], KediExecutionError)
+        assert "did not complete" in str(errors[0])
+    finally:
+        # Let the loop drain the queued cancellation, then stop it.
+        time.sleep(1.2)
         owner_loop.call_soon_threadsafe(owner_loop.stop)
         owner_thread.join(timeout=2)
 
@@ -1398,6 +1452,22 @@ def test_dynamic_workflow_helpers_cover_names_arguments_and_results() -> None:
         _validate_child_arguments("worker", {"task": "x", "other": True})
     with pytest.raises(TypeError, match="non-empty string"):
         _validate_child_arguments("worker", {"task": " "})
+
+
+def test_workflow_sandbox_names_are_valid_identifiers() -> None:
+    # 2.6: hyphenated (and other non-identifier) profile names must still
+    # produce compilable workflow stubs.
+    assert _sandbox_name("code-reviewer") == "code_reviewer"
+    assert _sandbox_name("my.agent") == "my_agent"
+    assert _sandbox_name("123abc") == "subagent_123abc"
+    assert _sandbox_name("class") == "subagent_class"
+    assert _sandbox_name("") == "subagent_"
+    assert _sandbox_name("plain") == "plain"
+    names = _sandbox_names(("code-reviewer", "code_reviewer"))
+    assert names == {"code_reviewer": "code-reviewer", "code_reviewer_2": "code_reviewer"}
+    for name in names:
+        assert name.isidentifier()
+    compile(_type_check_stubs(names), "<workflow stubs>", "exec")
     with pytest.raises(TypeError, match="object or null"):
         _validate_child_arguments("worker", {"task": "x", "final_schema": []})
 
@@ -1840,6 +1910,115 @@ def test_continue_subagent_uses_verified_history_and_new_run() -> None:
                 task="Branch from stale state",
             )
         )
+
+
+def test_continue_subagent_unknown_run_id_reports_a_clear_error() -> None:
+    # 2.11: an unknown run_id must surface as a clear Kedi error, not a raw KeyError.
+    _, _, tools = _manager_tools()
+    with pytest.raises(KediExecutionError, match="Unknown subagent run ID: 'no-such-run'"):
+        asyncio.run(
+            tools["continue_subagent"].fn(
+                run_id="no-such-run",
+                task="Continue",
+            )
+        )
+
+
+def test_continue_subagent_failure_is_tracked_in_the_delegation_ledger() -> None:
+    # 2.11 (fail_closed ledger): like delegate_task, a failed continuation is
+    # recorded so the fail-closed policy can see it.
+    _, _, tools = _manager_tools()
+
+    async def scenario() -> None:
+        first = await tools["delegate_task"].fn(subagent="worker", task="Inspect the parser")
+        await tools["continue_subagent"].fn(run_id=first["run_id"], task="Follow up")
+        with delegation_scope("recover") as ledger:
+            with pytest.raises(KediExecutionError, match="latest completed"):
+                await tools["continue_subagent"].fn(
+                    run_id=first["run_id"],
+                    task="Branch from stale state",
+                )
+            attempts = ledger.snapshot()
+            assert len(attempts) == 1
+            assert attempts[0].status == "rejected"
+            assert attempts[0].requested_profile == "worker"
+
+    asyncio.run(scenario())
+
+
+def test_continue_subagent_failed_run_is_tracked_in_the_delegation_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2.11 (fail_closed ledger): a continuation whose run fails after being
+    # bound records the run's terminal status in the ledger.
+    adapter, runtime, tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+    original_invoke = adapter.invoke
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        if "Follow up" in prompt:
+            raise RuntimeError("child failed")
+        return await original_invoke(prompt=prompt, **kwargs)
+
+    monkeypatch.setattr(adapter, "invoke", invoke)
+
+    async def scenario() -> None:
+        first = await tools["delegate_task"].fn(subagent="worker", task="Inspect the parser")
+        with delegation_scope("recover") as ledger:
+            with pytest.raises(KediExecutionError, match="child failed"):
+                await tools["continue_subagent"].fn(run_id=first["run_id"], task="Follow up")
+            attempts = ledger.snapshot()
+            assert len(attempts) == 1
+            assert attempts[0].status == "failed"
+            assert attempts[0].requested_profile == "worker"
+            assert attempts[0].run_id is not None
+            assert coordinator.runs.get(attempts[0].run_id).status == "failed"
+
+    asyncio.run(scenario())
+
+
+def test_continue_subagent_cancelled_wait_leaves_running_attempt_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2.11 (fail_closed ledger): if the continuation wait is cancelled while
+    # the new run is still running, the attempt is not failed — the run lives on.
+    adapter, runtime, tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_invoke = adapter.invoke
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        if "Follow up" in prompt:
+            started.set()
+            await release.wait()
+        return await original_invoke(prompt=prompt, **kwargs)
+
+    monkeypatch.setattr(adapter, "invoke", invoke)
+
+    async def scenario() -> None:
+        first = await tools["delegate_task"].fn(subagent="worker", task="Inspect the parser")
+        new_run_id: str | None = None
+        with delegation_scope("recover") as ledger:
+            task = asyncio.create_task(
+                tools["continue_subagent"].fn(run_id=first["run_id"], task="Follow up")
+            )
+            await asyncio.wait_for(started.wait(), 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            attempts = ledger.snapshot()
+            assert len(attempts) == 1
+            assert attempts[0].status == "pending"
+            assert attempts[0].requested_profile == "worker"
+            new_run_id = attempts[0].run_id
+            assert new_run_id is not None
+            assert coordinator.runs.get(new_run_id).status == "running"
+        assert new_run_id is not None
+        release.set()
+        await asyncio.wait_for(coordinator.wait(new_run_id), 2)
+
+    asyncio.run(scenario())
 
 
 def test_continue_subagent_supports_background_lifecycle() -> None:
@@ -4032,6 +4211,51 @@ def test_subagent_start_cleans_up_when_task_creation_fails(
     assert concurrency.active == 0
     assert coordinator.runs.snapshot()[-1].status == "failed"
     assert isinstance(coordinator.events.snapshot()[-1], SubagentFailed)
+
+
+def test_subagent_start_closes_coroutine_when_task_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2.4: a failed _create_subagent_task must not leak an unawaited coroutine.
+    _, runtime, _ = _manager_tool()
+    coordinator = runtime._subagent_coordinator
+    definition = runtime._profile_registry["manager"]
+    parent_profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    concurrency = coordinator.new_concurrency()
+    captured: dict[str, Coroutine[Any, Any, Any]] = {}
+
+    def fail_create_task(
+        coroutine: Coroutine[Any, Any, Any],
+        *,
+        name: str,
+    ) -> asyncio.Task[Any]:
+        del name
+        captured["coroutine"] = coroutine
+        raise RuntimeError("task creation failed")
+
+    monkeypatch.setattr(asyncio, "create_task", fail_create_task)
+    with pytest.raises(RuntimeError, match="task creation failed"):
+        coordinator.start(
+            allowed_subagents=("worker",),
+            subagent="worker",
+            task="fail",
+            final_schema=None,
+            parent_profile=parent_profile,
+            parent_budget=DelegationBudget.for_profile(
+                profile_name="manager",
+                max_agents=1,
+            ),
+            parent_concurrency=concurrency,
+        )
+
+    assert concurrency.active == 0
+    assert coordinator.runs.snapshot()[-1].status == "failed"
+    # The coroutine start() built must be closed, not left unawaited.
+    assert captured["coroutine"].cr_frame is None
+    del captured["coroutine"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        gc.collect()
 
 
 def test_subagent_start_falls_back_to_global_definition_after_private_lookup_miss() -> None:

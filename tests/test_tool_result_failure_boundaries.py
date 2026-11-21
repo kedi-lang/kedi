@@ -90,6 +90,48 @@ def test_result_failure_observers_follow_the_notification_contract(
     assert events[0][1].sequence == 1
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_result_failure_observer_cancellation_propagates(asynchronous: bool) -> None:
+    # 2.9: an observer that raises CancelledError must propagate, not be
+    # swallowed into a note on the original error.
+    from kedi.agent_adapter.hooks.tool_wrapper import (
+        _observe_result_failure,
+        _observe_result_failure_sync,
+    )
+
+    def boom(event: Any) -> None:
+        raise asyncio.CancelledError("observer cancelled")
+
+    chain = HookDispatcher(
+        HookDispatcherSnapshot.compose(
+            AdapterHookSnapshot.empty(),
+            HookSettings(post_tool_result_failure=(boom,)),
+        )
+    )
+    error = ValueError("tool failed")
+    tracker = ToolCallTracker("one")
+    tracker.start()
+    tracker.returned(None)
+    record = tracker.result_failed("result_validation")
+
+    def observe() -> None:
+        args = (ToolSpec(name="body", fn=lambda: None), {}, error, record)
+        kwargs: dict[str, Any] = {
+            "adapter_shortname": "fake",
+            "tool_call_id": "one",
+            "origin": "kedi",
+        }
+        if asynchronous:
+            asyncio.run(_observe_result_failure(*args, **kwargs))
+        else:
+            _observe_result_failure_sync(*args, **kwargs)
+
+    with bind_hook_dispatcher(chain):
+        with pytest.raises(asyncio.CancelledError, match="observer cancelled"):
+            observe()
+    assert getattr(error, "__notes__", []) == []
+
+
 @pytest.mark.parametrize("callable_object", [False, True])
 def test_partial_tool_preserves_bound_signature_for_both_framework_schemas(
     callable_object: bool,

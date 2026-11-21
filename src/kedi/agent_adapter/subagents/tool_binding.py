@@ -97,33 +97,53 @@ def bind_subagent_tools(
         final_schema: dict[str, Any] | None = None,
         background: bool = False,
     ) -> dict[str, Any]:
+        coordinator.status(run_id)
         run = coordinator.runs.get(run_id)
         require_subagent_activation(activation_profile, run.profile_name)
-        if background:
-            if not supports_background:
-                raise ValueError("The active adapter does not support background subagents")
-            handle = coordinator.start_continuation(
-                run_id=run_id,
-                allowed_subagents=allowed,
-                task=task,
-                final_schema=final_schema,
-                parent_profile=profile,
-                parent_budget=budget,
-                parent_concurrency=concurrency,
-                subagent_definitions=subagent_definitions,
-            )
-            return handle.as_tool_result()
-        result = await coordinator.continue_run(
-            run_id=run_id,
-            allowed_subagents=allowed,
+        with track_delegation_attempt(
+            requested_profile=run.profile_name,
             task=task,
-            final_schema=final_schema,
-            parent_profile=profile,
-            parent_budget=budget,
-            parent_concurrency=concurrency,
-            subagent_definitions=subagent_definitions,
-        )
-        return result.as_tool_result()
+        ) as attempt:
+            try:
+                if background:
+                    if not supports_background:
+                        raise ValueError("The active adapter does not support background subagents")
+                    handle = coordinator.start_continuation(
+                        run_id=run_id,
+                        allowed_subagents=allowed,
+                        task=task,
+                        final_schema=final_schema,
+                        parent_profile=profile,
+                        parent_budget=budget,
+                        parent_concurrency=concurrency,
+                        subagent_definitions=subagent_definitions,
+                    )
+                    return handle.as_tool_result()
+                result = await coordinator.continue_run(
+                    run_id=run_id,
+                    allowed_subagents=allowed,
+                    task=task,
+                    final_schema=final_schema,
+                    parent_profile=profile,
+                    parent_budget=budget,
+                    parent_concurrency=concurrency,
+                    subagent_definitions=subagent_definitions,
+                )
+            except BaseException as exc:
+                if attempt is not None:
+                    if attempt.run_id is None:
+                        attempt.fail(status="rejected", error=exc)
+                    else:
+                        run_status = coordinator.runs.get(attempt.run_id).status
+                        if run_status != "running":
+                            attempt.fail(
+                                status=attempt_status_from_run(run_status),
+                                error=exc,
+                            )
+                raise
+            if attempt is not None:
+                attempt.complete()
+            return result.as_tool_result()
 
     async def wait_subagent(
         *,

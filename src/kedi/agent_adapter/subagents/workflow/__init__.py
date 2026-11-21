@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import keyword
+import re
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
@@ -442,9 +443,10 @@ async def _execute_dynamic_child(
 
 
 def _sandbox_name(profile_name: str) -> str:
-    if profile_name.isidentifier() and not keyword.iskeyword(profile_name):
-        return profile_name
-    return f"subagent_{profile_name}"
+    base = re.sub(r"\W", "_", profile_name)
+    if not base or base[0].isdigit() or keyword.iskeyword(base):
+        return f"subagent_{base}"
+    return base
 
 
 def _sandbox_names(profile_names: tuple[str, ...]) -> dict[str, str]:

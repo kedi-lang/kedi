@@ -311,7 +311,7 @@ async def _observe_result_failure(
             tool_call_id=tool_call_id,
             origin=origin,
         )
-    except BaseException as observer_error:
+    except Exception as observer_error:
         note_result_observer_failure(error, observer_error)
 
 
@@ -335,7 +335,7 @@ def _observe_result_failure_sync(
             tool_call_id=tool_call_id,
             origin=origin,
         )
-    except BaseException as observer_error:
+    except Exception as observer_error:
         note_result_observer_failure(error, observer_error)
 
 

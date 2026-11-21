@@ -365,7 +365,12 @@ async def controlled_attempt(
                 return
             if deliver is not None and control.pending:
                 items = control.take_pending(revision=revision)
-                if await deliver(items) is not False:
+                try:
+                    delivered = await deliver(items)
+                except asyncio.CancelledError:
+                    control.restore_pending(items)
+                    raise
+                if delivered is not False:
                     control.mark_delivered(items)
             await control.wait_changed(sequence)
 
