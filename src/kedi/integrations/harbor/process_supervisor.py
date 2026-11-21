@@ -41,6 +41,8 @@ class _ProcessSupervisor:
         self._timed_out = False
         self._output_limited = False
         self._requested_signal: int | None = None
+        # Set by the signal handler, acted on by the wait loop.
+        self._pending_signal: int | None = None
 
     def run(self) -> int:
         self._install_signal_handlers()
@@ -79,6 +81,9 @@ class _ProcessSupervisor:
         input_forwarder.start()
 
         while child.poll() is None:
+            pending, self._pending_signal = self._pending_signal, None
+            if pending is not None:
+                self._request_termination(pending)
             now = time.monotonic()
             if now >= self.deadline_monotonic:
                 self._timed_out = True
@@ -186,8 +191,10 @@ class _ProcessSupervisor:
             signal.signal(signum, self._handle_signal)
 
     def _handle_signal(self, signum: int, _: FrameType | None) -> None:
+        # Only record it: the handler may interrupt this thread while it holds the
+        # termination lock, so taking the lock here could deadlock.
         self._requested_signal = signum
-        self._request_termination(signum)
+        self._pending_signal = signum
 
     def _request_termination(self, signum: int) -> None:
         with self._termination_lock:

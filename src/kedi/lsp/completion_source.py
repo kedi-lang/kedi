@@ -23,11 +23,21 @@ def parse_completion_source(source: str, source_path: str | None, line: int | No
     lines = source.split("\n")
     current = lines[line]
     indent = current[: len(current) - len(current.lstrip(" \t"))]
+    width = len(current.encode())
     placeholder = indent + "> show: "
-    # Match bytes as well as line numbers for spans after the recovered line.
-    lines[line] = placeholder + "_" * max(1, len(current.encode()) - len(placeholder.encode()))
-    try:
-        return parse_program("\n".join(lines) + "\n", source_path=source_path)
-    except KediParseError:
-        # An unfinished later statement must not hide an otherwise valid prefix.
-        return parse_program("\n".join(lines[: line + 1]) + "\n", source_path=source_path)
+    # Replacements keep the line's byte length, so spans after it match the source.
+    if width > len(placeholder):
+        candidates = [placeholder + "_" * (width - len(placeholder))]
+    else:
+        # Too short for a statement: a comment of the same length keeps the scopes when
+        # the block has other lines; otherwise accept a statement that shifts later spans.
+        candidates = [indent + "#" + "_" * (width - len(indent) - 1)] if width > len(indent) else []
+        candidates.append(placeholder + "_")
+    for candidate in candidates:
+        lines[line] = candidate
+        try:
+            return parse_program("\n".join(lines) + "\n", source_path=source_path)
+        except KediParseError:
+            continue
+    # An unfinished later statement must not hide an otherwise valid prefix.
+    return parse_program("\n".join(lines[: line + 1]) + "\n", source_path=source_path)

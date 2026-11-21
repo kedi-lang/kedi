@@ -333,6 +333,10 @@ class PydanticRequestEvidenceCapability(AbstractCapability[Any]):
             messages = tuple(
                 self._message_fingerprint(message) for message in request_context.messages
             )
+            # Keep only the messages this request still carries.
+            live = {id(message) for message in request_context.messages}
+            for key in [key for key in self._message_cache if key not in live]:
+                del self._message_cache[key]
             history = _history_delta(self._previous_messages, messages)
             self._previous_messages = messages
             parameters = request_context.model_request_parameters
@@ -797,7 +801,9 @@ def _revision_token(value: Any, *, depth: int = 0) -> object:
     if value is None or isinstance(value, (bool, int, float, complex, Enum)):
         return (type(value), value)
     if isinstance(value, (str, bytes)):
-        return (type(value), id(value), len(value))
+        # By content: a new string can reuse a freed one's address and length.
+        data = value.encode("utf-8", "surrogatepass") if isinstance(value, str) else value
+        return (type(value), hashlib.blake2b(data, digest_size=16).digest())
     if isinstance(value, (datetime, date, datetime_time)):
         return (type(value), value)
     if depth >= 20:

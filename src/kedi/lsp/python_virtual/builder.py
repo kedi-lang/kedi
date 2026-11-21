@@ -227,15 +227,8 @@ def _range_within_span(range_: Range, span: Span) -> bool:
 
 
 def _indent_width(line: str) -> int:
-    width = 0
-    for char in line:
-        if char == " ":
-            width += 1
-        elif char == "\t":
-            width += 4
-        else:
-            break
-    return width
+    """Leading whitespace in characters: dedent offsets index the line, so a tab is one."""
+    return len(line) - len(line.lstrip(" \t"))
 
 
 def _has_python_substance(text: str) -> bool:

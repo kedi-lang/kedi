@@ -57,6 +57,7 @@ from kedi.lsp.features.scope import (
 )
 from kedi.lsp.features.symbols import (
     SymbolRef,
+    _export_name_spans,
     _is_identifier,
     _location_for_span,
     _profile_use_entry_spans,
@@ -140,6 +141,9 @@ def _find_all_references(
             for candidate in procedure_candidates
             if _reference_resolves_to(prog, candidate, sym)
         )
+        if any(proc.loc == sym.declaration_span for proc in prog.procedures):
+            # Export lists name top-level declarations only, not a nested namesake.
+            out.extend(_export_name_spans(prog, sym.name))
     elif sym.kind == "type":
         type_candidates: List[Span] = []
         for td in _all_type_defs(prog):
@@ -164,6 +168,8 @@ def _find_all_references(
             for candidate in type_candidates
             if _reference_resolves_to(prog, candidate, sym)
         )
+        if any(typedef.loc == sym.declaration_span for typedef in prog.type_defs):
+            out.extend(_export_name_spans(prog, sym.name))
     elif sym.kind == "agent_profile":
         for profile in prog.profile_defs.values():
             for target_name, target_span in _profile_use_entry_spans(prog, profile):
@@ -285,10 +291,8 @@ def _reference_resolves_to(
 ) -> bool:
     if current_source() is None:
         return True
-    resolved = _resolve_symbol_at(
-        prog,
-        lsp.Position(line=candidate.start_line - 1, character=candidate.start_col - 1),
-    )
+    # Span columns are bytes; the resolver takes an LSP (UTF-16) position.
+    resolved = _resolve_symbol_at(prog, _span_to_range(candidate).start)
     if resolved is None:  # pragma: no cover - collectors only emit resolvable syntax spans
         return False
     procedure_kinds = {"procedure", "agent_tool"}

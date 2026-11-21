@@ -193,7 +193,7 @@ def run_trial(
     error_message: str | None = None
     failure_phase: str | None = None
     previous_cwd = Path.cwd()
-    signal_state = _SignalState(terminal)
+    signal_state = _SignalState()
     source_path: Path | None = None
     conversation: ConversationState | None = None
     request_evidence: Any | None = None
@@ -380,9 +380,11 @@ def run_trial(
             else terminal.close
         )
         for cleanup_name, cleanup in (
+            # First: a trial alarm or signal arriving during cleanup must not turn a
+            # finished trial into a failure.
+            ("signals", signal_state.restore),
             ("conversation", conversation.close if conversation is not None else None),
             ("terminal", terminal_cleanup),
-            ("signals", signal_state.restore),
             ("cwd", lambda: os.chdir(previous_cwd)),
             (
                 "source",
@@ -527,8 +529,7 @@ class _TrialTimedOut(TimeoutError):
 
 
 class _SignalState:
-    def __init__(self, terminal: TerminalSession) -> None:
-        self.terminal = terminal
+    def __init__(self) -> None:
         self._previous: dict[int, Any] = {}
         self._previous_alarm: tuple[float, float] | None = None
 
@@ -557,7 +558,7 @@ class _SignalState:
         self._previous.clear()
 
     def _handle(self, signum: int, _: FrameType | None) -> NoReturn:
-        self.terminal.close()
+        # Raise only: cleanup closes the terminal, and blocking here would delay it.
         if signum == signal.SIGTERM or signum == getattr(signal, "SIGALRM", None):
             raise _TrialTimedOut("trial terminated by Harbor")
         raise KeyboardInterrupt

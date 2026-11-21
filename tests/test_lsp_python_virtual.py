@@ -1219,7 +1219,7 @@ def test_python_virtual_helper_edges(monkeypatch):
     )
     assert virtual_statements_module._single_python_segment([TextSegment(text="x")]) is None
     assert virtual_stubs_module._type_init_params(cast(Any, SimpleNamespace(fields=[]))) == "self"
-    assert virtual_builder_module._indent_width("\t  x") == 6
+    assert virtual_builder_module._indent_width("\t  x") == 3  # characters, not columns
     assert virtual_stubs_module._python_call_name(ast.Constant(value=1)) == ""
 
     typing_symbols = virtual_stubs_module._typing_symbols_in_type_expr(

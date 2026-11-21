@@ -1279,9 +1279,15 @@ def test_process_supervisor_validation_signals_and_main(
         "killpg",
         lambda process_group, signum: signals.append((process_group, signum)),
     )
-    supervisor._handle_signal(signal.SIGTERM, None)
-    assert signals == [(123, signal.SIGTERM)]
+    # #214 6.1: the handler only records the signal, even while this thread holds the
+    # termination lock; the wait loop sends it to the child.
+    with supervisor._termination_lock:
+        supervisor._handle_signal(signal.SIGTERM, None)
+    assert signals == []
     assert supervisor._requested_signal == signal.SIGTERM
+    assert supervisor._pending_signal == signal.SIGTERM
+    supervisor._request_termination(supervisor._pending_signal)
+    assert signals == [(123, signal.SIGTERM)]
     child.poll = lambda: 0
     supervisor._signal_child(signal.SIGKILL)
     supervisor._child = None
@@ -2779,17 +2785,14 @@ def test_runner_helpers_signal_state_and_main(
     settings.write_text('{"temperature": 0}', encoding="utf-8")
     assert runner._settings(settings) == {"temperature": 0}
 
-    closed: list[bool] = []
-    signal_state = runner._SignalState(
-        cast(TerminalSession, SimpleNamespace(close=lambda: closed.append(True)))
-    )
+    # #214 6.3: the handler only raises; cleanup closes the terminal.
+    signal_state = runner._SignalState()
     with pytest.raises(runner._TrialTimedOut):
         signal_state._handle(signal.SIGTERM, None)
     with pytest.raises(KeyboardInterrupt):
         signal_state._handle(signal.SIGINT, None)
-    assert closed == [True, True]
 
-    inactive_state = runner._SignalState(cast(TerminalSession, SimpleNamespace(close=lambda: None)))
+    inactive_state = runner._SignalState()
     monkeypatch.setattr(runner, "threading_is_main", lambda: False)
     inactive_state.install(timeout_seconds=1)
     inactive_state.restore()
@@ -2797,9 +2800,7 @@ def test_runner_helpers_signal_state_and_main(
     with monkeypatch.context() as context:
         context.setattr(runner, "threading_is_main", lambda: True)
         context.delattr(runner.signal, "SIGALRM", raising=False)
-        no_alarm_state = runner._SignalState(
-            cast(TerminalSession, SimpleNamespace(close=lambda: None))
-        )
+        no_alarm_state = runner._SignalState()
         no_alarm_state.install(timeout_seconds=None)
         no_alarm_state.restore()
 
@@ -2818,7 +2819,7 @@ def test_runner_helpers_signal_state_and_main(
     monkeypatch.setattr(runner.signal, "SIGALRM", 14, raising=False)
     monkeypatch.setattr(runner.signal, "ITIMER_REAL", 0, raising=False)
     monkeypatch.setattr(runner.signal, "setitimer", fake_setitimer, raising=False)
-    active_state = runner._SignalState(cast(TerminalSession, SimpleNamespace(close=lambda: None)))
+    active_state = runner._SignalState()
     active_state.install(timeout_seconds=1)
     active_state.restore()
     assert timers[-1] == (signal.ITIMER_REAL, 2.0, 0.5)
@@ -4732,3 +4733,59 @@ def test_lazy_harbor_import_preserves_unrelated_import_errors(
     monkeypatch.setattr(builtins, "__import__", fail_agent_import)
     with pytest.raises(ImportError, match="unrelated dependency"):
         integration.__getattr__("KediAgent")
+
+
+@requires_posix_processes
+def test_process_supervisor_loop_delivers_a_recorded_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214 6.1: the wait loop, not the signal handler, terminates the child.
+    config = _supervisor_config(
+        tmp_path / "deferred",
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        retained=True,
+    )
+    supervisor = harbor_process_supervisor._ProcessSupervisor(config)
+    monkeypatch.setattr(supervisor, "_install_signal_handlers", lambda: None)
+    timer = threading.Timer(0.3, supervisor._handle_signal, args=(signal.SIGTERM, None))
+    timer.start()
+    started = time.monotonic()
+    try:
+        exit_code = supervisor.run()
+    finally:
+        timer.cancel()
+    assert time.monotonic() - started < 10
+    assert exit_code == 128 + signal.SIGTERM
+    assert supervisor._requested_signal == signal.SIGTERM
+
+
+@pytest.mark.skipif(not hasattr(signal, "raise_signal"), reason="needs signal.raise_signal")
+def test_runner_signal_during_cleanup_keeps_a_completed_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214 6.3: handlers are restored before the other cleanups, so a late signal reaches
+    # the caller's handler instead of failing a finished trial.
+    original_terminal = runner.TerminalSession
+
+    class LateSignalTerminal(original_terminal):
+        def finish_session(self) -> None:
+            signal.raise_signal(signal.SIGTERM)
+            super().finish_session()
+
+    received: list[int] = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, _frame: received.append(signum))
+    monkeypatch.setattr(runner, "TerminalSession", LateSignalTerminal)
+    monkeypatch.setattr(runner.kedi, "bind", lambda **_: lambda _: lambda _instruction: "done")
+    try:
+        record = runner.run_trial(
+            instruction="late signal",
+            model="openai/test",
+            adapter="pydantic",
+            workspace=tmp_path,
+            result_path=tmp_path / "late" / "result.json",
+            trial_id="late",
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert record.state == "completed"
+    assert received == [signal.SIGTERM]
