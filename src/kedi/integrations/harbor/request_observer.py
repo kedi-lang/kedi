@@ -299,19 +299,26 @@ class PydanticRequestEvidenceCapability(AbstractCapability[Any]):
             )
             raise
         self._completed += 1
-        self._record(
-            {
-                "schema_version": _SCHEMA_VERSION,
-                "event": "model_request_completed",
-                "recorded_at": _utc_now(),
-                "sequence": sequence,
-                "duration_seconds": max(
-                    0.0,
-                    (time.perf_counter_ns() - started_ns) / 1_000_000_000,
-                ),
-                "response": _response_summary(response),
-            }
-        )
+        try:
+            response_summary = _response_summary(response)
+            summary_error: dict[str, Any] | None = None
+        except Exception as exc:
+            response_summary = None
+            summary_error = {"type": type(exc).__name__, "message": str(exc)}
+        completed_event: dict[str, Any] = {
+            "schema_version": _SCHEMA_VERSION,
+            "event": "model_request_completed",
+            "recorded_at": _utc_now(),
+            "sequence": sequence,
+            "duration_seconds": max(
+                0.0,
+                (time.perf_counter_ns() - started_ns) / 1_000_000_000,
+            ),
+            "response": response_summary,
+        }
+        if summary_error is not None:
+            completed_event["summary_error"] = summary_error
+        self._record(completed_event)
         return response
 
     def _capture_request(

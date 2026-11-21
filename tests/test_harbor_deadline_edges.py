@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -141,5 +142,64 @@ def test_terminal_rejects_outside_root_and_foreground_wait(tmp_path):
         managed = terminal._process(running["process_id"])
         terminal._update_verification(managed)
         assert not managed.verification_recorded
+    finally:
+        terminal.close()
+
+
+@pytest.mark.parametrize(
+    ("config", "task", "expected"),
+    [
+        ({}, None, None),
+        ({"agent": {"override_timeout_sec": 0}}, "[agent]\ntimeout_sec = 300\n", "invalid"),
+        ({"agent": {"max_timeout_sec": 0}}, "[agent]\ntimeout_sec = 300\n", "invalid"),
+    ],
+)
+def test_harbor_agent_timeout_missing_task_and_zero_overrides(
+    tmp_path, monkeypatch, config, task, expected
+):
+    # 6.21: a missing task.toml must not raise, and a 0 override/max must not be
+    # silently treated as unset.
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    from kedi.integrations.harbor.agent import KediAgent
+
+    logs = tmp_path / "logs" / "agent"
+    logs.mkdir(parents=True)
+    (logs.parent / "config.json").write_text(json.dumps(config))
+    envdir = tmp_path / "task" / "environment"
+    envdir.mkdir(parents=True)
+    if task is not None:
+        (envdir.parent / "task.toml").write_text(task)
+    agent = KediAgent(logs_dir=logs, model_name="test")
+    if expected == "invalid":
+        with pytest.raises(ValueError, match="positive and finite"):
+            agent._execution_timeout(SimpleNamespace(environment_dir=envdir))
+    else:
+        assert agent._execution_timeout(SimpleNamespace(environment_dir=envdir)) is None
+
+
+def test_terminal_foreground_command_does_not_start_after_deadline(tmp_path):
+    # 6.2: with an expired deadline, no process may be started at all.
+    marker = tmp_path / "started.txt"
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "logs",
+        deadline_monotonic=time.monotonic() - 1,
+    )
+    try:
+        command = [
+            sys.executable,
+            "-c",
+            f"from pathlib import Path; Path({str(marker)!r}).write_text('started')",
+        ]
+        with pytest.raises(TimeoutError, match="deadline has elapsed"):
+            terminal.run_command(command)
+        with pytest.raises(TimeoutError, match="deadline has elapsed"):
+            terminal.run_shell("echo hi")
+        # The child is spawned concurrently, so give a leaked process time to
+        # run before asserting nothing was started.
+        time.sleep(1.0)
+        assert not marker.exists()
+        assert terminal._processes == {}
     finally:
         terminal.close()

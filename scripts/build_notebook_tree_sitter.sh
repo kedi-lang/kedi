@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATIC_ROOT="$ROOT/playground/src/playground/static"
+STATIC_ROOT="$ROOT/notebook/src/kedi_notebook/static"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 

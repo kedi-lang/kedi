@@ -320,6 +320,8 @@ class KediAgent(BaseInstalledAgent):
             return timeout
         config = json.loads(config_path.read_text(encoding="utf-8"))
         task_path = environment.environment_dir.parent / "task.toml"
+        if not task_path.is_file():
+            return timeout
         with task_path.open("rb") as source:
             task = tomllib.load(source)
         if task.get("steps"):
@@ -327,13 +329,20 @@ class KediAgent(BaseInstalledAgent):
             self.logger.warning("Automatic runner deadlines only support single-step tasks")
             return timeout
         agent = config.get("agent", {})
-        base = agent.get("override_timeout_sec") or task.get("agent", {}).get("timeout_sec")
+        override_timeout = agent.get("override_timeout_sec")
+        base = (
+            override_timeout
+            if override_timeout is not None
+            else task.get("agent", {}).get("timeout_sec")
+        )
         if base is None:
             return timeout
         multiplier = config.get("agent_timeout_multiplier")
         if multiplier is None:
             multiplier = config.get("timeout_multiplier", 1.0)
-        resolved = min(base, agent.get("max_timeout_sec") or math.inf) * multiplier
+        max_timeout = agent.get("max_timeout_sec")
+        cap = math.inf if max_timeout is None else max_timeout
+        resolved = min(base, cap) * multiplier
         if not math.isfinite(resolved) or resolved <= 0:
             raise ValueError("Harbor agent timeout must be positive and finite")
         return min(timeout, resolved) if timeout is not None else resolved

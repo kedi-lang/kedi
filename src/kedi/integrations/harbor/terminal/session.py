@@ -177,10 +177,11 @@ class TerminalSession:
                 suites so the configured command ceiling and trial deadline apply.
         """
         normalized = _validated_argv(argv)
+        timeout = self._bounded_timeout(timeout_seconds)
         managed = self._start(normalized, cwd=cwd, shell=False, background=False)
         if isinstance(managed, dict):
             return _foreground_result(managed)
-        return self._wait(managed, timeout_seconds=timeout_seconds)
+        return self._wait(managed, timeout_seconds=timeout)
 
     @_terminal_tool(risk="mutating")
     def run_shell(
@@ -198,10 +199,11 @@ class TerminalSession:
         """
         if not command.strip():
             raise ValueError("shell command cannot be empty")
+        timeout = self._bounded_timeout(timeout_seconds)
         managed = self._start(command, cwd=cwd, shell=True, background=False)
         if isinstance(managed, dict):
             return _foreground_result(managed)
-        return self._wait(managed, timeout_seconds=timeout_seconds)
+        return self._wait(managed, timeout_seconds=timeout)
 
     @_terminal_tool(risk="mutating")
     def start_process(self, argv: list[str], cwd: str = ".") -> dict[str, Any]:

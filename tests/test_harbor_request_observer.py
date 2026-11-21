@@ -448,3 +448,50 @@ def test_request_observer_preserves_errors_cancellation_and_capture_failures(
     summary = capture_failure.summary()
     assert summary.observer_failures == 2
     assert summary.usable is False
+
+
+def test_request_observer_response_summary_failure_does_not_break_request(
+    tmp_path: Path,
+) -> None:
+    # 6.4: a response whose summary raises (mixed-type usage details keys make
+    # sorted() raise) must still return to the caller, with a summary_error
+    # recorded instead of the response summary.
+    async def respond(_messages: list[Any], _info: AgentInfo) -> ModelResponse:
+        usage = RequestUsage(input_tokens=19, output_tokens=3)
+        usage.details = {"tokens": 1, 2: 3}
+        return ModelResponse(parts=[TextPart("unchanged result")], usage=usage)
+
+    capability = PydanticRequestEvidenceCapability(
+        records_dir=tmp_path,
+        trial_id="trial-1",
+        manifest_digest="manifest-1",
+    )
+    adapter = PydanticAdapter(FunctionModel(respond), capabilities=[capability])
+    request = RunRequestAssembler().assemble(
+        prompt=RawPromptBuilder(content="inspect the repository").build(),
+        instructions=(),
+        conversation=ConversationCoordinates(
+            session_id="session-secret",
+            lane_identity="lane-1",
+            cache_epoch=2,
+            cache_key="cache-secret",
+            history_count=4,
+        ),
+        tool_specs=(),
+        output=TextOutput(),
+        run_id="run-1",
+        turn_sequence=3,
+        call_kind="invoke",
+    )
+
+    assert lower_request_sync(adapter, request) == "unchanged result"
+
+    events = _events(capability.event_path)
+    assert [event["event"] for event in events] == [
+        "model_request_started",
+        "model_request_completed",
+    ]
+    completed = events[1]
+    assert completed["response"] is None
+    assert completed["summary_error"]["type"] == "TypeError"
+    assert capability.summary().usable is True

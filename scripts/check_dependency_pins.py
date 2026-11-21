@@ -7,10 +7,13 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from packaging.requirements import InvalidRequirement, Requirement
+
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_REF = re.compile(r"^\s*uses:\s*([^\s#]+)@([^\s#]+)", re.MULTILINE)
 EXACT_ACTION_REF = re.compile(r"[0-9a-f]{40}")
 REQUIREMENT_OPERATOR = re.compile(r"(?:===|==|~=|!=|<=|>=|<|>)")
+EXACT_SEMVER = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?")
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -25,7 +28,18 @@ def _requirement_has_bound(requirement: str) -> bool:
 
 def _requirement_is_exact(requirement: str) -> bool:
     requirement = requirement.split(";", 1)[0].strip()
-    return "==" in requirement and "!=" not in requirement
+    try:
+        parsed = Requirement(requirement)
+    except InvalidRequirement:
+        return False
+    specifiers = list(parsed.specifier)
+    return (
+        len(specifiers) == 1 and specifiers[0].operator == "==" and "*" not in specifiers[0].version
+    )
+
+
+def _version_is_exact(version: str) -> bool:
+    return EXACT_SEMVER.fullmatch(version) is not None
 
 
 def _check_python_metadata(errors: list[str]) -> None:
@@ -81,7 +95,7 @@ def _check_javascript_metadata(errors: list[str]) -> None:
         data = json.loads((ROOT / relative_path).read_text(encoding="utf-8"))
         for group in ("dependencies", "devDependencies"):
             for name, version in data.get(group, {}).items():
-                if version.startswith(("^", "~", ">", "<", "*")) or version == "latest":
+                if not _version_is_exact(version):
                     errors.append(
                         f"{relative_path}: {group} dependency {name} is not exact: {version}"
                     )

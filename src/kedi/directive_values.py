@@ -224,7 +224,7 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
     },
     "auth": {"scheme": ValueRule("A2A authentication scheme", ("basic", "bearer", "api_key"))},
     "tool": {"risk": ValueRule("Tool side-effect risk", ("read_only", "mutating", "sensitive"))},
-    "budget": {"request_limit": POSITIVE_INT, "tool_attempt_limit": POSITIVE_INT},
+    "budget": {"request_limit": NONNEGATIVE_INT, "tool_attempt_limit": NONNEGATIVE_INT},
     "settings": {
         "tool_reason": ACTIVATION,
         "media_limit": ValueRule("Largest media value sent to the model", kind="size"),
