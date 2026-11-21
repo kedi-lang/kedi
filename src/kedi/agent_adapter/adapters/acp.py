@@ -259,6 +259,7 @@ class ACPClient:
                 if initialize and not self._initialized:
                     self._initialize()
                 return
+            self._initialized = False
             self._process = subprocess.Popen(
                 self._command,
                 stdin=subprocess.PIPE,
@@ -315,7 +316,7 @@ class ACPClient:
             try:
                 process.stdin.write(line)
                 process.stdin.flush()
-            except BrokenPipeError as exc:
+            except (BrokenPipeError, OSError, ValueError) as exc:
                 raise ACPDisconnected(self._disconnect_message()) from exc
 
     def _read_stdout(self) -> None:
@@ -331,7 +332,12 @@ class ACPClient:
             if not isinstance(message, dict):
                 self._fail_all(ACPProtocolError("ACP emitted a non-object JSON-RPC message."))
                 return
-            self._handle_message(message)
+            try:
+                self._handle_message(message)
+            except Exception as exc:
+                # A reply the reader cannot send must not strand pending requests.
+                self._fail_all(exc)
+                return
         self._fail_all(ACPDisconnected(self._disconnect_message()))
 
     def _read_stderr(self) -> None:

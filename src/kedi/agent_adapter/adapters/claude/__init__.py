@@ -76,9 +76,6 @@ if TYPE_CHECKING:
         _is_result_message as _is_result_message,
     )
     from .messages import (
-        _json_schema_type_name as _json_schema_type_name,
-    )
-    from .messages import (
         _observe_claude_message as _observe_claude_message,
     )
     from .messages import (
@@ -143,7 +140,6 @@ _EXPORTS = {
     "_claude_fingerprint_default": ("messages", "_claude_fingerprint_default"),
     "_set_claude_system_prompt": ("messages", "_set_claude_system_prompt"),
     "_output_json_schema": ("messages", "_output_json_schema"),
-    "_json_schema_type_name": ("messages", "_json_schema_type_name"),
     "_structured_output_value": ("messages", "_structured_output_value"),
     "_claude_text_response": ("messages", "_claude_text_response"),
     "_observe_claude_message": ("messages", "_observe_claude_message"),

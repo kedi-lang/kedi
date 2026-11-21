@@ -483,6 +483,19 @@ def test_a2a_adapter_registry_metadata() -> None:
         A2AAdapter(model="local:model")
 
 
+def test_a2a_profile_override_rejects_tools() -> None:  # 3.12
+    from kedi.agent_adapter.tools.specs import ToolSpec
+    from kedi.agent_profile.errors import AgentProfileOverrideUnsupported
+
+    spec = ToolSpec(fn=lambda **kwargs: "ok", name="echo")
+    with pytest.raises(AgentProfileOverrideUnsupported, match="tools"):
+        A2AAdapter._validate_profile(AgentProfile(tools=("echo",)))
+    with pytest.raises(AgentProfileOverrideUnsupported, match="tool_bindings"):
+        A2AAdapter._validate_profile(AgentProfile(tool_bindings={"echo": spec}))
+    # An empty profile still passes validation.
+    A2AAdapter._validate_profile(AgentProfile.empty())
+
+
 def test_a2a_nested_cli_help_reaches_serve_command() -> None:
     result = CliRunner().invoke(cli_main, ["a2a", "serve", "--help"])
 

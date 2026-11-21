@@ -106,7 +106,7 @@ def langchain_media_provider(model: Any) -> MediaProvider | None:
         if provider is None:
             continue
         base_url = getattr(model, "openai_api_base", None)
-        if provider == "openai" and base_url and "api.openai.com" not in base_url:
+        if provider == "openai" and base_url and urlparse(base_url).hostname != "api.openai.com":
             return None
         return provider
     return None
@@ -127,6 +127,14 @@ def sent_attachments(messages: Sequence[Any]) -> dict[str, tuple[str, ...]]:
 
     index: dict[str, tuple[str, ...]] = {}
     for message in messages:
+        # A compaction checkpoint hides everything before it, so the scan starts
+        # over there — same as the pydantic history scan.
+        additional_kwargs = getattr(message, "additional_kwargs", None)
+        if isinstance(additional_kwargs, Mapping) and isinstance(
+            additional_kwargs.get("kedi_compaction_checkpoint"), str
+        ):
+            index.clear()
+            continue
         if not isinstance(message, HumanMessage) or not isinstance(message.content, list):
             continue
         present: dict[str, tuple[str, ...]] = {}
@@ -235,6 +243,8 @@ def _block_identity(block: Any) -> tuple[str, ...] | None:
         return (kind, "sha256", _sha256(data))
     if isinstance(block.get("url"), str):
         return (kind, "url", block["url"])
+    if isinstance(block.get("file_id"), str):
+        return (kind, "file_id", block["file_id"])
     return None
 
 

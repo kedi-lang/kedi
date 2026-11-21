@@ -443,6 +443,17 @@ def test_langchain_profile_and_client_detection() -> None:
     assert asyncio.run(langchain_media.user_message("Read.", [notes], history=None, model=no_pdf))
 
 
+def test_langchain_media_provider_rejects_openai_lookalike_host() -> None:  # 3.14
+    from langchain_openai import ChatOpenAI
+
+    lookalike = ChatOpenAI(
+        model="qwen-vl", api_key="test", base_url="https://api.openai.com.evil.test/v1"
+    )
+    assert langchain_media.langchain_media_provider(lookalike) is None
+    first_party = ChatOpenAI(model="gpt-4o", api_key="test", base_url="https://api.openai.com/v1")
+    assert langchain_media.langchain_media_provider(first_party) == "openai"
+
+
 def test_langchain_history_scan_reads_labels_urls_and_inline_files() -> None:
     from langchain_core.messages import AIMessage, HumanMessage
 
@@ -479,11 +490,44 @@ def test_langchain_history_scan_reads_labels_urls_and_inline_files() -> None:
         ),
     ]
     index = langchain_media.sent_attachments(history)
-    assert set(index) == {"cat", "link", "untyped", "notes"}
+    assert set(index) == {"cat", "link", "untyped", "notes", "stored"}
     assert index["cat"][:3] == ("cat", "image", "sha256")
     assert index["link"] == ("link", "image", "url", "https://example.com/cat.png")
     assert index["untyped"][:2] == ("untyped", "audio")
     assert index["notes"][:3] == ("notes", "document", "sha256")
+    assert index["stored"] == ("stored", "document", "file_id", "file-1")
+
+
+def test_langchain_history_scan_dedupes_file_ids_and_resets_on_checkpoint() -> None:  # 3.10
+    from langchain_core.messages import HumanMessage
+
+    def stored_message(prompt: str) -> HumanMessage:
+        return HumanMessage(
+            content=[
+                {"type": "text", "text": '<attachments>\n<document id="stored">\n'},
+                {"type": "file", "file_id": "file-1"},
+                {"type": "text", "text": "\n</document>\n</attachments>\n" + prompt},
+            ]
+        )
+
+    first = stored_message("Read.")
+    second = stored_message("Read again.")
+    assert langchain_media.sent_attachments([first, second]) == {
+        "stored": ("stored", "document", "file_id", "file-1")
+    }
+
+    checkpoint = HumanMessage(
+        content="summary", additional_kwargs={"kedi_compaction_checkpoint": "c1"}
+    )
+    assert langchain_media.sent_attachments([first, checkpoint]) == {}
+    assert langchain_media.sent_attachments([first, checkpoint, second]) == {
+        "stored": ("stored", "document", "file_id", "file-1")
+    }
+
+
+def test_langchain_block_identity_without_source_returns_none() -> None:  # 3.10
+    assert langchain_media._block_identity({"type": "image"}) is None
+    assert langchain_media._block_identity({"type": "tool_use", "id": "t"}) is None
 
 
 def test_request_identity_includes_media_but_not_bytes() -> None:

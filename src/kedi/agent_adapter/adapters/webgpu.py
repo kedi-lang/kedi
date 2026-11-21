@@ -22,7 +22,6 @@ from pydantic_ai import format_as_xml
 from pydantic_core import to_jsonable_python
 
 from ...agent_profile import AgentProfile, McpServerSpec, McpTransport
-from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
 from ...dynamic_models import build_dynamic_model
 from ...resolved_types import ResolvedKediType
 from ..approvals.policy import ToolApprovalDenied
@@ -101,6 +100,18 @@ class _McpRuntimeTool:
 BrowserTool = _RuntimeTool | _McpRuntimeTool
 
 
+WEBGPU_SETTING_KEYS = frozenset(
+    {
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "seed",
+        "stop_sequences",
+        "timeout",
+    }
+)
+
+
 class WebGPUAdapter(HookRegistrationMixin):
     kind: AgentAdapterKind = "agent-framework"
     shortname = "webgpu"
@@ -122,21 +133,12 @@ class WebGPUAdapter(HookRegistrationMixin):
             tool_bridge="kedi",
             tool_origins=frozenset({"kedi", "mcp"}),
         ),
-        settings=PYDANTIC_MODEL_SETTING_KEYS,
+        settings=WEBGPU_SETTING_KEYS,
     )
 
     """Route Kedi agent calls to a browser-hosted model through a small bridge."""
 
-    _SETTING_KEYS = frozenset(
-        {
-            "max_tokens",
-            "temperature",
-            "top_p",
-            "seed",
-            "stop_sequences",
-            "timeout",
-        }
-    )
+    _SETTING_KEYS = WEBGPU_SETTING_KEYS
 
     def __init__(
         self,
@@ -288,8 +290,6 @@ class WebGPUAdapter(HookRegistrationMixin):
                     if output_adapter is None:
                         return _text_response(response)
                     data = response.get("data")
-                    if not isinstance(data, dict):
-                        raise TypeError("Browser model final response data must be an object")
                     return output_adapter.validate_python(data)
                 if kind == "error":
                     raise RuntimeError(str(response.get("error") or "Browser model request failed"))
@@ -321,8 +321,6 @@ class WebGPUAdapter(HookRegistrationMixin):
                 name, succeeded, tool_messages = await self._execute_tool_call(response, tools)
                 if succeeded:
                     called_tools.add(name)
-                else:
-                    required_tools.add(name)
                 messages.extend(tool_messages)
 
         raise RuntimeError(f"Browser model exceeded the {self._max_tool_steps}-step tool limit")
