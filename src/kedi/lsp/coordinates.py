@@ -11,7 +11,7 @@ from bisect import bisect_right
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from functools import lru_cache, wraps
+from functools import cached_property, lru_cache, wraps
 from pathlib import Path
 from typing import Callable, Generator, Optional, ParamSpec, TypeVar
 
@@ -53,10 +53,11 @@ class CoordinateSource:
     source: str
     source_path: Optional[str]
 
-    @property
+    @cached_property
     def lines(self) -> tuple[str, ...]:
         return tuple(self.source.split("\n"))
 
+    @cached_property
     def _line_starts(self) -> tuple[int, ...]:
         raw = self.source.encode("utf-8")
         starts = [0]
@@ -66,7 +67,7 @@ class CoordinateSource:
     def byte_offset_to_position(self, offset: int) -> lsp.Position:
         raw = self.source.encode("utf-8")
         offset = max(0, min(offset, len(raw)))
-        starts = self._line_starts()
+        starts = self._line_starts
         line = bisect_right(starts, offset) - 1
         line_start = starts[line]
         return lsp.Position(
@@ -130,11 +131,25 @@ def with_source_coordinates(
 
 
 @lru_cache(maxsize=32)
-def _read_source(path: str) -> str | None:
+def _read_source_at(path: str, mtime_ns: int, size: int) -> str | None:
     try:
         return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return None
+
+
+def _read_source(path: str) -> str | None:
+    """Read a file, keyed by path + mtime + size so edits are not stale."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return _read_source_at(path, stat.st_mtime_ns, stat.st_size)
+
+
+def _clear_read_source_cache() -> None:
+    """Clear the file-content cache (used by tests)."""
+    _read_source_at.cache_clear()
 
 
 def _span_source(span: Span) -> CoordinateSource | None:

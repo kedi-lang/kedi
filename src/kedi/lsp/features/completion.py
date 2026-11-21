@@ -391,7 +391,7 @@ def _native_task_completions(
         try:
             program = parse_program(prefix, source_path=source_path)
         except KediParseError:
-            current_line = source.splitlines()[pos.line]
+            current_line = source.split("\n")[pos.line]
             indent = current_line[: len(current_line) - len(current_line.lstrip())]
             try:
                 program = parse_program(

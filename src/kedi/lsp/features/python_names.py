@@ -161,13 +161,21 @@ def _declared_name_tokens(
     """Positions of ``name`` inside ``global`` statements, found with the tokenizer."""
     if not declarations:
         return []
-    lines = {
-        line for stmt in declarations for line in range(stmt.lineno, (stmt.end_lineno or 0) + 1)
-    }
+    ranges = [
+        (
+            (stmt.lineno, stmt.col_offset),
+            (stmt.end_lineno or stmt.lineno, stmt.end_col_offset or 0),
+        )
+        for stmt in declarations
+    ]
     found: list[tuple[int, int]] = []
     for token in tokenize.generate_tokens(io.StringIO(code).readline):
         row, column = token.start
-        if token.type == tokenize.NAME and token.string == name and row in lines:
+        if (
+            token.type == tokenize.NAME
+            and token.string == name
+            and any(start <= (row, column) < end for start, end in ranges)
+        ):
             line = code.split("\n")[row - 1]
             found.append((row - 1, len(line[:column].encode("utf-8"))))
     return found

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import textwrap
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -1893,4 +1894,64 @@ def test_python_virtual_document_reads_bindings_that_templates_use():
     ]
 
     assert sorted(reads) == ["count", "name", "who"]
+    ast.parse(text)
+
+
+# ---------------------------------------------------------------------
+# #214 group G: virtual Python validity (6.7, 6.19)
+# ---------------------------------------------------------------------
+
+
+def test_variable_init_fallback_without_region_is_valid_python() -> None:
+    """#214 6.7: the no-region fallback must not emit `return` inside parens."""
+    assign = kedi_ast.VariableInitStmt(
+        name="x",
+        expr=[kedi_ast.PythonExprNativeSegment(code="1", loc=kedi_ast.Span(0, 1, 1, 12, 1, 13))],
+        loc=kedi_ast.Span(0, 1, 1, 2, 1, 3),
+    )
+    builder = virtual_builder_module.VirtualBuilder("[x: int] = `1`\n", None)
+    virtual_statements_module._emit_variable_init_stmt(
+        builder, virtual_builder_module.RegionCursor([]), assign, {}, "    "
+    )
+    text = builder.finish()
+    # The fragment is indented for a procedure body; dedent to parse it standalone.
+    ast.parse(textwrap.dedent(text))
+    assert "return cast(" not in text
+
+
+def test_python_class_stub_orders_required_init_params_first() -> None:
+    """#214 6.19: a defaulted field before a required field must not break __init__."""
+    cls = ast.parse("class Config:\n    name: str = 'x'\n    count: int\n").body[0]
+    builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_stubs_module._emit_python_class_stub(builder, cls)
+    text = builder.finish()
+    ast.parse(text)
+    init_line = next(line for line in text.splitlines() if "def __init__" in line)
+    assert init_line.index("count: int") < init_line.index("name: str")
+
+
+def test_type_init_params_orders_required_fields_first() -> None:
+    """#214 6.19: same field-order defect in typedef stubs."""
+    typedef = kedi_ast.TypeDef(
+        name="Config",
+        fields=[
+            kedi_ast.TypeField(name="name", type_annotation="str", default_expr='"x"'),
+            kedi_ast.TypeField(name="count", type_annotation="int"),
+        ],
+    )
+    params = virtual_stubs_module._type_init_params(typedef)
+    assert params.index("count: int") < params.index("name: str")
+    ast.parse(f"class Config:\n    def __init__({params}) -> None: ...\n")
+
+
+def test_docstring_lines_falls_back_to_repr_for_trailing_quote() -> None:
+    """#214 6.19: a docstring ending in a quote must not produce a 4-quote run."""
+    assert virtual_stubs_module._docstring_lines('say "hi"', "    ") == ["    'say \"hi\"'"]
+    assert virtual_stubs_module._docstring_lines("one line", "  ") == ['  """one line"""']
+
+
+def test_virtual_docstring_ending_in_quote_is_valid_python() -> None:
+    """#214 6.19: end-to-end, a ### docstring ending in a double quote."""
+    src = '@p() -> str:\n  ###\n  say "hi"\n  ###\n  = ok\n'
+    text = compute_python_virtual_document(src, "/tmp/x.kedi")["text"]
     ast.parse(text)

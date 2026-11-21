@@ -167,3 +167,14 @@ def test_control_flow_type_discovery_and_completion_agree():
     items = compute_completion(source, None, lsp.Position(6, 14))
     assert {"Visible", "factory"} <= {item.label for item in items}
     assert "Local" not in {item.label for item in items}
+
+
+def test_native_task_completions_tolerate_eof_empty_line() -> None:
+    """#214 6.22: completion on the empty last line of an unparseable doc."""
+    from kedi.lsp.features.completion import _native_task_completions
+
+    source = "@p() -> str:\n  = <broken(\n"
+    items = _native_task_completions(
+        source, "/tmp/x.kedi", lsp.Position(line=2, character=0), child=True
+    )
+    assert isinstance(items, list)

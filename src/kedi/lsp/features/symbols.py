@@ -125,22 +125,37 @@ def _name_token_span_on_line(
     line_start = _line_start_byte(prog, line_number)
     if line is None or line_start is None:
         return None
-    for candidate in (f"`{name}`", name):
-        name_index = line.find(candidate, search_start)
-        if name_index < 0:
-            continue
+    backtick_index = line.find(f"`{name}`", search_start)
+    if backtick_index >= 0:
+        # Span the name inside the backticks, not the backticks themselves.
+        name_index = backtick_index + 1
         start_col = name_index + 1
         start_byte = line_start + len(line[:name_index].encode("utf-8"))
         return Span(
             start_byte=start_byte,
-            end_byte=start_byte + len(candidate.encode("utf-8")),
+            end_byte=start_byte + len(name.encode("utf-8")),
             start_line=line_number,
             start_col=start_col,
             end_line=line_number,
-            end_col=start_col + len(candidate),
+            end_col=start_col + len(name),
             source_path=source_path,
         )
-    return None
+    pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+    match = pattern.search(line, pos=search_start)
+    if match is None:
+        return None
+    name_index = match.start()
+    start_col = name_index + 1
+    start_byte = line_start + len(line[:name_index].encode("utf-8"))
+    return Span(
+        start_byte=start_byte,
+        end_byte=start_byte + len(name.encode("utf-8")),
+        start_line=line_number,
+        start_col=start_col,
+        end_line=line_number,
+        end_col=start_col + len(name),
+        source_path=source_path,
+    )
 
 
 def _use_tool_entry_spans(

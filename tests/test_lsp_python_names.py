@@ -50,3 +50,15 @@ def test_python_regions_map_dedented_lines_to_source_bytes() -> None:
     first_line = fenced.split("\n").index("x = 1")
     assert source[offsets[first_line] : offsets[first_line] + 5] == b"x = 1"
     assert ("n", [source.index(b"`n`") + 1]) in regions
+
+
+def test_declared_name_tokens_ignores_attribute_and_keyword_uses() -> None:
+    """#214 6.18: only the `global` declaration itself is a declared name."""
+    import ast
+
+    from kedi.lsp.features.python_names import _declared_name_tokens
+
+    code = "global a; obj.a = 1; f(a=2)\n"
+    tree = ast.parse(code)
+    declarations = [node for node in ast.walk(tree) if isinstance(node, ast.Global)]
+    assert _declared_name_tokens(code, declarations, "a") == [(0, 7)]

@@ -68,7 +68,7 @@ def test_external_coordinate_source_and_fallback_paths(tmp_path: Path, monkeypat
     with coordinates.source_coordinates("main", str(tmp_path / "main.kedi")):
         assert coordinates.span_to_range(missing).start == lsp.Position(line=1, character=2)
 
-    coordinates._read_source.cache_clear()
+    coordinates._clear_read_source_cache()
     monkeypatch.setattr(
         Path, "read_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError())
     )
@@ -84,3 +84,19 @@ def test_external_coordinate_source_and_fallback_paths(tmp_path: Path, monkeypat
     different_path_span = Span(0, 1, 1, 1, 1, 2, source_path="other.kedi")
     with coordinates.source_coordinates("main", "same.kedi"):
         assert coordinates._span_source(different_path_span) is None
+
+
+def test_read_source_sees_edits_between_reads(tmp_path: Path) -> None:
+    """#214 6.16: the file cache must not serve stale text after an edit."""
+    target = tmp_path / "source.kedi"
+    target.write_text("line one\n", encoding="utf-8")
+    assert coordinates._read_source(str(target)) == "line one\n"
+    target.write_text("line one CHANGED\nline two\n", encoding="utf-8")
+    assert coordinates._read_source(str(target)) == "line one CHANGED\nline two\n"
+
+
+def test_coordinate_source_caches_lines_and_line_starts() -> None:
+    """#214 6.16: lines/_line_starts must not re-encode the source per call."""
+    source = coordinates.CoordinateSource("a\nb", None)
+    assert source.lines is source.lines
+    assert source._line_starts is source._line_starts
