@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from collections.abc import Iterable, Mapping
@@ -202,7 +203,7 @@ def normalize_artifact_policy(
     if value is None:
         return base
     if isinstance(value, bool):
-        policy = ArtifactPolicy(enabled=value)
+        policy = ArtifactPolicy(enabled=value, _specified_fields=frozenset({"enabled"}))
     elif isinstance(value, ArtifactPolicy):
         policy = value
     elif isinstance(value, Mapping):
@@ -233,7 +234,7 @@ def parse_byte_size(value: object, *, field_name: str = "size") -> int:
     if multiplier is None:
         raise ArtifactPolicyError(f"unsupported {field_name} unit {match.group('unit')!r}")
     result = float(match.group("number")) * float(multiplier)
-    if result != int(result):
+    if not math.isfinite(result) or result != int(result):
         raise ArtifactPolicyError(f"{field_name} must resolve to whole bytes")
     return int(result)
 
@@ -267,6 +268,8 @@ def parse_duration(
         seconds = float(match.group("number")) * multiplier
     else:
         raise ArtifactPolicyError(f"{field_name} must be seconds, timedelta, or a duration string")
+    if not math.isfinite(seconds):
+        raise ArtifactPolicyError(f"{field_name} must be finite")
     if seconds <= 0:
         raise ArtifactPolicyError(f"{field_name} must be greater than zero")
     return seconds

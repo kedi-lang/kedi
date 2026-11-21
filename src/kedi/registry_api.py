@@ -232,13 +232,20 @@ def _optional_string(value: Any, field: str) -> str | None:
     return _require_nonempty_string(value, field)
 
 
+# Characters Git sparse-checkout (and globs) interpret as patterns: a manifest
+# or source path containing one can inject extra checkout rules. Shared with
+# package_registry.py so both paths reject the same set with the same message.
+_SPARSE_UNSAFE = frozenset("*?[]!\\\r\n")
+_SPARSE_UNSAFE_MESSAGE = "Registry package path must not contain glob or sparse-checkout syntax"
+
+
 def _validate_manifest_path(value: str) -> str:
+    if any(character in value for character in _SPARSE_UNSAFE):
+        raise RegistryAPIError(_SPARSE_UNSAFE_MESSAGE)
     path = PurePosixPath(value)
     if (
         path.is_absolute()
         or value.startswith(("/", "\\"))
-        or "\\" in value
-        or any(character in value for character in "*?[")
         or path.name != "package.kedi"
         or any(part in {"", ".", ".."} for part in path.parts)
     ):

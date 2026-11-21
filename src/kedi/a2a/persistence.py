@@ -16,6 +16,7 @@ from a2a.types import Message, Part, Role, Task, TaskState
 from filelock import FileLock, SoftFileLock, Timeout
 from google.protobuf.json_format import MessageToDict, ParseDict
 from sqlalchemy import JSON, ForeignKey, Integer, String, delete, event, func, select
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -179,7 +180,7 @@ class A2APersistence:
                 descriptor = os.open(database_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(descriptor)
             self._engine = create_async_engine(
-                f"sqlite+aiosqlite:///{database_path}",
+                URL.create("sqlite+aiosqlite", database=str(database_path)),
                 connect_args={"timeout": 5},
             )
 

@@ -377,6 +377,21 @@ def test_install_rejects_mismatched_attestation(tmp_path, kind):
         )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "sub\n!other/package.kedi",
+        "a!b/package.kedi",
+        "sub]/package.kedi",
+        "sub\r/package.kedi",
+    ],
+)
+def test_manifest_path_rejects_sparse_checkout_syntax(path):  # 214 group D item 4.4
+    with pytest.raises(api.RegistryAPIError):
+        api._validate_manifest_path(path)
+    assert api._validate_manifest_path("sub/package.kedi") == "sub/package.kedi"
+
+
 @pytest.mark.parametrize("failure", ["fetch", "size", "oversized", "metadata", "glob", "checkout"])
 def test_verified_checkout_rejects_invalid_git_results(tmp_path, monkeypatch, failure):
     record = package_record()
@@ -400,6 +415,54 @@ def test_verified_checkout_rejects_invalid_git_results(tmp_path, monkeypatch, fa
     monkeypatch.setattr(packages, "_run_git", git)
     with pytest.raises(packages.PackageRegistryError):
         packages._checkout_registry_commit(tmp_path / "checkout", record.repository, record)
+
+
+def test_verified_checkout_rejects_sparse_unsafe_manifest_parent(tmp_path, monkeypatch):
+    # 214 group D item 4.4: a `!` in the manifest path's parent would inject
+    # a sparse-checkout negation rule via the repository source path. (The
+    # declared source itself is already covered by
+    # _package_source_relative_path.)
+    record = replace(package_record(), package_manifest_path="a!b/package.kedi")
+
+    def git(args, **kwargs):
+        if "rev-parse" in args:
+            return record.verified_commit
+        if "cat-file" in args:
+            return "60"
+        if "show" in args:
+            return "> package: demo:\n  version: 1.0\n  source: src/demo\n"
+        return ""
+
+    monkeypatch.setattr(packages, "_run_git", git)
+    with pytest.raises(packages.PackageRegistryError, match="sparse-checkout"):
+        packages._checkout_registry_commit(tmp_path / "checkout", record.repository, record)
+
+
+def test_verified_checkout_passes_no_file_allow_flag_for_remote_repositories(
+    tmp_path, monkeypatch
+):  # 214 group D item 4.3
+    record = package_record()
+    seen: list[list[str]] = []
+
+    def git(args, **kwargs):
+        seen.append(list(args))
+        if "rev-parse" in args:
+            return record.verified_commit
+        if "cat-file" in args:
+            return "60"
+        if "show" in args:
+            return "> package: demo:\n  version: 1.0\n  source: src/demo\n"
+        return ""
+
+    monkeypatch.setattr(packages, "_run_git", git)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "package.kedi").write_text(
+        "> package: demo:\n  version: 1.0\n  source: src/demo\n", encoding="utf-8"
+    )
+    packages._checkout_registry_commit(checkout, record.repository, record)
+    fetch = next(args for args in seen if "fetch" in args)
+    assert "protocol.file.allow=always" not in fetch
 
 
 def test_explicit_mock_client_requires_configuration(monkeypatch):

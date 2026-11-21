@@ -112,6 +112,7 @@ class ArtifactManager:
         policy: ArtifactPolicy,
         source: str | None = None,
         sensitive: bool = False,
+        provenance: dict[str, Any] | None = None,
     ) -> Any:
         """Admit a materialized tool result without allowing oversized inline history."""
 
@@ -150,6 +151,7 @@ class ArtifactManager:
             policy=effective,
             source=source,
             sensitive=sensitive,
+            provenance=provenance,
         )
 
     def _store_serialized(

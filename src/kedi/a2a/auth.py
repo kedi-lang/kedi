@@ -55,10 +55,9 @@ class A2AServerAuth:
             except (ValueError, UnicodeError):
                 return None
             assert self.username is not None
-            if _credentials_match(username, self.username) and _credentials_match(
-                secret,
-                self.secret,
-            ):
+            user_ok = _credentials_match(username, self.username)
+            secret_ok = _credentials_match(secret, self.secret)
+            if user_ok & secret_ok:
                 return self.principal
             return None
         if self.scheme == "bearer":

@@ -141,6 +141,35 @@ def test_policy_parses_units_and_overlays_only_specified_fields(tmp_path: Path) 
     assert PublicArtifactPolicy is ArtifactPolicy
 
 
+def test_boolean_policy_overlay_keeps_base_fields(tmp_path: Path) -> None:
+    # 214 group D item 4.6: a boolean overlay must only flip `enabled`; the
+    # base policy's other fields survive.
+    base = ArtifactPolicy.patch(
+        {
+            "enabled": True,
+            "store": "file",
+            "path": tmp_path,
+            "threshold": "1kb",
+            "ttl": 60,
+            "exclude_tools": ["secret_tool"],
+        }
+    )
+    disabled = normalize_artifact_policy(False, base=base)
+    assert disabled is not None
+    assert disabled.enabled is False
+    assert disabled.store == "file"
+    assert disabled.threshold_bytes == 1000
+    assert disabled.ttl_seconds == 60
+    assert disabled.exclude_tools == ("secret_tool",)
+    enabled = normalize_artifact_policy(True, base=base)
+    assert enabled is not None
+    assert enabled.enabled is True
+    assert enabled.store == "file"
+    assert enabled.threshold_bytes == 1000
+    assert enabled.ttl_seconds == 60
+    assert enabled.exclude_tools == ("secret_tool",)
+
+
 def test_artifacts_are_enabled_by_default_with_cache_stable_contract() -> None:
     class LargeOutputAdapter(ArtifactRecordingAdapter):
         def produce_sync(

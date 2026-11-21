@@ -516,6 +516,10 @@ class Media:
         if not uri.startswith("data:") or ";base64," not in uri:
             raise MediaError("A media data URI must look like data:<type>;base64,<data>")
         header, payload = uri[5:].split(";base64,", 1)
+        # Reject oversize payloads before decoding: the decoded bytes would
+        # otherwise be allocated in full before the size check runs.
+        if len(payload.rstrip("=")) * 3 // 4 > MAX_MEDIA_BYTES:
+            raise MediaError(f"media data URI exceeds the {format_size(MAX_MEDIA_BYTES)} limit")
         try:
             data = base64.b64decode(unquote_to_bytes(payload), validate=True)
         except (binascii.Error, ValueError) as exc:
@@ -635,6 +639,8 @@ class Media:
         elif isinstance(value, str) and urlparse(value).scheme.lower() in _URL_SCHEMES:
             media = cls.from_url(value)
         elif isinstance(value, dict) and {"file_id", "provider", "media_type"} <= value.keys():
+            if not isinstance(value["media_type"], str):
+                raise MediaError("media file_id media_type must be a string")
             media = cls.from_file_id(
                 value["file_id"], provider=value["provider"], media_type=value["media_type"]
             )
