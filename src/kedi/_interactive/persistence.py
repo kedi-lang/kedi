@@ -60,7 +60,12 @@ class SessionLoadError(SessionPersistenceError):
 
 
 class SnapshotTrustRequired(SessionLoadError):
-    """An executable Python snapshot was loaded without explicit trust."""
+    """Loading the snapshot would import or run Python code, and trust was not given."""
+
+    def __init__(self, message: str, *, cli_message: str) -> None:
+        super().__init__(message)
+        # The API names trusted=True; the terminal user needs the CLI flag.
+        self.cli_message = cli_message
 
 
 class UnsupportedSessionValue(TypeError):
@@ -452,6 +457,7 @@ def decode_profile(
     *,
     decoder: SessionValueDecoder,
     kedi_models: Mapping[str, type[BaseModel]],
+    trusted: bool,
 ) -> AgentProfile:
     output_type_data = encoded.get("output_type")
     output_type: Any | None = None
@@ -502,8 +508,10 @@ def decode_profile(
         tools=tuple(encoded.get("tools", ())),
         mcp_servers=tuple(_decode_mcp_server(item) for item in encoded.get("mcp_servers", ())),
         approval=approval,
-        hooks=_decode_hooks(encoded.get("hooks")),
-        _hook_enforcement=_decode_hooks(encoded.get("hook_enforcement")),
+        hooks=_decode_hooks(encoded.get("hooks"), field="hooks", trusted=trusted),
+        _hook_enforcement=_decode_hooks(
+            encoded.get("hook_enforcement"), field="hook_enforcement", trusted=trusted
+        ),
         skills=_decode_skills(encoded.get("skills")),
         subagents=tuple(encoded.get("subagents", ())),
         max_agents=encoded.get("max_agents"),
@@ -606,7 +614,7 @@ def _encode_hooks(value: HookSettings | None, *, path: str) -> dict[str, Any] | 
     return encoded
 
 
-def _decode_hooks(value: Any) -> HookSettings | None:
+def _decode_hooks(value: Any, *, field: str, trusted: bool) -> HookSettings | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
@@ -626,11 +634,21 @@ def _decode_hooks(value: Any) -> HookSettings | None:
             decoded[event] = None
             continue
         if not isinstance(handlers, list):
-            raise SessionLoadError(f"profile.hooks.{event} must be a list or null")
+            raise SessionLoadError(f"profile.{field}.{event} must be a list or null")
+        if handlers and not trusted:
+            # Resolving a handler imports its module, which runs that module's code.
+            raise SnapshotTrustRequired(
+                f"This snapshot restores hook handlers (profile.{field}.{event}); resolving "
+                "them imports their modules. Pass trusted=True only for a trusted snapshot",
+                cli_message=(
+                    "This snapshot restores hook handlers, and loading them imports their "
+                    "Python modules. Rerun with --trust-snapshot only if you trust its source."
+                ),
+            )
         decoded[event] = tuple(
             _decode_importable_callable(
                 descriptor,
-                path=f"profile.hooks.{event}[{index}]",
+                path=f"profile.{field}.{event}[{index}]",
             )
             for index, descriptor in enumerate(handlers)
         )

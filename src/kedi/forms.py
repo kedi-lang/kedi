@@ -290,7 +290,8 @@ def _optimizer_result(group: GroupStmt) -> bool:
 
 
 def _python_use(statements: Sequence[Stmt]) -> str | None:
-    for statement in _statements(statements):
+    # Nested procedures too: a form must not hide Python inside an `@helper` body.
+    for statement in _statements(statements, procedures=True):
         what = _python_statement(statement)
         if what is not None:
             line = "" if statement.loc is None else f"line {statement.loc.start_line - 1}: "

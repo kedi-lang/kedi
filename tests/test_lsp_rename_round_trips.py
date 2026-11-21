@@ -6,6 +6,7 @@ import pytest
 from lsprotocol import types as lsp
 
 from kedi.lang import compile_program, parse_program
+from kedi.lsp.features.navigation import compute_prepare_rename, compute_rename
 from tests.lsp_helpers import definition_at, references_at, rename_at
 
 URI = "file:///tmp/rename.kedi"
@@ -126,3 +127,14 @@ def test_references_to_an_undeclared_name_skip_python() -> None:
     source = "= <ghost> and `ghost`\n"
 
     assert _starts(references_at(source, URI, PATH, "ghost", True)) == [(0, 3)]
+
+
+def test_rename_refuses_a_profile_instead_of_replacing_its_block() -> None:
+    # #214 6.5: a profile symbol spans its whole directive block, so rename must refuse it
+    # exactly like prepare-rename does.
+    source = (
+        "> profile: reviewer:\n    > instructions: be careful\n\n> use: reviewer\n[a] = hi\n= `a`\n"
+    )
+    position = lsp.Position(line=0, character=13)
+    assert compute_prepare_rename(source, None, position) is None
+    assert compute_rename(source, "file:///t.kedi", None, position, "rev2") is None

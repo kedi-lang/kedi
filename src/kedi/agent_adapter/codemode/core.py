@@ -25,7 +25,6 @@ from pydantic_monty import (
 )
 
 from kedi.errors import KediExecutionError
-from kedi.run_budget import RunBudgetExceeded
 
 from ..tools.dispatch import SequentialDispatchGate as _SequentialDispatchGate
 from ..tools.records import ToolResultHandoff, defer_tool_handoff
@@ -76,6 +75,11 @@ locate progress, correct the error, and continue from variables that were alread
 ToolInvoker = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
 
+# Host errors that end the run even when the generated code catches them
+# (a RunBudgetExceeded is a KediExecutionError).
+_FATAL_HOST_ERRORS = (KediExecutionError, CodeModeResultError)
+
+
 @dataclass(frozen=True, slots=True)
 class CodeModeLimits:
     default_search_limit: int = 10
@@ -89,6 +93,9 @@ class CodeModeLimits:
     max_total_tool_result_bytes: int = 1_000_000
     max_print_bytes: int = 256_000
     request_timeout: float = 60.0
+    # Per-session Monty heap ceiling, matching the dynamic-workflow sandbox: generated
+    # code must not be able to exhaust the host process's memory.
+    max_memory_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self) -> None:
         integer_limits = {
@@ -102,6 +109,7 @@ class CodeModeLimits:
             "max_tool_result_bytes": self.max_tool_result_bytes,
             "max_total_tool_result_bytes": self.max_total_tool_result_bytes,
             "max_print_bytes": self.max_print_bytes,
+            "max_memory_bytes": self.max_memory_bytes,
         }
         invalid = [name for name, value in integer_limits.items() if value <= 0]
         if invalid:
@@ -476,7 +484,7 @@ class CodeModeSession:
                 dispatch_cancelled = True
                 raise
             except Exception as exc:
-                if host_error is None or isinstance(exc, (KediExecutionError, CodeModeResultError)):
+                if host_error is None or isinstance(exc, _FATAL_HOST_ERRORS):
                     host_error = exc
                 raise
             finally:
@@ -509,6 +517,10 @@ class CodeModeSession:
                         external_lookup=external_lookup,
                         print_callback=capture,
                     )
+                    if isinstance(host_error, _FATAL_HOST_ERRORS):
+                        # The script caught a fatal host error; it still ends the run.
+                        await self._cancel_host_tasks()
+                        raise host_error
                     accepted = True
                 except asyncio.CancelledError:
                     dispatch_cancelled = True
@@ -520,9 +532,7 @@ class CodeModeSession:
                     if isinstance(exc, MontyCrashedError):
                         await self.reset()
                     if host_error is not None:
-                        if isinstance(
-                            host_error, (KediExecutionError, RunBudgetExceeded, CodeModeResultError)
-                        ):
+                        if isinstance(host_error, _FATAL_HOST_ERRORS):
                             raise host_error
                         raise CodeModeExecutionError(str(exc)) from host_error
                     result = None
@@ -568,7 +578,10 @@ class CodeModeSession:
             )
         if self._monty_session is None:
             self._monty_session = await self._session_stack.enter_async_context(
-                self._pool.checkout(script_name="kedi_codemode.py")
+                self._pool.checkout(
+                    script_name="kedi_codemode.py",
+                    limits={"max_memory": self.limits.max_memory_bytes},
+                )
             )
         return self._monty_session
 

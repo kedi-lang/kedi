@@ -4,7 +4,9 @@ import hashlib
 import io
 import json
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
+from threading import Thread
 from unittest.mock import Mock
 from urllib.error import HTTPError
 
@@ -110,7 +112,7 @@ def test_registry_http_errors_keep_their_meaning(monkeypatch, code):
     def fail(*args, **kwargs):
         raise HTTPError("https://example.test", code, "failure", {}, None)
 
-    monkeypatch.setattr(api, "urlopen", fail)
+    monkeypatch.setattr(api, "_registry_open", fail)
     with pytest.raises(ModuleNotFoundError if code == 404 else api.RegistryAPIError):
         api.HTTPRegistryAPIClient().package_record("demo")
 
@@ -166,7 +168,7 @@ def test_registry_rejects_invalid_http_responses(monkeypatch, body, headers, url
     response = io.BytesIO(body)
     response.headers = headers
     response.geturl = lambda: url
-    monkeypatch.setattr(api, "urlopen", lambda *args, **kwargs: response)
+    monkeypatch.setattr(api, "_registry_open", lambda *args, **kwargs: response)
     with pytest.raises(api.RegistryAPIError, match=message):
         api.HTTPRegistryAPIClient("http://127.0.0.1:8767").audit_records()
 
@@ -469,3 +471,65 @@ def test_explicit_mock_client_requires_configuration(monkeypatch):
     monkeypatch.delenv(packages.MOCK_REGISTRY_ROOT_ENV, raising=False)
     with pytest.raises(RuntimeError, match="mock registry client"):
         packages.mock_registry_client_from_environment()
+
+
+def test_registry_checks_each_redirect_hop_before_following_it():
+    # #214 4.1: a cross-origin hop is rejected before any request reaches it.
+    hits: list[str] = []
+
+    class Outside(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args) -> None:
+            pass
+
+    outside = ThreadingHTTPServer(("127.0.0.1", 0), Outside)
+
+    class Registry(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{outside.server_port}/v1/audit.json")
+            self.end_headers()
+
+        def log_message(self, *args) -> None:
+            pass
+
+    registry = ThreadingHTTPServer(("127.0.0.1", 0), Registry)
+    same_origin_hits: list[str] = []
+
+    class SameOrigin(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            same_origin_hits.append(self.path)
+            if self.path == "/v1/audit.json":
+                self.send_response(302)
+                self.send_header("Location", "/v1/audit-moved.json")
+                self.end_headers()
+                return
+            body = b'{"schema_version": 1, "registry_revision": "r", "entries": []}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:
+            pass
+
+    moved = ThreadingHTTPServer(("127.0.0.1", 0), SameOrigin)
+    for server in (outside, registry, moved):
+        Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = api.HTTPRegistryAPIClient(f"http://127.0.0.1:{registry.server_port}")
+        with pytest.raises(api.RegistryAPIError, match="different origin"):
+            client.audit_records()
+        assert hits == []
+        # A same-origin hop is still followed.
+        api.HTTPRegistryAPIClient(f"http://127.0.0.1:{moved.server_port}").audit_records()
+        assert same_origin_hits == ["/v1/audit.json", "/v1/audit-moved.json"]
+    finally:
+        for server in (outside, registry, moved):
+            server.shutdown()
+            server.server_close()

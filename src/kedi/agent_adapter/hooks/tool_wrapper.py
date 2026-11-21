@@ -373,8 +373,13 @@ def with_hook_lifecycle(
     adapter_shortname: str,
     origin: ToolOrigin = "kedi",
     tool_call_id: str | None = None,
+    pre_tool_use: bool = True,
 ) -> ToolSpec:
-    """Wrap a final ToolSpec boundary when its adapter has no native lifecycle seam."""
+    """Wrap a final ToolSpec boundary when its adapter has no native lifecycle seam.
+
+    ``pre_tool_use=False`` is for callers that already dispatched the pre hook (so approval
+    could see its edit); the wrapper then runs the post and failure hooks only.
+    """
 
     metadata = dict(tool.metadata or {})
     if metadata.get("kedi_hook_wrapped") is True:
@@ -387,12 +392,16 @@ def with_hook_lifecycle(
         async def hooked_async_tool(*args: Any, **kwargs: Any) -> Any:
             _require_keyword_arguments(tool, args)
             call_id = tool_call_id or new_tool_call_id()
-            final_arguments = await dispatch_pre_tool_use(
-                tool,
-                kwargs,
-                adapter_shortname=adapter_shortname,
-                tool_call_id=call_id,
-                origin=origin,
+            final_arguments = (
+                await dispatch_pre_tool_use(
+                    tool,
+                    kwargs,
+                    adapter_shortname=adapter_shortname,
+                    tool_call_id=call_id,
+                    origin=origin,
+                )
+                if pre_tool_use
+                else kwargs
             )
             started = monotonic()
             with track_tool_call(call_id) as tracker:
@@ -449,12 +458,16 @@ def with_hook_lifecycle(
     def hooked_tool(*args: Any, **kwargs: Any) -> Any:
         _require_keyword_arguments(tool, args)
         call_id = tool_call_id or new_tool_call_id()
-        final_arguments = dispatch_pre_tool_use_sync(
-            tool,
-            kwargs,
-            adapter_shortname=adapter_shortname,
-            tool_call_id=call_id,
-            origin=origin,
+        final_arguments = (
+            dispatch_pre_tool_use_sync(
+                tool,
+                kwargs,
+                adapter_shortname=adapter_shortname,
+                tool_call_id=call_id,
+                origin=origin,
+            )
+            if pre_tool_use
+            else kwargs
         )
         started = monotonic()
         with track_tool_call(call_id) as tracker:

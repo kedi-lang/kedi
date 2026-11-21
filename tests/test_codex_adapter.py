@@ -114,6 +114,19 @@ def test_codex_adapter_metadata_and_public_exports() -> None:
     assert CodexAdapter.capabilities.settings == CODEX_AGENT_SETTING_KEYS
 
 
+def test_codex_child_cannot_opt_out_of_an_inherited_approval_ceiling(tmp_path: Path) -> None:
+    # #214 3.4: a child profile's approval_policy setting must not disable approval
+    # requests while a parent approval ceiling is active.
+    adapter, log_path = _adapter(tmp_path, approval_policy="never")
+    with adapter.approval_ceiling((ApprovalPolicy.deny(),)):
+        adapter.produce_sync("ceiling", output_schema={"answer": str})
+    adapter.produce_sync("free", output_schema={"answer": str})
+    adapter.close()
+
+    starts = _method(_messages(log_path), "thread/start")
+    assert [start["params"]["approvalPolicy"] for start in starts] == ["untrusted", "never"]
+
+
 def test_codex_adapter_sync_run_reuses_connection_and_maps_profile(
     tmp_path: Path,
 ) -> None:

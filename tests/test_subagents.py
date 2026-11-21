@@ -4027,12 +4027,19 @@ def test_subagent_safety_ceiling_restricts_cwd_sandbox_and_nested_profiles(
 
     assert child.settings["cwd"] == str(workspace / "nested")
     assert child.settings["sandbox"] == "read-only"
+    # A child that names no cwd stays inside the parent's boundary (#214 K4).
+    assert grandchild.settings["cwd"] == str(workspace / "nested")
     assert grandchild.settings["sandbox"] == "read-only"
     assert grandchild_ceiling.approval_policies == (
         ApprovalPolicy.allow(),
         ApprovalPolicy.deny(),
         None,
     )
+
+    # Without any explicit boundary, children keep their settings untouched.
+    free = SubagentSafetyCeiling.from_parent(AgentProfile.empty(), default_cwd=tmp_path)
+    untouched, _ = free.constrain_child(AgentProfile.empty())
+    assert "cwd" not in untouched.settings
 
     with pytest.raises(KediExecutionError, match="escapes parent cwd boundary"):
         ceiling.constrain_child(AgentProfile(settings={"cwd": str(tmp_path)}))

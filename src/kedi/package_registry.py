@@ -642,7 +642,9 @@ def install_git_package(source: str, *, registry_root: Path | None = None) -> In
         manifest_path = checkout / PACKAGE_MANIFEST_NAME
         _require_regular_file(manifest_path, "Kedi package manifest", error_type=ValueError)
         metadata = load_package_manifest(manifest_path)
-        validate_package_metadata(metadata, enforce_python_compatibility=True)
+        validate_package_metadata(
+            metadata, enforce_python_compatibility=True, allow_direct_references=False
+        )
         source_path = _package_source_relative_path(metadata.source, error_type=ValueError)
         _run_git(
             [
@@ -766,7 +768,9 @@ def _checkout_registry_commit(
     preview_manifest = Path(checkout.parent) / PACKAGE_MANIFEST_NAME
     preview_manifest.write_text(f"{manifest_text}\n", encoding="utf-8")
     metadata = load_package_manifest(preview_manifest)
-    validate_package_metadata(metadata, enforce_python_compatibility=True)
+    validate_package_metadata(
+        metadata, enforce_python_compatibility=True, allow_direct_references=False
+    )
     if metadata.name != record.name or metadata.version != record.version:
         raise PackageRegistryError(
             "Registry package metadata differs from the verified package manifest"

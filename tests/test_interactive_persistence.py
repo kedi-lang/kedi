@@ -23,6 +23,7 @@ from kedi._interactive.persistence import (
     SessionLoadError,
     SessionValueDecoder,
     SessionValueEncoder,
+    SnapshotTrustRequired,
     UnsupportedSessionValue,
 )
 from kedi._interactive.state import ExecutedFragment
@@ -210,6 +211,7 @@ def test_profile_codec_round_trips_full_portable_profile() -> None:
         encoded,
         decoder=SessionValueDecoder(kedi_models={}),
         kedi_models={},
+        trusted=True,
     )
     assert restored == profile
     assert restored.agent_command == ("agent", "run")
@@ -248,6 +250,7 @@ def test_profile_codec_round_trips_a2a_references_without_secret_values(
         encoded,
         decoder=SessionValueDecoder(kedi_models={}),
         kedi_models={},
+        trusted=True,
     )
     assert restored == profile
     assert restored.a2a_connection is not None
@@ -271,6 +274,7 @@ def test_profile_codec_round_trips_builtin_output_types(output_type: type[Any]) 
         encoded,
         decoder=SessionValueDecoder(kedi_models={}),
         kedi_models={},
+        trusted=True,
     )
     assert restored.output_type is output_type
 
@@ -287,6 +291,7 @@ def test_profile_codec_round_trips_kedi_output_type_and_boolean_settings() -> No
         encoded,
         decoder=SessionValueDecoder(kedi_models={"SnapshotModel": SnapshotModel}),
         kedi_models={"SnapshotModel": SnapshotModel},
+        trusted=True,
     )
     assert restored.output_type is SnapshotModel
     assert isinstance(restored.skills, SkillsSettings) and restored.skills.enabled is True
@@ -362,6 +367,7 @@ def test_profile_decoder_rejects_invalid_output_types(
             encoded,
             decoder=SessionValueDecoder(kedi_models={}),
             kedi_models={},
+            trusted=True,
         )
 
 
@@ -591,7 +597,7 @@ def test_restore_payload_rejects_nonlexical_interactive_environment() -> None:
         payload = state._build_snapshot_payload(session)
         session._env = cast(Any, {})
         with pytest.raises(SessionLoadError, match="not a lexical scope frame"):
-            state._restore_payload(session, payload)
+            state._restore_payload(session, payload, trusted=True)
 
 
 def test_session_load_validates_supplied_conversation_state(tmp_path: Path) -> None:
@@ -676,7 +682,7 @@ def test_session_load_closes_partial_session_for_unexpected_restore_failure(
             super().__init__(**kwargs)
             created.append(self)
 
-    def fail_restore(_session: object, _payload: object) -> None:
+    def fail_restore(_session: object, _payload: object, *, trusted: bool) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(state, "_restore_payload", fail_restore)
@@ -753,10 +759,41 @@ def test_session_dump_load_restores_import_addressable_hook_handlers(tmp_path: P
         )
         session.dump(snapshot)
 
-    with kedi.load_session(snapshot) as restored:
+    with kedi.load_session(snapshot, trusted=True) as restored:
         hooks = restored._top_level_state.active_profile.hooks
         assert hooks is not None
         assert hooks.pre_tool_use == (operator.neg,)
+
+
+def test_portable_snapshot_with_hooks_requires_trust_before_importing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214 K1: resolving a hook descriptor imports its module, so an untrusted load refuses
+    # before any import; a snapshot without hooks still loads untrusted.
+    snapshot = tmp_path / "hooks.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session._top_level_state.active_profile = AgentProfile(
+            hooks=HookSettings(pre_tool_use=(cast(HookHandler, operator.neg),)),
+        )
+        session.dump(snapshot)
+    imported: list[str] = []
+    real_import = persistence.importlib.import_module
+    monkeypatch.setattr(
+        persistence.importlib,
+        "import_module",
+        lambda name: imported.append(name) or real_import(name),
+    )
+
+    with pytest.raises(SnapshotTrustRequired, match="hook handlers") as info:
+        kedi.load_session(snapshot)
+    assert imported == []
+    assert "--trust-snapshot" in info.value.cli_message
+
+    plain = tmp_path / "plain.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session.dump(plain)
+    with kedi.load_session(plain) as restored:
+        assert restored._top_level_state.active_profile.hooks is None
 
 
 def test_session_dump_rejects_non_importable_hook_handlers(tmp_path: Path) -> None:
@@ -781,7 +818,7 @@ def test_session_dump_rejects_non_importable_hook_handlers(tmp_path: Path) -> No
 )
 def test_session_hook_decoder_rejects_malformed_settings(value: Any, message: str) -> None:
     with pytest.raises(SessionLoadError, match=message):
-        persistence._decode_hooks(value)
+        persistence._decode_hooks(value, field="hooks", trusted=True)
 
 
 def test_session_hook_callable_encoder_rejects_nonportable_addresses(
