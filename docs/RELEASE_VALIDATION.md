@@ -42,10 +42,11 @@ not evidence of a passing run.
 
 ## Parser Version Blocker
 
-The published `tree-sitter-kedi==0.4.0` does not understand the current syntax.
-An isolated installation of the Kedi 0.4.0 candidate reproduced parse failures
-that the checkout's editable parser had hidden. The updated parser is version
-0.4.1; Kedi's dependency pin and both editors' shared bootstrap now require it.
+Kedi's `tree-sitter-kedi` pin in `pyproject.toml` must name a published parser
+that understands the current syntax. The checkout's editable parser hides a
+mismatch; an isolated installation of the candidate wheel reproduces it as parse
+failures. When the grammar changes, release a new parser version and raise the
+pin, and the editors' shared bootstrap, to it.
 
 Passing the candidate-wheel gate does not mean the packages are available on
 PyPI. Publish the parser first, then Kedi, and only then release editor packages

@@ -52,7 +52,7 @@ In PowerShell, activate
 To use a Codex subscription instead of a native OpenAI API key, on Python 3.11+:
 
 ```bash
-uv sync --dev --extra codex-model
+uv sync --extra codex-model  # not with --dev: the two dependency sets conflict
 codex login
 export KEDI_ADAPTER_MODEL=codex/gpt-6-luna
 ```

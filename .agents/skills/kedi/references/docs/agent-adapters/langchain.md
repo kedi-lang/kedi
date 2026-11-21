@@ -23,10 +23,52 @@ A missing model fails when the adapter first runs.
 
 ## Model Settings
 
-Kedi supports common constructor/runtime fields including `temperature`,
-`max_tokens`, `timeout`, `max_retries`, sampling penalties, `tool_choice`,
-`parallel_tool_calls`, callbacks, metadata/tags, streaming controls,
-OpenAI-compatible endpoint fields, and `reasoning`/`reasoning_effort`.
+The full list of supported `> settings:` keys comes from Kedi's
+`agent_profile.settings`:
+
+<!-- BEGIN GENERATED MODEL SETTINGS -->
+
+| Setting | Meaning |
+| --- | --- |
+| `api_key` | Provider API key used when constructing the chat model. |
+| `base_url` | Base URL for an OpenAI-compatible endpoint. |
+| `callbacks` | LangChain callbacks attached to model calls. |
+| `configurable_fields` | Fields exposed as LangChain configurable fields. |
+| `configurable_prefix` | Prefix applied to configurable field names. |
+| `context_limit` | Model context window in tokens for Kedi's request ceiling; default 200,000. |
+| `decision_boolean_threshold` | Probability above which a boolean decision counts as true. |
+| `decision_tool_call_threshold` | Probability above which a hand-off tool is selected. |
+| `disable_streaming` | Disable streaming globally or during tool calls. |
+| `extra_body` | Extra fields merged into the provider request body. |
+| `extra_headers` | Extra HTTP headers sent with provider requests. |
+| `frequency_penalty` | Penalty scaled by how often a token already appeared. |
+| `logit_bias` | Per-token logit adjustments. |
+| `max_retries` | Maximum retries for failed model calls. |
+| `max_tokens` | Maximum tokens in the model response. |
+| `media_limit` | Largest media value, in bytes, a request may attach; default 20 MB cap. |
+| `metadata` | Metadata attached to model calls. |
+| `model_kwargs` | Extra keyword arguments passed to the chat model. |
+| `organization` | Provider organization identifier. |
+| `parallel_tool_calls` | Whether the model may call several tools in one turn. |
+| `presence_penalty` | Penalty for repeating tokens already present. |
+| `rate_limiter` | Rate limiter applied to model calls. |
+| `reasoning` | Reasoning configuration mapping (for example `{"effort": "high"}`). |
+| `reasoning_effort` | Reasoning effort level for models without a reasoning mapping. |
+| `response_cache` | Enable provider response caching for identical requests. |
+| `response_cache_ttl` | Cache time-to-live in seconds for cached responses. |
+| `seed` | Seed for deterministic sampling where the provider supports it. |
+| `stop` | Stop strings for the chat model. |
+| `stop_sequences` | Sequences that stop generation. |
+| `stream_usage` | Include token usage in streamed responses. |
+| `streaming` | Enable streaming responses. |
+| `tags` | Tags attached to model calls. |
+| `temperature` | Sampling temperature; higher values are more random. |
+| `timeout` | Request timeout in seconds. |
+| `tool_choice` | Tool selection policy (`none`, `auto`, `required`). |
+| `tool_reason` | Opts into an optional `reason` string on tool calls. |
+| `top_p` | Nucleus sampling cutoff. |
+
+<!-- END GENERATED MODEL SETTINGS -->
 
 For `openrouter:` model names, or models with an existing `reasoning` mapping,
 effort is written to `reasoning={"effort": ...}` while retaining the other

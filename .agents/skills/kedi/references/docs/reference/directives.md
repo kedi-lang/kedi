@@ -11,6 +11,9 @@
 | `> model: value` | Set plain or Python-evaluated model identifier |
 | `> requires: capability` | Require one adapter capability before model I/O |
 | `> requires:` | Require an indented list of adapter capabilities |
+| `> budget:` | Set run ceilings: `request_limit` and `tool_attempt_limit` |
+| `> capability: name:` | Define an additive instruction/tool bundle |
+| `> defer:` | Inside a capability, opt into native on-demand activation |
 | `> effort: level` | Set `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `> instructions: text` | Replace active instructions; block form joins lines |
 | `> settings:` | Merge adapter settings by key |
@@ -40,10 +43,11 @@ contain `>`-prefixed subdirectives. Kedi does not mix both forms in one body.
 instead; its body, substitutions, lexical scope, and precedence stay the same.
 The Python `system=` configuration parameter is unchanged.
 
-`> artifacts:` fields are `enabled`, `query_artifacts`, `store`, `path`, `threshold`, `ttl`,
+`> artifacts:` fields are `enabled`, `query_artifacts`, `exclude_tools`, `store`, `path`, `threshold`, `ttl`,
 `idle_ttl`, `preview_chars`, `read_max_chars`, `session_quota`,
 `max_artifacts`, and `cleanup_interval`. The policy is lexical and enabled by
-default. Artifact querying is separately disabled by default and accepts
+default. `exclude_tools` lists exact tool names whose results skip artifact
+admission. Artifact querying is separately disabled by default and accepts
 `query_artifacts: enabled|disabled`. See [Tool Artifacts](../runtime/tool-artifacts.md).
 
 The expanded `> history:` form contains only subsettings. It requires
@@ -63,6 +67,19 @@ retention and provenance. Compaction is history lifecycle
 policy, not a model setting. See
 [Caching and Conversation History](../runtime/caching.md).
 
+`> budget:` accepts `request_limit` and `tool_attempt_limit`. Each field is
+optional, but at least one is required; values are nonnegative integers and
+`0` prohibits new operations of that kind. See
+[Run Budgets](../runtime/run-budgets.md).
+
+`> capability: name:` defines an additive instruction/tool bundle, distinct
+from the override-oriented `> profile:`. Apply it through `> use:`. Allowed
+capability members are `instructions`, `use`, `mcp`, `subagent`, `approval`,
+`hooks`, `requires`, and `defer`. `> defer: true` (or a Python expression
+producing a boolean) opts a capability into native on-demand activation
+instead of eager composition; it defaults to `false`. See
+[Capabilities](../agentic-engineering/capabilities.md).
+
 `> codemode:` accepts `enabled`, `preload_tools`, `default_search_limit`,
 `max_search_limit`, `max_hydrated_tools`, `max_discovery_result_bytes`,
 `max_code_chars`, `max_nested_calls`, `max_concurrent_calls`,
@@ -71,9 +88,10 @@ policy, not a model setting. See
 list; preloading resolves schemas without executing tools. See
 [CodeMode](../agentic-engineering/codemode.md#preload-known-tools).
 
-`> hooks:` fields are `user_prompt_submit`, `pre_tool_use`, `post_tool_use`,
-and `post_tool_use_failure`. Each value is a Python callable or a sequence of
-callables. See [Agent Lifecycle Hooks](../agentic-engineering/hooks.md).
+`> hooks:` fields are `enabled`, `user_prompt_submit`, `pre_tool_use`, `post_tool_use`,
+`post_tool_use_failure`, and `post_tool_result_failure`. Each value is a Python callable or a sequence of
+callables. The expanded form accepts `enabled: true|false` alongside the event
+handlers. See [Agent Lifecycle Hooks](../agentic-engineering/hooks.md).
 
 `> mcp:` fields:
 

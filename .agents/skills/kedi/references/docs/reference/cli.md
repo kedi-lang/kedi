@@ -28,12 +28,13 @@ source-file identity and adjacent artifacts.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--adapter NAME` | `pydantic` | `pydantic`, `langchain`, `claude`, `codex`, `acp`, or `a2a` |
+| `--adapter NAME` | `pydantic` | `pydantic`, `langchain`, `claude`, `codex`, or `acp` |
 | `--adapter-model MODEL` | `openai/gpt-6-luna` | Default model identifier; examples explicitly select `openai:gpt-6-luna` |
 
 The historical option name is `--adapter`, but it accepts both framework
 adapters and harnesses. In Kedi source and the Python API, `adapter` and `agent`
-remain separate type-safe concepts.
+remain separate type-safe concepts. A2A is not an `--adapter` value: remote
+A2A agents are served with `kedi a2a serve` (see [A2A Server](#a2a-server)).
 
 ## Interactive Mode
 
@@ -80,8 +81,8 @@ behavior.
 | `--quiet` | Suppress codegen and GEPA progress |
 | `-p`, `--parse` | Parse source without compiling or executing |
 
-If both `--test` and `--eval` are given, tests run and return first. Avoid the
-ambiguous combination and invoke each validation mode separately.
+`--test` and `--eval` cannot be combined; run each validation mode
+separately.
 
 ## Code Generation Options
 
@@ -137,6 +138,20 @@ are ignored. Missing attributes read as `None`.
 `./package.kedi`. `kedi add` accepts exactly one registry name or credential-free
 GitHub `git+https` URL. Package subcommands reject ordinary runtime options.
 
+## Inspection Commands
+
+`kedi explain SOURCE` inspects the model calls a program would make without
+running it. It accepts the same `--adapter` and `--adapter-model` selection as
+an ordinary run.
+
+`kedi audit` checks installed package receipts for yanked or revoked registry
+commits. It accepts no arguments.
+
+`kedi debug --stdio` starts the optional Kedi Debug Adapter Protocol backend
+for an editor. It accepts only `--stdio`; the selected Python needs
+`kedi-debugger` installed (for a source checkout, install the `debugger/`
+package in that environment). See [Debugger and Inspector](../tooling/debugger.md).
+
 ## A2A Server
 
 `kedi a2a serve SOURCE --entry PROFILE` exposes one exported profile through
@@ -154,6 +169,7 @@ the official A2A protocol server. Install `kedi[a2a]` first.
 | `--api-key-header` | API-key header; default `X-API-Key` |
 | `--allow-unauthenticated` | Explicit loopback-only development mode |
 | `--model` | Server entry model override |
+| `--state-dir PATH` | Persist A2A tasks and sessions across restarts; also `KEDI_A2A_STATE_DIR` |
 | `--max-concurrency` | Concurrent profile executions; default `4` |
 | `--max-pending-tasks` | Global and per-principal pending bound |
 | `--max-sessions` | In-memory principal/context session bound |

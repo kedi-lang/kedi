@@ -26,6 +26,7 @@ cache generation: a request already in flight may finish for its current
 callers, but it cannot repopulate the newly cleared cache.
 
 Response caching is opt-in per `query` or `bind` with `cache=True`. Parse
-caching is always source-hash based. Concurrent identical response misses
+caching is always source-hash based. Each cache keeps its 256 most recently
+used entries. Concurrent identical response misses
 coalesce; failed calls are never stored. A recursive same-thread request for
 the same cache key raises instead of deadlocking.

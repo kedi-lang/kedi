@@ -20,7 +20,7 @@ This document covers debugging the Kedi GEPA (Generative Prompt Optimization wit
 
 ### Multi-Line Template Spans
 
-Optimize spans may contain multiple template lines (for example, a header line and a line with output declarations). Output overrides and optimized prompts must be applied to **every** template line in the span, not only the first.
+Optimize spans may contain multiple template lines (for example, a header line and a line with output declarations). Output overrides are applied to **every** template line in the span. An optimized prompt is prepended to the span once: Kedi stores it as the `optimized_prompt_prefix` of the span's first template line.
 
 ---
 
@@ -86,19 +86,19 @@ Optimize spans may contain multiple template lines (for example, a header line a
 - `optimize_procedure()`: Main entry point for optimization
 - `_save_prompts_immediately()`: Saves optimized prompts to disk
 
-**Critical Code Section** (lines 253-262):
+**Critical code** (`GEPASession.optimize_single_span` in `src/kedi/optimization/gepa_session.py`):
 ```python
-# Extract optimized prompt for this span
-print(f"\n🔍 Extracting optimized prompt...")
-extracted = self.prompt_extractor.extract_prompts(optimized_module, [span])
-optimized_prompt = extracted.get(span.name)
-if optimized_prompt:
-    optimized_prompts[span.name] = optimized_prompt
-    if span.template_lines:
-        # Set optimized prompt on ALL template lines in the span
-        # This is necessary because a span can have multiple template lines
-        for line in span.template_lines:
-            line.optimized_prompt_prefix = optimized_prompt
+extracted = self._prompt_extractor.extract_prompts(optimized_module, [span])
+raw_prompt = extracted.get(span.name)
+if raw_prompt is None:
+    warnings.warn(f"No optimized prompt found for span '{span.name}'", UserWarning)
+    return GEPASpanResult(prompt=None, score=0.0)
+optimized_prompt = normalize_optimized_prompt_prefix(span, raw_prompt)
+
+optimized_prompts[span.name] = optimized_prompt
+if span.template_lines:
+    # The prompt is prepended once, before the span's first template line.
+    span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
 ```
 
 ---
@@ -119,7 +119,7 @@ if optimized_prompt:
 - `_apply_output_override()`: Injects outputs into ALL template lines
 - `_restore_output_override()`: Restores original state after metric evaluation
 
-**Critical Code Section** (lines 102-123):
+**Critical code** (`GEPAMetricWrapper.wrap_metric`):
 ```python
 try:
     # Extract outputs from DSPy prediction and inject them into the span
@@ -157,7 +157,7 @@ finally:
 
 **Key Method**: `compile_template_line()`
 
-**Critical Code Section** (lines 45-67):
+**Critical code** (`compile_template_line`):
 ```python
 def _fn(**kwargs: Any) -> Any:
     # If an override is provided, short-circuit LLM invocation and inject values.
@@ -188,11 +188,17 @@ def _fn(**kwargs: Any) -> Any:
 
 ## Debugging Strategies
 
+Kedi has one built-in switch: with `KEDI_DEBUG_OPTIMIZED=1`, `kedi` reports on
+stderr whether optimized prompts exist for the program, where they were loaded
+from, and each optimize span's instruction before and after injection. The
+snippets below are temporary instrumentation you add while debugging; they
+check the same variable, so one switch turns both on. Remove them afterwards.
+
 ### 1. Enable Debug Logging for Output Override
 
 **Location**: `src/kedi/optimization/services/gepa_metric_wrapper.py`
 
-Add this code after line 107 (in `_apply_output_override`):
+Add this code at the end of `_apply_output_override`:
 
 ```python
 def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
@@ -210,7 +216,7 @@ def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
     
     # DEBUG: Verify the override is set
     import os
-    if os.getenv("KEDI_DEBUG_GEPA"):
+    if os.getenv("KEDI_DEBUG_OPTIMIZED"):
         print(f"    [OUTPUT OVERRIDE] Set on {len(span.template_lines)} line(s): {outputs}")
         for i, line in enumerate(span.template_lines):
             print(f"      Line {i} (id={id(line)}): {line.optimized_output_override}")
@@ -220,7 +226,7 @@ def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
 
 **Usage**:
 ```bash
-export KEDI_DEBUG_GEPA=1
+export KEDI_DEBUG_OPTIMIZED=1
 kedi examples/your_program.kedi --optimize --optimizer gepa
 ```
 
@@ -237,19 +243,19 @@ kedi examples/your_program.kedi --optimize --optimizer gepa
 
 **Location**: `src/kedi/lang/compiler/statement_compiler.py`
 
-Add this code at line 46 (beginning of `_fn`):
+Add this code at the beginning of the `_fn` closure in `compile_template_line`:
 
 ```python
 def _fn(**kwargs: Any) -> Any:
     # DEBUG: Log override check
     import os
-    if os.getenv("KEDI_DEBUG_GEPA"):
+    if os.getenv("KEDI_DEBUG_OPTIMIZED"):
         print(f"    [TEMPLATE EXEC] Line {id(stmt)}, override={stmt.optimized_output_override}")
     
     # If an override is provided, short-circuit LLM invocation and inject values.
     if stmt.optimized_output_override is not None:
         import os
-        if os.getenv("KEDI_DEBUG_GEPA"):
+        if os.getenv("KEDI_DEBUG_OPTIMIZED"):
             print(f"    [TEMPLATE EXEC] Using override: {stmt.optimized_output_override}")
         env = self.rt._current_env.get()
         # ... rest of the code
@@ -336,7 +342,7 @@ def gepa_metric(
     **context: Any,
 ):
     import os
-    debug = os.getenv("KEDI_DEBUG_GEPA")
+    debug = os.getenv("KEDI_DEBUG_OPTIMIZED")
     
     try:
         # Extract inputs and outputs
@@ -455,7 +461,7 @@ Template lines: 2
 Add progress tracking after GEPA compilation:
 
 ```python
-# After line 247 (after optimizer.compile)
+# In GEPASession.optimize_single_span, after optimizer.compile
 optimized_module = optimizer.compile(
     student=dspy_module,
     trainset=train_examples,
@@ -464,7 +470,7 @@ optimized_module = optimizer.compile(
 
 # DEBUG: Track GEPA progress
 import os
-if os.getenv("KEDI_DEBUG_GEPA"):
+if os.getenv("KEDI_DEBUG_OPTIMIZED"):
     print(f"\n[GEPA COMPLETE]")
     print(f"  Module type: {type(optimized_module)}")
     print(f"  Has predictor: {hasattr(optimized_module, 'predictor')}")
@@ -487,7 +493,7 @@ if os.getenv("KEDI_DEBUG_GEPA"):
 - Final training score matches initial score
 
 **Diagnosis**:
-1. Enable debug logging: `export KEDI_DEBUG_GEPA=1`
+1. Enable debug logging: `export KEDI_DEBUG_OPTIMIZED=1`
 2. Check if output override is applied to ALL template lines
 3. Verify that template line execution uses the override
 
@@ -509,7 +515,7 @@ if not span.template_lines:
     print(f"Span object: {span}")
 ```
 
-**Solution**: Verify that the Kedi parser correctly populates `template_lines` for optimize spans. Check `program_parser.py` lines 409-420.
+**Solution**: Verify that the Kedi parser correctly populates `template_lines` for optimize spans. Check where `OptimizeSpan` objects are built in `src/kedi/lang/parser/validation_conversion.py`.
 
 ---
 
@@ -549,7 +555,7 @@ for field_name, _ in output_fields:
     print(f"  Field '{field_name}': has={has_field}, value={value}")
 ```
 
-**Solution**: Ensure DSPy module signature matches span output fields. Check `dspy_module_builder.py` lines 70-81.
+**Solution**: Ensure DSPy module signature matches span output fields. Check `DSPyModuleBuilder.build_module` in `dspy_module_builder.py`.
 
 ---
 
@@ -808,7 +814,7 @@ When debugging GEPA optimization issues, check these in order:
 
 For issues or questions about GEPA optimization:
 1. Check this documentation first
-2. Enable debug logging (`KEDI_DEBUG_GEPA=1`)
+2. Enable debug logging (`KEDI_DEBUG_OPTIMIZED=1`)
 3. Review test cases in `tests/test_gepa_kedi_mocks_*.py`
 4. Examine DSPy GEPA logs for iteration details
 
