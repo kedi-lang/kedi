@@ -18,6 +18,8 @@ from kedi.api.cache import (
     _object_identity,
     _profile_identity,
     _stable_repr,
+    cache_info,
+    clear_cache,
 )
 
 
@@ -128,3 +130,25 @@ def test_cache_profile_tracks_capability_instruction_and_history_callbacks() -> 
             ),
         )
     )
+
+
+def test_untrackable_address_reprs_are_never_reused_and_caches_stay_bounded() -> None:
+    # #214 4.11: a value that names objects by address but cannot be weak-referenced gets a
+    # fresh key each time; both caches keep at most _CACHE_LIMIT entries.
+    class Opaque:
+        pass
+
+    values = [Opaque()]
+    assert _stable_repr(values) != _stable_repr(values)
+
+    clear_cache()
+    try:
+        for index in range(cache_module._CACHE_LIMIT + 5):
+            cache_module._parse_cached(kind="query", source=f"= `{index}`\n")
+        assert cache_info().parse_entries == cache_module._CACHE_LIMIT
+        newest = cache_module._parse_cached(
+            kind="query", source=f"= `{cache_module._CACHE_LIMIT + 4}`\n"
+        )
+        assert newest[0] is next(reversed(cache_module._PARSE_CACHE.values()))
+    finally:
+        clear_cache()

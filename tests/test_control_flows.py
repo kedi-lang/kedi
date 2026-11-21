@@ -1444,10 +1444,57 @@ def test_loop_iteration_limit_must_be_a_positive_integer() -> None:
 
 
 def test_scoped_name_detection_looks_into_nested_blocks() -> None:
-    from kedi.lang.compiler.statement_compiler import _defines_scoped_names
+    from kedi.lang.compiler.control_flow import defines_scoped_names
 
     program = parse_program(
         "@p() -> int:\n    > if: `True`:\n        @q() -> str:\n            = `'x'`\n"
         "    = `1`\n= `p()`\n"
     )
-    assert _defines_scoped_names(program.procedures[0].body)
+    assert defines_scoped_names(program.procedures[0].body)
+
+
+def test_top_level_type_fields_cannot_use_top_level_variables() -> None:
+    # #214 1.16: top-level types are hoisted, so a field type naming a top-level variable
+    # gets an explanation; inside a procedure local values work.
+    hoisted = "[T0: type] = `int`\n~P(a: `T0`)\n[p: P] = `P(a=1)`\n= `p.a`\n"
+    with pytest.raises(TypeError, match="registered before the program runs"):
+        compile_program(parse_program(hoisted)).run_main()
+    local = (
+        "@make() -> int:\n    [T0: type] = `int`\n    ~P(a: `T0`)\n"
+        "    [p: P] = `P(a=1)`\n    = `p.a`\n= `make()`\n"
+    )
+    assert compile_program(parse_program(local)).run_main() == 1
+    unknown = "~Q(a: `Missing`)\n= `1`\n"
+    with pytest.raises(TypeError, match="registered before the program runs"):
+        compile_program(parse_program(unknown)).run_main()
+
+
+def test_top_level_parallel_map_iterations_use_their_own_procedures() -> None:
+    # #214 1.11/1.15: the top-level map has the same runtime-wide procedure table, so
+    # iterations that define a helper run one at a time.
+    class ItemAdapter(MockAdapter):
+        def produce_sync(self, *, template: str, output_schema=None, **kwargs: Any):
+            return AttrDict({"seen": int(template.split("candidate ", 1)[1].split(" ", 1)[0])})
+
+    engine = ThreadEngine(max_workers=4)
+    runtime = compile_program(
+        parse_program(
+            """
+[results: list] = `[]`
+> loop [item]: `list(range(8))`:
+  >> candidate <item> as [seen: int]
+> map:
+  @tag() -> int:
+    = `item * 100`
+  `__import__("time").sleep(0.05)`
+  `results.append((seen, tag()))`
+= `sorted(results)`
+""".lstrip()
+        ),
+        adapter=ItemAdapter(),
+        engine=engine,
+    )
+    try:
+        assert runtime.run_main() == [(item, item * 100) for item in range(8)]
+    finally:
+        engine.shutdown()

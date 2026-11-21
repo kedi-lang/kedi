@@ -23,15 +23,20 @@ from pydantic import BaseModel
 from .._version import __version__
 from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_profile import AgentProfile
+from ..agent_profile.capabilities import AppliedCapability
 from ..agent_profile.codemode import CodeModeSettings
 from ..agent_profile.compaction import CompactionSettings
 from ..agent_profile.connection import A2AAuthConfig, A2AConnection
+from ..agent_profile.history import HistoryProcessingSettings
 from ..agent_profile.hooks import HookSettings
+from ..agent_profile.instructions import CapabilityInstruction
 from ..agent_profile.mcp import McpServerSpec
 from ..agent_profile.skills import SkillsSettings
 from ..artifacts import ArtifactPolicy
 from ..decisions import DecisionInfo, DecisionRecord
+from ..lang.ast import Span
 from ..media import Audio, Document, Image, Media, Video
+from ..run_budget import RunBudget
 
 SNAPSHOT_FORMAT = "kedi.interactive-session"
 SNAPSHOT_FORMAT_VERSION = 1
@@ -449,7 +454,47 @@ def encode_profile(
         "codemode": _dataclass_values(profile.codemode),
         "output_type": output_type,
         "artifacts": _encode_artifact_policy(profile.artifacts),
+        "run_budget": _dataclass_values(profile.run_budget),
+        "requirements": list(profile.requirements),
+        "requirement_origins": {
+            requirement: [_dataclass_values(span) for span in spans]
+            for requirement, spans in profile.requirement_origins.items()
+        },
+        "capability_instructions": [
+            {"identity": part.identity, "content": part.content}
+            for part in profile.capability_instructions
+        ],
+        "capabilities": [
+            {
+                "identity": capability.identity,
+                "name": capability.name,
+                "description": capability.description,
+                "profile": encode_profile(
+                    capability.profile,
+                    encoder=encoder,
+                    model_names=model_names,
+                    path=f"{path}.capabilities[{index}].profile",
+                ),
+                "deferred": capability.deferred,
+                "instructions_enabled": capability.instructions_enabled,
+                "instructions_restored": capability.instructions_restored,
+            }
+            for index, capability in enumerate(profile.capabilities)
+        ],
+        "history_processing": _encode_history_processing(
+            profile.history_processing, path=path + ".history_processing"
+        ),
     }
+
+
+def _encode_history_processing(
+    value: HistoryProcessingSettings | None, *, path: str
+) -> dict[str, bool] | None:
+    if value is None:
+        return None
+    if value.processor is not None or value.condition is not None:
+        raise UnsupportedSessionValue(path, value, "history processor callbacks are process-local")
+    return {"inherit_processor": value.inherit_processor}
 
 
 def decode_profile(
@@ -524,6 +569,32 @@ def decode_profile(
         codemode=_decode_dataclass(CodeModeSettings, encoded.get("codemode")),
         output_type=output_type,
         artifacts=_decode_artifact_policy(encoded.get("artifacts")),
+        run_budget=_decode_dataclass(RunBudget, encoded.get("run_budget")),
+        requirements=tuple(encoded.get("requirements", ())),
+        requirement_origins={
+            requirement: tuple(Span(**span) for span in spans)
+            for requirement, spans in encoded.get("requirement_origins", {}).items()
+        },
+        capability_instructions=tuple(
+            CapabilityInstruction(**part) for part in encoded.get("capability_instructions", ())
+        ),
+        capabilities=tuple(
+            AppliedCapability(
+                **{key: value for key, value in capability.items() if key != "profile"},
+                profile=decode_profile(
+                    capability["profile"],
+                    decoder=decoder,
+                    kedi_models=kedi_models,
+                    trusted=trusted,
+                ),
+            )
+            for capability in encoded.get("capabilities", ())
+        ),
+        history_processing=(
+            None
+            if encoded.get("history_processing") is None
+            else HistoryProcessingSettings(**encoded["history_processing"])
+        ),
     )
 
 
@@ -592,16 +663,15 @@ def _decode_a2a_connection(value: Any) -> A2AConnection | None:
         raise SessionLoadError("Invalid A2A connection in profile snapshot") from exc
 
 
+# Every handler list HookSettings carries; deriving it keeps new events from being dropped.
+_HOOK_EVENTS = tuple(field.name for field in fields(HookSettings) if field.name != "enabled")
+
+
 def _encode_hooks(value: HookSettings | None, *, path: str) -> dict[str, Any] | None:
     if value is None:
         return None
     encoded: dict[str, Any] = {"enabled": value.enabled}
-    for event in (
-        "user_prompt_submit",
-        "pre_tool_use",
-        "post_tool_use",
-        "post_tool_use_failure",
-    ):
+    for event in _HOOK_EVENTS:
         handlers = getattr(value, event)
         encoded[event] = (
             None
@@ -623,12 +693,7 @@ def _decode_hooks(value: Any, *, field: str, trusted: bool) -> HookSettings | No
     if enabled is not None and type(enabled) is not bool:
         raise SessionLoadError("profile.hooks.enabled must be a boolean or null")
     decoded: dict[str, tuple[Any, ...] | None] = {}
-    for event in (
-        "user_prompt_submit",
-        "pre_tool_use",
-        "post_tool_use",
-        "post_tool_use_failure",
-    ):
+    for event in _HOOK_EVENTS:
         handlers = value.get(event)
         if handlers is None:
             decoded[event] = None
@@ -818,9 +883,7 @@ def _decode_artifact_policy(value: Mapping[str, Any] | None) -> ArtifactPolicy |
     return ArtifactPolicy(**values)
 
 
-def _dataclass_values(
-    value: CompactionSettings | CodeModeSettings | bool | None,
-) -> dict[str, Any] | None:
+def _dataclass_values(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, bool):

@@ -462,7 +462,9 @@ def test_query_response_cache_splits_by_args_and_env(adapter: ApiAdapter) -> Non
     assert len(adapter.templates) == 3
 
 
-def test_response_cache_key_normalizes_memory_addresses() -> None:
+def test_response_cache_key_separates_objects_named_by_address() -> None:
+    # #214 4.11: a repr that names an object by address says nothing about its state, so
+    # distinct objects get distinct keys; the same object keeps its key.
     def sample(value: AddressReprValue) -> None:
         return None
 
@@ -486,7 +488,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         config_env={},
         env={},
         **identity,
-    ) == api_cache_module._response_cache_key(
+    ) != api_cache_module._response_cache_key(
         kind="query",
         inner=sample,
         source_id="sample",
@@ -496,6 +498,20 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         config_env={},
         env={},
         **identity,
+    )
+    key = {
+        "kind": "query",
+        "inner": sample,
+        "source_id": "sample",
+        "source_hash": "hash",
+        "args": (),
+        "kwargs": kwargs_a,
+        "config_env": {},
+        "env": {},
+        **identity,
+    }
+    assert api_cache_module._response_cache_key(**key) == api_cache_module._response_cache_key(
+        **key
     )
 
 
@@ -516,7 +532,7 @@ def test_query_response_cache_splits_by_model(adapter: ApiAdapter) -> None:
     assert adapter.models == ["configured:model", "other:model"]
 
 
-def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -> None:
+def test_query_response_cache_hits_for_the_same_object_only(adapter: ApiAdapter) -> None:
     @query(cache=True)
     def summarize(topic: AddressReprValue) -> str:
         """kedi
@@ -524,9 +540,12 @@ def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -
         = <summary>
         """
 
-    assert summarize(AddressReprValue("Kedi")) == "short summary"
-    assert summarize(AddressReprValue("Kedi")) == "short summary"
+    topic = AddressReprValue("Kedi")
+    assert summarize(topic) == "short summary"
+    assert summarize(topic) == "short summary"
     assert len(adapter.templates) == 1
+    assert summarize(AddressReprValue("Kedi")) == "short summary"
+    assert len(adapter.templates) == 2
 
 
 def test_query_supports_dynamic_runtime_output_type(adapter: ApiAdapter) -> None:

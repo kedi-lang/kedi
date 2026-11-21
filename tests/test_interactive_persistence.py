@@ -1022,3 +1022,88 @@ def test_bundled_module_detection_rejects_unresolvable_and_user_modules(tmp_path
     assert state._bundled_module_path(SimpleNamespace(module="filesystem"), source) is not None
     assert state._bundled_module_path(SimpleNamespace(module="helper"), source) is None
     assert state._bundled_module_path(SimpleNamespace(module="missing_module"), source) is None
+
+
+def _profile_round_trip(profile: AgentProfile, *, trusted: bool = True) -> AgentProfile:
+    encoded = persistence.encode_profile(
+        profile,
+        encoder=SessionValueEncoder(kedi_models={}),
+        model_names={},
+        path="profile",
+    )
+    # Snapshots are JSON documents.
+    encoded = json.loads(json.dumps(encoded))
+    return persistence.decode_profile(
+        encoded,
+        decoder=SessionValueDecoder(kedi_models={}),
+        kedi_models={},
+        trusted=trusted,
+    )
+
+
+def test_portable_profile_keeps_budgets_requirements_and_capabilities() -> None:
+    # #214 5.2: these fields were dropped by portable snapshots.
+    from kedi.agent_profile.capabilities import AppliedCapability
+    from kedi.agent_profile.history import HistoryProcessingSettings
+    from kedi.agent_profile.instructions import CapabilityInstruction
+    from kedi.lang.ast import Span
+    from kedi.run_budget import RunBudget
+
+    span = Span(1, 9, 2, 3, 2, 11, source_path="main.kedi")
+    profile = AgentProfile(
+        run_budget=RunBudget(request_limit=3, tool_attempt_limit=None),
+        requirements=("mcp",),
+        requirement_origins={"mcp": (span,)},
+        capability_instructions=(CapabilityInstruction(identity="cap:a", content="Be brief."),),
+        capabilities=(
+            AppliedCapability(
+                identity="cap:a",
+                name="brief",
+                description="Short answers",
+                profile=AgentProfile(system="inner", run_budget=RunBudget(request_limit=1)),
+                deferred=True,
+            ),
+        ),
+        history_processing=HistoryProcessingSettings(inherit_processor=True),
+        hooks=HookSettings(post_tool_result_failure=(operator.truth,)),
+    )
+    restored = _profile_round_trip(profile)
+    assert restored.run_budget == profile.run_budget
+    assert restored.requirements == ("mcp",)
+    assert restored.requirement_origins == {"mcp": (span,)}
+    assert restored.capability_instructions == profile.capability_instructions
+    (capability,) = restored.capabilities
+    assert (capability.identity, capability.name, capability.deferred) == ("cap:a", "brief", True)
+    assert capability.profile.system == "inner"
+    assert capability.profile.run_budget == RunBudget(request_limit=1)
+    assert restored.history_processing == profile.history_processing
+    assert restored.hooks is not None
+    assert restored.hooks.post_tool_result_failure == (operator.truth,)
+
+
+def test_portable_profile_rejects_history_processor_callbacks() -> None:
+    from kedi.agent_profile.history import HistoryProcessingSettings
+
+    profile = AgentProfile(history_processing=HistoryProcessingSettings(processor=operator.truth))
+    with pytest.raises(UnsupportedSessionValue, match="history_processing"):
+        _profile_round_trip(profile)
+
+
+def test_every_profile_field_is_encoded_or_explicitly_rejected() -> None:
+    # #214 5.2: a new AgentProfile field must be persisted or rejected, never dropped.
+    import dataclasses
+
+    encoded = persistence.encode_profile(
+        AgentProfile(),
+        encoder=SessionValueEncoder(kedi_models={}),
+        model_names={},
+        path="profile",
+    )
+    renamed = {"_hook_enforcement": "hook_enforcement"}
+    rejected = {"tool_bindings", "subagent_bindings"}
+    missing = [
+        field.name
+        for field in dataclasses.fields(AgentProfile)
+        if field.name not in rejected and renamed.get(field.name, field.name) not in encoded
+    ]
+    assert missing == []

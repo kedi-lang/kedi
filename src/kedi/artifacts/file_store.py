@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 
 from kedi.artifacts.errors import (
     ArtifactAccessError,
+    ArtifactError,
     ArtifactInputError,
     ArtifactSerializationError,
 )
@@ -318,6 +319,14 @@ class FileArtifactStore:
                 payload_path = self._payload_path(session_id, ref.ref_id)
                 if not payload_path.is_file():
                     continue
+                existing = self._records.get(ref.ref_id)
+                if existing is not None and existing.session_id != session_id:
+                    # Records are keyed by reference id; restoring a copied session must not
+                    # replace another session's artifact.
+                    raise ArtifactError(
+                        f"artifact reference {ref.ref_id!r} of session {session_id!r} is "
+                        f"already held by session {existing.session_id!r}"
+                    )
                 remaining = (ref.expires_at - wall_now).total_seconds()
                 status = ArtifactStatus(metadata.get("status", ArtifactStatus.ACTIVE.value))
                 if remaining <= 0 and status is ArtifactStatus.ACTIVE:

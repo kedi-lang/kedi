@@ -84,6 +84,7 @@ from .control_flow import (
     assert_conditional_loop_capacity,
     branch_trace,
     child_scope,
+    defines_scoped_names,
     evaluate_condition,
     evaluate_iterable,
     group_trace,
@@ -762,9 +763,7 @@ class StatementExecutor:
                     # Procedures and types live in runtime-wide tables, so iterations that
                     # define them would replace each other's definitions: run those one at
                     # a time, each with its own scope bookkeeping.
-                    one_at_a_time = (
-                        Lock() if _defines_scoped_names(stmt.map_body) else nullcontext()
-                    )
+                    one_at_a_time = Lock() if defines_scoped_names(stmt.map_body) else nullcontext()
 
                     def run_map(index: int, frame: Any) -> None:
                         _, map_active = records[index]
@@ -979,15 +978,3 @@ def _restore_procedures(rt: KediRuntime, saved: dict[str, Any], new: set[str]) -
     for name in new:
         procs.pop(name, None)
     procs.update(saved)
-
-
-def _defines_scoped_names(statements: list[Stmt] | None) -> bool:
-    """Whether a block, including its nested blocks, defines a procedure or a type."""
-    for statement in statements or ():
-        if isinstance(statement, (ProcDefStmt, TypeDefStmt)):
-            return True
-        for attribute in ("body", "else_body", "map_body"):
-            nested = getattr(statement, attribute, None)
-            if isinstance(nested, list) and _defines_scoped_names(nested):
-                return True
-    return False

@@ -523,3 +523,23 @@ def test_the_python_gate_looks_inside_nested_procedures() -> None:
         "@outer() -> str:\n    @helper() -> str:\n        = `'x'.upper()`\n    = <helper()>\n"
     )
     assert "forms cannot contain Python" in (_python_use(program.procedures[0].body) or "")
+
+
+def test_a_form_must_bind_names_the_loop_map_body_reads() -> None:
+    # #214 5.5: a loop body's names stay visible to its map body, which reads them after
+    # the group runs. A group nested one block deeper binds names the map cannot see.
+    loop_body = (
+        "@f(items: list) -> list:\n  [out: list] = `[]`\n  > loop [item]: `items`:\n"
+        "    > evolve: draft:\n      [plan] << Plan <item>.\n  > map:\n    `out.append(plan)`\n"
+        "  = `out`\n= `f([1])`\n"
+    )
+    dropped = {"f.draft": Form(">> Think about <item>: [notes]")}
+    with pytest.raises(FormError, match="must bind 'plan'"):
+        compile_program(parse_program(loop_body), forms=dropped)
+
+    nested = loop_body.replace(
+        "    > evolve: draft:\n      [plan] << Plan <item>.\n",
+        "    > if: `True`:\n      > evolve: draft:\n        [plan] << Plan <item>.\n",
+    )
+    assert nested != loop_body
+    compile_program(parse_program(nested), forms=dropped)

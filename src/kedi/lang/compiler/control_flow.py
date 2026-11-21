@@ -16,8 +16,10 @@ from ..ast import (
     GroupStmt,
     IfStmt,
     LoopStmt,
+    ProcDefStmt,
     Stmt,
     TemplateBlock,
+    TypeDefStmt,
 )
 from .environment import ScopeFrame, assert_not_cli_args_identifier
 from .evaluation import evaluate_python_inline, render_prompt_parts
@@ -297,3 +299,15 @@ def run_map_continuations(
                     max(0.0, perf_counter() - wait_started_at),
                     unit="s",
                 )
+
+
+def defines_scoped_names(statements: list[Stmt] | None) -> bool:
+    """Whether a block, including its nested blocks, defines a procedure or a type."""
+    for statement in statements or ():
+        if isinstance(statement, (ProcDefStmt, TypeDefStmt)):
+            return True
+        for attribute in ("body", "else_body", "map_body"):
+            nested = getattr(statement, attribute, None)
+            if isinstance(nested, list) and defines_scoped_names(nested):
+                return True
+    return False

@@ -343,7 +343,18 @@ class ProgramCompiler:
 
         type_env = self.rt._type_env_stack[0]
         for typedef in prog.type_defs:
-            register_type(self.rt, typedef, type_env)
+            try:
+                register_type(self.rt, typedef, type_env)
+            except TypeError as exc:
+                if isinstance(exc.__cause__, NameError):
+                    # Top-level types are hoisted (usable before their definition), so they
+                    # are built before any top-level variable has a value.
+                    raise TypeError(
+                        f"{exc}. Top-level types are registered before the program runs, so "
+                        "their field types cannot use top-level variables; declare the type "
+                        "inside a procedure to use local values."
+                    ) from exc
+                raise
 
         for proc in prog.procedures:
             if proc.auto_spec or proc.ai_prompt:

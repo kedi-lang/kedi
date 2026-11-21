@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from kedi.agent_profile import AgentProfile, block_agent_profile_scope
@@ -66,6 +68,7 @@ from kedi.lang.compiler.control_flow import (
     assert_conditional_loop_capacity,
     branch_trace,
     child_scope,
+    defines_scoped_names,
     evaluate_condition,
     evaluate_iterable,
     group_trace,
@@ -160,9 +163,17 @@ def _execute_top_level_sequence(
                     frames = [record[0] for record in records]
                     results: list[Any] = [_NO_TOP_LEVEL_RESULT] * len(frames)
 
+                    # Procedures and types live in runtime-wide tables; iterations that
+                    # define them run one at a time so each uses its own definitions.
+                    one_at_a_time = Lock() if defines_scoped_names(item.map_body) else nullcontext()
+
                     def run_map(index: int, frame: Any) -> None:
                         _, map_state = records[index]
-                        with active_scope(self.rt, frame), run_budget_scope(RunBudget()):
+                        with (
+                            one_at_a_time,
+                            active_scope(self.rt, frame),
+                            run_budget_scope(RunBudget()),
+                        ):
                             with block_agent_profile_scope(map_state.active_profile):
                                 results[index] = self._execute_top_level_sequence(
                                     prepared,
