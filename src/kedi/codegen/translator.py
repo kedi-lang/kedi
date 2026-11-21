@@ -115,11 +115,16 @@ def _split_top_level_commas(text: str) -> list[str]:
     parts: list[str] = []
     depth = 0
     quote = ""  # the open string delimiter, or "" when not inside a string literal
+    escaped = False
     current: list[str] = []
     for ch in text:
         if quote:
             current.append(ch)
-            if ch == quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
                 quote = ""
             continue
         if ch in "'\"":
@@ -236,19 +241,41 @@ def python_impl_to_kedi_impl(python_impl: str, kedi_sig: str) -> str:
     except SyntaxError:
         tree = None
     if tree is not None:
-        top_defs = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+        top_defs = [
+            node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
         if top_defs:
-            referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-            unused = sorted(top_defs - referenced)
+            # A definition counts as used only when its name is referenced
+            # outside its own body: a self-recursive wrapper references
+            # itself, but nothing ever calls it, so it would be defined and
+            # never run. A helper referenced by another definition still
+            # counts, because that reference sits outside its own body.
+            unused = sorted(
+                node.name
+                for node in top_defs
+                if node.name
+                not in {
+                    n.id
+                    for other in tree.body
+                    if other is not node
+                    for n in ast.walk(other)
+                    if isinstance(n, ast.Name)
+                }
+            )
             if unused:
                 raise ValueError(
                     "Generated implementation must be the function body only, not a 'def' wrapper "
                     f"(defined but never called: {unused}). Provide just the body."
                 )
+
+    # A bare ``` line would close the fence early and break the generated
+    # Kedi. Reject it so the generator retries instead of caching a broken
+    # procedure (a ``` inside a string literal on a code line is fine).
+    if any(line.strip() == "```" for line in python_impl.split("\n")):
+        raise ValueError(
+            "Generated implementation must not contain a bare ``` line "
+            "(it would close the Python block early)."
+        )
 
     # Clean up the implementation and normalize indentation
     impl_lines = python_impl.split("\n")
@@ -269,11 +296,19 @@ def python_impl_to_kedi_impl(python_impl: str, kedi_sig: str) -> str:
     lines = [f"{kedi_sig.rstrip(':')}:"]
     lines.append("  = ```")
 
+    # A trailing newline leaves one empty artifact element in split("\n");
+    # drop it so it doesn't add a blank line before the closing fence.
+    if python_impl.endswith("\n"):
+        impl_lines = impl_lines[:-1]
+
     for line in impl_lines:
         if line.strip():
             # Remove common leading indent, add Kedi indent (2 spaces)
             dedented = line[min_indent:] if len(line) > min_indent else line.lstrip()
             lines.append(f"  {dedented}")
+        else:
+            # Blank lines are content inside multi-line strings; keep them.
+            lines.append("")
 
     lines.append("  ```")
 

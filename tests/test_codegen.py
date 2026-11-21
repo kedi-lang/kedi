@@ -776,3 +776,60 @@ def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(
             2,
         ),
     ]
+
+
+def test_reconstruct_header_keeps_parameter_defaults() -> None:
+    # 1.12a: _reconstruct_header dropped parameter defaults.
+    from kedi.codegen import runner as runner_module
+    from kedi.lang import parse_program
+
+    prog = parse_program('@f(x: int = `3`, name: str = `"a"`) -> int:\n  = `x`\n')
+    assert runner_module._reconstruct_header(prog.procedures[0]) == (
+        '@f(x: int = `3`, name: str = `"a"`) -> int:'
+    )
+
+
+def test_python_impl_keeps_blank_lines_in_multiline_strings() -> None:
+    # 1.12b: blank lines inside multi-line strings were deleted, changing
+    # the string value.
+    from kedi.lang import compile_program, parse_program
+
+    out = python_impl_to_kedi_impl('s = """a\n\nb"""\nreturn s\n', "@f() -> str:")
+    # The blank line survives in the generated block (the 2-space Kedi
+    # indent on the continuation line is stripped back by the parser).
+    assert "\n\n" in out
+    rt = compile_program(parse_program(out))
+    assert rt._invoke_procedure(rt._get_proc("f"), []) == "a\n\nb"
+    # Without a trailing newline there is no artifact blank line either:
+    # the block ends right after the last code line.
+    assert python_impl_to_kedi_impl('s = """a\n\nb"""\nreturn s', "@f() -> str:") == (
+        '@f() -> str:\n  = ```\n  s = """a\n\n  b"""\n  return s\n  ```'
+    )
+
+
+def test_python_impl_rejects_self_recursive_wrapper() -> None:
+    # 1.12c: a self-recursive `def` wrapper passed the guard (its name is
+    # referenced by the recursion) and was embedded but never called, so the
+    # procedure silently returned None.
+    with pytest.raises(ValueError, match="function body only"):
+        python_impl_to_kedi_impl(
+            "def f(x):\n    return f(x - 1) if x > 0 else 0\n", "@f(x: int) -> int:"
+        )
+
+
+def test_python_impl_rejects_bare_fence_line() -> None:
+    # 1.12d: a bare ``` line inside the impl closed the fence early and
+    # broke the generated Kedi.
+    with pytest.raises(ValueError, match="```"):
+        python_impl_to_kedi_impl('print("a")\n```\nprint("b")\nreturn "x"\n', "@f() -> str:")
+
+
+def test_split_top_level_commas_handles_escaped_quotes() -> None:
+    # 1.12e: _split_top_level_commas split inside a string at an escaped
+    # quote instead of treating \" as an escaped character.
+    from kedi.codegen.translator import _split_top_level_commas
+
+    assert _split_top_level_commas('a: str = "x\\",y", b: int') == [
+        'a: str = "x\\",y"',
+        " b: int",
+    ]

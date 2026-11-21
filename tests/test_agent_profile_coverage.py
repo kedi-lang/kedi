@@ -165,7 +165,7 @@ def test_nested_procedure_registration_branches() -> None:
     rt._procedures = {"inner": lambda: "stale"}
     executor = StatementExecutor(rt)
     saved_procs: dict[str, Callable[[], object]] = {}
-    new_proc_names: list[str] = []
+    new_proc_names: set[str] = set()
     parent = ProcedureDef(name="outer", params=[], body=[])
 
     inner = ProcedureDef(name="inner", params=[], body=[])

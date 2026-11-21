@@ -969,3 +969,42 @@ def test_scope_mappings_treat_non_string_keys_as_absent() -> None:
     with pytest.raises(KeyError):
         env.pop(1)
     assert env.pop("name") == "value"
+
+
+def test_render_expression_evaluates_inline_python_once() -> None:
+    # 1.9: with an output capture, render_expression runs two passes
+    # (prepare + stringify) and PythonExprSegment was evaluated in both,
+    # while CallSegment was memoized in call_cache.
+    from kedi.lang.compiler.environment import ScopeFrame
+
+    rt = KediRuntime()
+    calls: list[str] = []
+
+    def spy() -> str:
+        calls.append("call")
+        return "spy-value"
+
+    proc = ProcedureDef(name="spy", params=[], body=[])
+    ProcedureCompiler(rt)._make_procedure_impl(proc, ScopeFrame())
+    rt._procedures["spy"] = lambda **kw: spy()
+
+    env = ScopeFrame()
+    token = rt._current_env.set(env)
+    try:
+        py_hits: list[str] = []
+        rt.set_initial_globals({"py_hits": py_hits})
+        segments = [
+            TextSegment(text="a="),
+            PythonExprSegment(code="py_hits.append('py') or 'PY'"),
+            TextSegment(text=" b="),
+            CallSegment(name="spy", args=[]),
+            TextSegment(text=" c="),
+            OutputSegment(name="ans"),
+        ]
+        call_cache: dict[int, Any] = {}
+        prepare_segments(rt, segments, {}, context="return", call_cache=call_cache)
+        _stringify_segments(rt, segments, {}, context="return", call_cache=call_cache)
+        assert py_hits == ["py"]
+        assert calls == ["call"]
+    finally:
+        rt._current_env.reset(token)

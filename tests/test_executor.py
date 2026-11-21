@@ -253,3 +253,35 @@ def test_default_executor_setter_and_variable_sync_updates_runtime_env() -> None
     target_without_runtime_env = {"x": 1}
     executor._sync_existing_variables(rt, target_without_runtime_env, {"x": 2})
     assert target_without_runtime_env == {"x": 2}
+
+
+def test_evaluate_inline_runtime_syntax_error_runs_code_once() -> None:
+    # 1.7: compile() and eval() shared one `except SyntaxError`, so an
+    # expression raising SyntaxError at eval time was executed a second time
+    # as a block, repeating its side effects.
+    import pytest
+
+    rt = KediRuntime()
+    executor = DefaultExecutor()
+    log: list[str] = []
+    rt.set_initial_globals({"log": log})
+    code = "(log.append('run'), __import__('ast').parse('x = '))[0]"
+    with pytest.raises(SyntaxError):
+        executor.evaluate_inline(rt, code, {})
+    assert log == ["run"]
+
+
+def test_runtime_syntax_error_in_program_runs_code_once() -> None:
+    # 1.7: at the program level the eval-time SyntaxError surfaces as a
+    # KediExecutionError, and the code still runs exactly once.
+    import pytest
+
+    from kedi.errors import KediExecutionError
+
+    src = "@f():\n  = `(log.append('run'), __import__('ast').parse('x = '))[0]`\n= `f()`\n"
+    rt = compile_program(parse_program(src))
+    log: list[str] = []
+    rt.set_initial_globals({"log": log})
+    with pytest.raises(KediExecutionError):
+        rt.run_main()
+    assert log == ["run"]

@@ -53,6 +53,11 @@ UNSUPPORTED_KEDI_TYPE_NAMES = frozenset(
 # TypeExpr resolution
 # ---------------------------------------------------------------------
 
+# Private "unresolvable" sentinel for the structured resolver. ``None`` is
+# a legitimate resolved value (e.g. an Annotated metadata value of `None`),
+# so it must not double as the failure signal.
+_UNRESOLVED: Any = object()
+
 
 def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
     """Resolve a bare type name against the type environment.
@@ -82,24 +87,25 @@ def _resolve_expr(
         if expr.name == "None":
             return type(None)
         if expr.name in UNSUPPORTED_KEDI_TYPE_NAMES:
-            return None
-        return _lookup_name(rt, expr.name, type_env)
+            return _UNRESOLVED
+        resolved = _lookup_name(rt, expr.name, type_env)
+        return _UNRESOLVED if resolved is None else resolved
 
     if isinstance(expr, TypeApply):
         if expr.name in UNSUPPORTED_KEDI_TYPE_NAMES:
-            return None
+            return _UNRESOLVED
         base = _lookup_name(rt, expr.name, type_env)
         if base is None:
-            return None
+            return _UNRESOLVED
         args = tuple(
             _resolve_expr(rt, a, type_env, metadata=base is Annotated and index > 0)
             for index, a in enumerate(expr.args)
         )
-        if any(a is None for a in args):
-            return None
+        if any(a is _UNRESOLVED for a in args):
+            return _UNRESOLVED
         if base is Annotated:
             if not args:
-                return None
+                return _UNRESOLVED
             if len(args) == 1:
                 return args[0]
         try:
@@ -107,17 +113,17 @@ def _resolve_expr(
                 return base[args[0]]
             return base[args]
         except Exception:
-            return None
+            return _UNRESOLVED
 
     if isinstance(expr, TypeUnion):
         left = _resolve_expr(rt, expr.left, type_env) if expr.left is not None else None
         right = _resolve_expr(rt, expr.right, type_env) if expr.right is not None else None
-        if left is None or right is None:
-            return None
+        if left is None or right is None or left is _UNRESOLVED or right is _UNRESOLVED:
+            return _UNRESOLVED
         try:
             return left | right
         except Exception:
-            return None
+            return _UNRESOLVED
 
     if isinstance(expr, TypePython):
         # Explicit `\`code\`` escape hatch: the user opted into running Python here. A failing
@@ -136,7 +142,7 @@ def _resolve_expr(
     if isinstance(expr, TypeLiteral):
         return expr.value
 
-    return None
+    return _UNRESOLVED
 
 
 def _build_type_adapter(resolved: Any) -> TypeAdapter:
@@ -206,7 +212,8 @@ class KediType:
     def resolve(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
         if self._expr is not None:
             type_env = build_type_env(rt, env)
-            return _resolve_expr(rt, self._expr, type_env)
+            resolved = _resolve_expr(rt, self._expr, type_env)
+            return None if resolved is _UNRESOLVED else resolved
         if self._legacy_str:
             return self._legacy_resolve(rt, env)
         return None
