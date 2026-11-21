@@ -851,3 +851,23 @@ def test_acp_client_message_routing_edge_paths() -> None:
     client._fail_all(RuntimeError("fail"))
     with pytest.raises(RuntimeError, match="fail"):
         future.result()
+
+
+def test_acp_adapter_replaces_closed_clients_and_shares_one_per_command() -> None:
+    # #214 3.3: a closed client is never handed out again, and concurrent lookups for the
+    # same command share one client instead of starting several subprocesses.
+    adapter = ACPAdapter(command=[sys.executable, str(FAKE_ACP_AGENT)])
+    first, _cwd, _timeout = adapter._client_for_run({})
+    first.close()
+    second, _cwd, _timeout = adapter._client_for_run({})
+    assert second is not first and not second._closed
+
+    adapter.close()
+    seen: list[object] = []
+    workers = [Thread(target=lambda: seen.append(adapter._client_for_run({})[0])) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert len({id(client) for client in seen}) == 1
+    adapter.close()

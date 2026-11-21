@@ -8,7 +8,7 @@ import time
 import warnings
 from collections.abc import Coroutine
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -1182,6 +1182,39 @@ def test_dynamic_workflow_validates_before_spending_budget_and_salvages_success(
     asyncio.run(scenario())
 
 
+def test_cancelled_duplicate_workflow_call_does_not_cancel_the_shared_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #214 2.5: two workflows that make the same child call share one in-flight task;
+    # cancelling the follower must leave the owner's result intact.
+    adapter, _runtime, tool = _dynamic_workflow_tool()
+    original_invoke = adapter.invoke
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        started.set()
+        await release.wait()
+        return await original_invoke(prompt=prompt, **kwargs)
+
+    monkeypatch.setattr(adapter, "invoke", invoke)
+    code = "result = await worker(task='same')\nresult['task_summary']"
+
+    async def scenario() -> object:
+        owner = asyncio.create_task(tool.fn(code=code))
+        await asyncio.wait_for(started.wait(), 5)
+        follower = asyncio.create_task(tool.fn(code=code))
+        await asyncio.sleep(0.05)
+        follower.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await follower
+        release.set()
+        return await asyncio.wait_for(owner, 5)
+
+    assert asyncio.run(scenario()) == "child:same"
+    assert len(adapter.invocations) == 1
+
+
 def test_dynamic_workflow_rejects_invalid_calls_and_nested_execution() -> None:
     _adapter, _runtime, tool = _dynamic_workflow_tool()
 
@@ -1977,11 +2010,11 @@ def test_continue_subagent_failed_run_is_tracked_in_the_delegation_ledger(
     asyncio.run(scenario())
 
 
-def test_continue_subagent_cancelled_wait_leaves_running_attempt_pending(
+def test_continue_subagent_cancelled_wait_cancels_the_continuation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 2.11 (fail_closed ledger): if the continuation wait is cancelled while
-    # the new run is still running, the attempt is not failed — the run lives on.
+    # #214 2.3: a cancelled foreground continuation cancels its run, and the ledger records
+    # the attempt as cancelled rather than failed.
     adapter, runtime, tools = _manager_tools()
     coordinator = runtime._subagent_coordinator
     started = asyncio.Event()
@@ -2009,14 +2042,12 @@ def test_continue_subagent_cancelled_wait_leaves_running_attempt_pending(
                 await task
             attempts = ledger.snapshot()
             assert len(attempts) == 1
-            assert attempts[0].status == "pending"
+            assert attempts[0].status == "cancelled"
             assert attempts[0].requested_profile == "worker"
             new_run_id = attempts[0].run_id
             assert new_run_id is not None
-            assert coordinator.runs.get(new_run_id).status == "running"
-        assert new_run_id is not None
+            assert coordinator.runs.get(new_run_id).status == "cancelled"
         release.set()
-        await asyncio.wait_for(coordinator.wait(new_run_id), 2)
 
     asyncio.run(scenario())
 
@@ -3098,13 +3129,10 @@ def test_concurrency_limit_fails_fast_and_releases_success_and_cancel_slots(
         cancelled.cancel()
         with pytest.raises(asyncio.CancelledError):
             await cancelled
-        active_run = next(
-            run for run in runtime._subagent_coordinator.runs.snapshot() if run.status == "running"
-        )
-        assert runtime._subagent_coordinator.cancel(active_run.run_id) is True
-        with pytest.raises(asyncio.CancelledError):
-            await runtime._subagent_coordinator.wait(active_run.run_id, timeout=5)
-        assert runtime._subagent_coordinator.status(active_run.run_id) == "cancelled"
+        # Cancelling the foreground caller cancels its child (#214 2.3) and frees the slot.
+        statuses = [run.status for run in runtime._subagent_coordinator.runs.snapshot()]
+        assert "running" not in statuses
+        assert statuses[-1] == "cancelled"
 
         monkeypatch.setattr(adapter, "invoke", RecordingPydanticAdapter.invoke.__get__(adapter))
         assert (await tool.fn(subagent="worker", task="after-cancel"))[
@@ -3871,16 +3899,6 @@ def test_delegation_ledger_tracks_runtime_terminal_statuses(
     assert timed_out.snapshot()[0].status == "timed_out"
 
     cancel_adapter, _cancel_runtime, cancel_tool = _manager_tool()
-    cancel_definition = _cancel_runtime._profile_registry["manager"]
-    cancel_profile = eval_profile_definition(
-        _cancel_runtime,
-        cancel_definition,
-        build_capture_env(_cancel_runtime),
-    )
-    cancel_tools = {
-        tool.name: tool
-        for tool in _cancel_runtime._resolve_agent_tool_specs(cancel_profile, cancel_adapter)
-    }
 
     async def cancel_scenario() -> Any:
         started = asyncio.Event()
@@ -3898,14 +3916,11 @@ def test_delegation_ledger_tracks_runtime_terminal_statuses(
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await pending
-            active_run = next(
-                run
+            # The foreground child is cancelled with its caller (#214 2.3).
+            assert all(
+                run.status != "running"
                 for run in _cancel_runtime._subagent_coordinator.runs.snapshot()
-                if run.status == "running"
             )
-            assert _cancel_runtime._subagent_coordinator.cancel(active_run.run_id) is True
-            with pytest.raises(asyncio.CancelledError):
-                await cancel_tools["wait_subagent"].fn(run_id=active_run.run_id)
         return cancelled
 
     cancelled = asyncio.run(cancel_scenario())
@@ -4027,12 +4042,19 @@ def test_subagent_safety_ceiling_restricts_cwd_sandbox_and_nested_profiles(
 
     assert child.settings["cwd"] == str(workspace / "nested")
     assert child.settings["sandbox"] == "read-only"
+    # A child that names no cwd stays inside the parent's boundary (#214 K4).
+    assert grandchild.settings["cwd"] == str(workspace / "nested")
     assert grandchild.settings["sandbox"] == "read-only"
     assert grandchild_ceiling.approval_policies == (
         ApprovalPolicy.allow(),
         ApprovalPolicy.deny(),
         None,
     )
+
+    # Without any explicit boundary, children keep their settings untouched.
+    free = SubagentSafetyCeiling.from_parent(AgentProfile.empty(), default_cwd=tmp_path)
+    untouched, _ = free.constrain_child(AgentProfile.empty())
+    assert "cwd" not in untouched.settings
 
     with pytest.raises(KediExecutionError, match="escapes parent cwd boundary"):
         ceiling.constrain_child(AgentProfile(settings={"cwd": str(tmp_path)}))
@@ -5070,3 +5092,49 @@ def test_subagent_coordinator_close_is_fail_closed_and_cleans_owned_handles(
             await task
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("tool_name", ["delegate_task", "continue_subagent"])
+def test_cancelled_foreground_call_leaves_a_stubborn_child_pending(
+    monkeypatch: pytest.MonkeyPatch, tool_name: str
+) -> None:
+    # #214 2.3: a child that outlives the cleanup window is still running, so its ledger
+    # attempt stays pending instead of being failed.
+    from kedi.agent_adapter.subagents import coordinator as coordinator_module
+
+    adapter, runtime, tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+    monkeypatch.setattr(coordinator_module, "INTERRUPT_CLEANUP_SECONDS", 0.05)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_invoke = adapter.invoke
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        if "Stubborn" in prompt:
+            started.set()
+            while not release.is_set():
+                with suppress(asyncio.CancelledError):
+                    await release.wait()
+        return await original_invoke(prompt=prompt, **kwargs)
+
+    monkeypatch.setattr(adapter, "invoke", invoke)
+
+    async def scenario() -> None:
+        arguments: dict[str, Any] = {"subagent": "worker", "task": "Stubborn"}
+        if tool_name == "continue_subagent":
+            first = await tools["delegate_task"].fn(subagent="worker", task="Inspect")
+            arguments = {"run_id": first["run_id"], "task": "Stubborn"}
+        with delegation_scope("recover") as ledger:
+            task = asyncio.create_task(tools[tool_name].fn(**arguments))
+            await asyncio.wait_for(started.wait(), 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            (attempt,) = ledger.snapshot()
+            assert attempt.status == "pending"
+            assert attempt.run_id is not None
+        release.set()
+        with suppress(BaseException):
+            await asyncio.wait_for(coordinator.wait(attempt.run_id), 5)
+
+    asyncio.run(scenario())

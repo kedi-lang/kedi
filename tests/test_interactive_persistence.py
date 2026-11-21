@@ -23,6 +23,7 @@ from kedi._interactive.persistence import (
     SessionLoadError,
     SessionValueDecoder,
     SessionValueEncoder,
+    SnapshotTrustRequired,
     UnsupportedSessionValue,
 )
 from kedi._interactive.state import ExecutedFragment
@@ -210,6 +211,7 @@ def test_profile_codec_round_trips_full_portable_profile() -> None:
         encoded,
         decoder=SessionValueDecoder(kedi_models={}),
         kedi_models={},
+        trusted=True,
     )
     assert restored == profile
     assert restored.agent_command == ("agent", "run")
@@ -248,6 +250,7 @@ def test_profile_codec_round_trips_a2a_references_without_secret_values(
         encoded,
         decoder=SessionValueDecoder(kedi_models={}),
         kedi_models={},
+        trusted=True,
     )
     assert restored == profile
     assert restored.a2a_connection is not None
@@ -271,6 +274,7 @@ def test_profile_codec_round_trips_builtin_output_types(output_type: type[Any]) 
         encoded,
         decoder=SessionValueDecoder(kedi_models={}),
         kedi_models={},
+        trusted=True,
     )
     assert restored.output_type is output_type
 
@@ -287,6 +291,7 @@ def test_profile_codec_round_trips_kedi_output_type_and_boolean_settings() -> No
         encoded,
         decoder=SessionValueDecoder(kedi_models={"SnapshotModel": SnapshotModel}),
         kedi_models={"SnapshotModel": SnapshotModel},
+        trusted=True,
     )
     assert restored.output_type is SnapshotModel
     assert isinstance(restored.skills, SkillsSettings) and restored.skills.enabled is True
@@ -362,6 +367,7 @@ def test_profile_decoder_rejects_invalid_output_types(
             encoded,
             decoder=SessionValueDecoder(kedi_models={}),
             kedi_models={},
+            trusted=True,
         )
 
 
@@ -591,7 +597,7 @@ def test_restore_payload_rejects_nonlexical_interactive_environment() -> None:
         payload = state._build_snapshot_payload(session)
         session._env = cast(Any, {})
         with pytest.raises(SessionLoadError, match="not a lexical scope frame"):
-            state._restore_payload(session, payload)
+            state._restore_payload(session, payload, trusted=True)
 
 
 def test_session_load_validates_supplied_conversation_state(tmp_path: Path) -> None:
@@ -676,7 +682,7 @@ def test_session_load_closes_partial_session_for_unexpected_restore_failure(
             super().__init__(**kwargs)
             created.append(self)
 
-    def fail_restore(_session: object, _payload: object) -> None:
+    def fail_restore(_session: object, _payload: object, *, trusted: bool) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(state, "_restore_payload", fail_restore)
@@ -753,10 +759,41 @@ def test_session_dump_load_restores_import_addressable_hook_handlers(tmp_path: P
         )
         session.dump(snapshot)
 
-    with kedi.load_session(snapshot) as restored:
+    with kedi.load_session(snapshot, trusted=True) as restored:
         hooks = restored._top_level_state.active_profile.hooks
         assert hooks is not None
         assert hooks.pre_tool_use == (operator.neg,)
+
+
+def test_portable_snapshot_with_hooks_requires_trust_before_importing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214 K1: resolving a hook descriptor imports its module, so an untrusted load refuses
+    # before any import; a snapshot without hooks still loads untrusted.
+    snapshot = tmp_path / "hooks.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session._top_level_state.active_profile = AgentProfile(
+            hooks=HookSettings(pre_tool_use=(cast(HookHandler, operator.neg),)),
+        )
+        session.dump(snapshot)
+    imported: list[str] = []
+    real_import = persistence.importlib.import_module
+    monkeypatch.setattr(
+        persistence.importlib,
+        "import_module",
+        lambda name: imported.append(name) or real_import(name),
+    )
+
+    with pytest.raises(SnapshotTrustRequired, match="hook handlers") as info:
+        kedi.load_session(snapshot)
+    assert imported == []
+    assert "--trust-snapshot" in info.value.cli_message
+
+    plain = tmp_path / "plain.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session.dump(plain)
+    with kedi.load_session(plain) as restored:
+        assert restored._top_level_state.active_profile.hooks is None
 
 
 def test_session_dump_rejects_non_importable_hook_handlers(tmp_path: Path) -> None:
@@ -781,7 +818,7 @@ def test_session_dump_rejects_non_importable_hook_handlers(tmp_path: Path) -> No
 )
 def test_session_hook_decoder_rejects_malformed_settings(value: Any, message: str) -> None:
     with pytest.raises(SessionLoadError, match=message):
-        persistence._decode_hooks(value)
+        persistence._decode_hooks(value, field="hooks", trusted=True)
 
 
 def test_session_hook_callable_encoder_rejects_nonportable_addresses(
@@ -985,3 +1022,88 @@ def test_bundled_module_detection_rejects_unresolvable_and_user_modules(tmp_path
     assert state._bundled_module_path(SimpleNamespace(module="filesystem"), source) is not None
     assert state._bundled_module_path(SimpleNamespace(module="helper"), source) is None
     assert state._bundled_module_path(SimpleNamespace(module="missing_module"), source) is None
+
+
+def _profile_round_trip(profile: AgentProfile, *, trusted: bool = True) -> AgentProfile:
+    encoded = persistence.encode_profile(
+        profile,
+        encoder=SessionValueEncoder(kedi_models={}),
+        model_names={},
+        path="profile",
+    )
+    # Snapshots are JSON documents.
+    encoded = json.loads(json.dumps(encoded))
+    return persistence.decode_profile(
+        encoded,
+        decoder=SessionValueDecoder(kedi_models={}),
+        kedi_models={},
+        trusted=trusted,
+    )
+
+
+def test_portable_profile_keeps_budgets_requirements_and_capabilities() -> None:
+    # #214 5.2: these fields were dropped by portable snapshots.
+    from kedi.agent_profile.capabilities import AppliedCapability
+    from kedi.agent_profile.history import HistoryProcessingSettings
+    from kedi.agent_profile.instructions import CapabilityInstruction
+    from kedi.lang.ast import Span
+    from kedi.run_budget import RunBudget
+
+    span = Span(1, 9, 2, 3, 2, 11, source_path="main.kedi")
+    profile = AgentProfile(
+        run_budget=RunBudget(request_limit=3, tool_attempt_limit=None),
+        requirements=("mcp",),
+        requirement_origins={"mcp": (span,)},
+        capability_instructions=(CapabilityInstruction(identity="cap:a", content="Be brief."),),
+        capabilities=(
+            AppliedCapability(
+                identity="cap:a",
+                name="brief",
+                description="Short answers",
+                profile=AgentProfile(system="inner", run_budget=RunBudget(request_limit=1)),
+                deferred=True,
+            ),
+        ),
+        history_processing=HistoryProcessingSettings(inherit_processor=True),
+        hooks=HookSettings(post_tool_result_failure=(operator.truth,)),
+    )
+    restored = _profile_round_trip(profile)
+    assert restored.run_budget == profile.run_budget
+    assert restored.requirements == ("mcp",)
+    assert restored.requirement_origins == {"mcp": (span,)}
+    assert restored.capability_instructions == profile.capability_instructions
+    (capability,) = restored.capabilities
+    assert (capability.identity, capability.name, capability.deferred) == ("cap:a", "brief", True)
+    assert capability.profile.system == "inner"
+    assert capability.profile.run_budget == RunBudget(request_limit=1)
+    assert restored.history_processing == profile.history_processing
+    assert restored.hooks is not None
+    assert restored.hooks.post_tool_result_failure == (operator.truth,)
+
+
+def test_portable_profile_rejects_history_processor_callbacks() -> None:
+    from kedi.agent_profile.history import HistoryProcessingSettings
+
+    profile = AgentProfile(history_processing=HistoryProcessingSettings(processor=operator.truth))
+    with pytest.raises(UnsupportedSessionValue, match="history_processing"):
+        _profile_round_trip(profile)
+
+
+def test_every_profile_field_is_encoded_or_explicitly_rejected() -> None:
+    # #214 5.2: a new AgentProfile field must be persisted or rejected, never dropped.
+    import dataclasses
+
+    encoded = persistence.encode_profile(
+        AgentProfile(),
+        encoder=SessionValueEncoder(kedi_models={}),
+        model_names={},
+        path="profile",
+    )
+    renamed = {"_hook_enforcement": "hook_enforcement"}
+    rejected = {"tool_bindings", "subagent_bindings"}
+    missing = [
+        field.name
+        for field in dataclasses.fields(AgentProfile)
+        if field.name not in rejected and renamed.get(field.name, field.name) not in encoded
+    ]
+    assert missing == []

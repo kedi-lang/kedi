@@ -290,7 +290,8 @@ def _optimizer_result(group: GroupStmt) -> bool:
 
 
 def _python_use(statements: Sequence[Stmt]) -> str | None:
-    for statement in _statements(statements):
+    # Nested procedures too: a form must not hide Python inside an `@helper` body.
+    for statement in _statements(statements, procedures=True):
         what = _python_statement(statement)
         if what is not None:
             line = "" if statement.loc is None else f"line {statement.loc.start_line - 1}: "
@@ -406,6 +407,16 @@ def _search(
             visible = before | set(_bound(block[:index]))
             for child, extra in _child_blocks(item):
                 found = found or _search(child, visible | extra, procedure, group)
+            if (
+                found is not None
+                and isinstance(item, LoopStmt)
+                and any(statement is group for statement in item.body)
+            ):
+                # A loop body's names stay visible to its map body, which runs after the
+                # group; names bound in any other nested block end with that block.
+                found = _Site(
+                    found.procedure, found.before, found.after + tuple(item.map_body or ())
+                )
         if found is not None:
             return found
     return None

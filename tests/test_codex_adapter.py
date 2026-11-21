@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import inspect
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -12,6 +13,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from re import Pattern
 from threading import Event, Thread, current_thread
+from time import monotonic, sleep
 from typing import Annotated, Any, cast
 
 import pytest
@@ -112,6 +114,57 @@ def test_codex_adapter_metadata_and_public_exports() -> None:
     assert CodexAdapter.capabilities.supports("tool_registration")
     assert not CodexAdapter.capabilities.supports("mcp")
     assert CodexAdapter.capabilities.settings == CODEX_AGENT_SETTING_KEYS
+
+
+def test_codex_close_does_not_stall_on_an_unresponsive_server(tmp_path: Path) -> None:
+    # #214 3.1: thread deletes during close are bounded and run outside the start lock.
+    adapter, _log_path = _adapter(
+        tmp_path, request_timeout=30, extra_env={"KEDI_CODEX_FAKE_HANG_DELETE": "1"}
+    )
+    client = adapter._client
+    client._ensure_started()
+    client._retained_threads.add("stale-thread")
+    started = monotonic()
+    adapter.close()
+    assert monotonic() - started < 10
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+def test_codex_close_stops_processes_the_server_started(tmp_path: Path) -> None:
+    # #214 3.2: the server runs in its own process group, and closing ends the whole group.
+    pid_file = tmp_path / "grandchild.pid"
+    adapter, _log_path = _adapter(
+        tmp_path, extra_env={"KEDI_CODEX_FAKE_GRANDCHILD_PID": str(pid_file)}
+    )
+    adapter.produce_sync("start", output_schema={"answer": str})
+    process = adapter._client._process
+    assert process is not None
+    grandchild = int(pid_file.read_text(encoding="utf-8"))
+    adapter.close()
+
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            break
+        sleep(0.05)
+    else:
+        pytest.fail("the server's child process outlived close()")
+    assert process.stdout is not None and process.stdout.closed
+
+
+def test_codex_child_cannot_opt_out_of_an_inherited_approval_ceiling(tmp_path: Path) -> None:
+    # #214 3.4: a child profile's approval_policy setting must not disable approval
+    # requests while a parent approval ceiling is active.
+    adapter, log_path = _adapter(tmp_path, approval_policy="never")
+    with adapter.approval_ceiling((ApprovalPolicy.deny(),)):
+        adapter.produce_sync("ceiling", output_schema={"answer": str})
+    adapter.produce_sync("free", output_schema={"answer": str})
+    adapter.close()
+
+    starts = _method(_messages(log_path), "thread/start")
+    assert [start["params"]["approvalPolicy"] for start in starts] == ["untrusted", "never"]
 
 
 def test_codex_adapter_sync_run_reuses_connection_and_maps_profile(
@@ -1367,6 +1420,20 @@ class _FakeStdin:
         self.closed = True
 
 
+class _FakePipe:
+    """An iterable pipe end that records being closed, like a Popen text stream."""
+
+    def __init__(self, lines: Any) -> None:
+        self._lines = lines
+        self.closed = False
+
+    def __iter__(self) -> Any:
+        return iter(self._lines)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class _FakeProcess:
     def __init__(
         self,
@@ -1377,8 +1444,10 @@ class _FakeProcess:
         running: bool = True,
         wait_timeouts: int = 0,
     ) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
+        self.stdout = None if stdout is None else _FakePipe(stdout)
+        self.stderr = None if stderr is None else _FakePipe(stderr)
+        # No such process group exists, so the client's group cleanup is a no-op here.
+        self.pid = 2**30
         self.stdin: Any = _FakeStdin() if stdin is None else stdin
         self.running = running
         self.terminated = False
@@ -1948,3 +2017,23 @@ def test_codex_native_approval_classifies_edge_cases_and_declines_unrepresentabl
     assert codex_adapter_module._codex_native_approval_response(
         permissions_method, {"permissions": "invalid"}, ApprovalDecision.allow()
     ) == {"permissions": {}, "scope": "turn"}
+
+
+def test_codex_close_returns_when_a_concurrent_close_finished_during_thread_deletes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214 3.1: deletes run outside the start lock, so another close() may finish meanwhile.
+    adapter, _log_path = _adapter(tmp_path)
+    client = adapter._client
+    client._ensure_started()
+    client._retained_threads.add("stale-thread")
+    real_close = client.close
+
+    def delete_thread(_thread_id: str, *, timeout: float | None = None) -> None:
+        del timeout
+        client._retained_threads.clear()
+        real_close()
+
+    monkeypatch.setattr(client, "delete_thread", delete_thread)
+    client.close()
+    assert client._closed and client._process is None

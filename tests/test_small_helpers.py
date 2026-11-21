@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib
 import runpy
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -110,25 +111,33 @@ def test_procedure_type_render_uses_param_and_return_metadata() -> None:
     assert procedure_return_type_to_python(proc) == "list[str]"
 
 
-def test_tree_sitter_parser_handles_parser_initialized_inside_lock(
+def test_tree_sitter_language_handles_initialization_inside_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_parser = parser_module._parser
-    fake_parser = object()
+    fake_language = object()
 
     class RaceLock:
         def __enter__(self) -> None:
-            cast(Any, parser_module)._parser = fake_parser
+            cast(Any, parser_module)._language = fake_language
 
         def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None
 
-    monkeypatch.setattr(parser_module, "_parser", None)
+    monkeypatch.setattr(parser_module, "_language", None)
     monkeypatch.setattr(parser_module, "_lock", RaceLock())
 
-    assert parser_module._get_parser() is fake_parser
+    assert parser_module.get_language() is fake_language
 
-    monkeypatch.setattr(parser_module, "_parser", original_parser)
+
+def test_tree_sitter_parser_is_per_thread() -> None:
+    # #214 1.1: tree-sitter parses without the GIL, so threads must not share a Parser.
+    main_parser = parser_module._get_parser()
+    assert parser_module._get_parser() is main_parser
+    other: list[object] = []
+    worker = threading.Thread(target=lambda: other.append(parser_module._get_parser()))
+    worker.start()
+    worker.join()
+    assert other and other[0] is not main_parser
 
 
 def test_utils_parse_args_and_attrdict() -> None:
@@ -266,7 +275,7 @@ def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> No
 
     main_module = importlib.import_module("kedi.__main__")
     dotenv_calls: list[bool] = []
-    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda: dotenv_calls.append(True))
+    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda *_args: dotenv_calls.append(True))
 
     assert main_module.main() == 7
     assert dotenv_calls == [True]

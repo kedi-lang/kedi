@@ -1,14 +1,14 @@
 """Tree-sitter parser singleton for Kedi.
 
-Loads the compiled ``tree_sitter_kedi`` shared library once per process
-and exposes a single ``parse(source)`` function that returns a
+Loads the compiled ``tree_sitter_kedi`` shared library once per process, keeps one
+parser per thread, and exposes a single ``parse(source)`` function that returns a
 ``tree_sitter.Tree``. The CST→AST walker in :mod:`cst_to_ast` consumes
 that tree.
 """
 
 from __future__ import annotations
 
-from threading import Lock
+from threading import Lock, local
 from typing import Optional
 
 import tree_sitter_kedi
@@ -16,27 +16,28 @@ from tree_sitter import Language, Parser, Tree
 
 _lock = Lock()
 _language: Optional[Language] = None
-_parser: Optional[Parser] = None
-
-
-def _get_parser() -> Parser:
-    """Return the process-wide ``Parser`` instance, creating it lazily."""
-    global _language, _parser
-    if _parser is not None:
-        return _parser
-    with _lock:
-        if _parser is None:
-            _language = Language(tree_sitter_kedi.language())
-            _parser = Parser(_language)
-    assert _parser is not None
-    return _parser
+# tree-sitter releases the GIL while parsing, so one Parser must not be shared by threads.
+_thread_state = local()
 
 
 def get_language() -> Language:
     """Return the process-wide Kedi ``Language`` (needed for Query)."""
-    _get_parser()
-    assert _language is not None
+    global _language
+    if _language is not None:
+        return _language
+    with _lock:
+        if _language is None:
+            _language = Language(tree_sitter_kedi.language())
     return _language
+
+
+def _get_parser() -> Parser:
+    """Return this thread's ``Parser``, creating it lazily."""
+    parser: Parser | None = getattr(_thread_state, "parser", None)
+    if parser is None:
+        parser = Parser(get_language())
+        _thread_state.parser = parser
+    return parser
 
 
 def parse(source: str | bytes) -> Tree:

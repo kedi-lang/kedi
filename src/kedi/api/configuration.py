@@ -204,7 +204,7 @@ def _build_config(
     loop_iteration_limit: int | None = None,
 ) -> _APIConfig:
     if load_env:
-        dotenv.load_dotenv()
+        dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
 
     base_parallel = None if base is None else base.parallel
     base_max_workers = 8 if base is None else base.max_workers

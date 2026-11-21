@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Lock
@@ -461,7 +462,9 @@ def test_query_response_cache_splits_by_args_and_env(adapter: ApiAdapter) -> Non
     assert len(adapter.templates) == 3
 
 
-def test_response_cache_key_normalizes_memory_addresses() -> None:
+def test_response_cache_key_separates_objects_named_by_address() -> None:
+    # #214 4.11: a repr that names an object by address says nothing about its state, so
+    # distinct objects get distinct keys; the same object keeps its key.
     def sample(value: AddressReprValue) -> None:
         return None
 
@@ -485,7 +488,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         config_env={},
         env={},
         **identity,
-    ) == api_cache_module._response_cache_key(
+    ) != api_cache_module._response_cache_key(
         kind="query",
         inner=sample,
         source_id="sample",
@@ -495,6 +498,20 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         config_env={},
         env={},
         **identity,
+    )
+    key = {
+        "kind": "query",
+        "inner": sample,
+        "source_id": "sample",
+        "source_hash": "hash",
+        "args": (),
+        "kwargs": kwargs_a,
+        "config_env": {},
+        "env": {},
+        **identity,
+    }
+    assert api_cache_module._response_cache_key(**key) == api_cache_module._response_cache_key(
+        **key
     )
 
 
@@ -515,7 +532,7 @@ def test_query_response_cache_splits_by_model(adapter: ApiAdapter) -> None:
     assert adapter.models == ["configured:model", "other:model"]
 
 
-def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -> None:
+def test_query_response_cache_hits_for_the_same_object_only(adapter: ApiAdapter) -> None:
     @query(cache=True)
     def summarize(topic: AddressReprValue) -> str:
         """kedi
@@ -523,9 +540,12 @@ def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -
         = <summary>
         """
 
-    assert summarize(AddressReprValue("Kedi")) == "short summary"
-    assert summarize(AddressReprValue("Kedi")) == "short summary"
+    topic = AddressReprValue("Kedi")
+    assert summarize(topic) == "short summary"
+    assert summarize(topic) == "short summary"
     assert len(adapter.templates) == 1
+    assert summarize(AddressReprValue("Kedi")) == "short summary"
+    assert len(adapter.templates) == 2
 
 
 def test_query_supports_dynamic_runtime_output_type(adapter: ApiAdapter) -> None:
@@ -872,7 +892,7 @@ def test_reset_config_restores_default_config(monkeypatch: pytest.MonkeyPatch) -
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
 
@@ -1293,7 +1313,7 @@ def test_configure_builds_default_adapter_lazily(
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     configure()
@@ -1328,7 +1348,7 @@ def test_configure_uses_adapter_env_when_not_explicit(
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     configure(temperature=0.1)
 
     @query
@@ -1360,7 +1380,7 @@ def test_configure_explicit_model_overrides_env(
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     configure(model=None)
 
     @query
@@ -1405,7 +1425,7 @@ def test_configure_builds_langchain_adapter_lazily(
 
 
 def test_configure_rejects_removed_dspy_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     with pytest.raises(ValueError, match="unknown adapter"):
@@ -1538,7 +1558,7 @@ def test_response_cache_splits_by_adapter_instance() -> None:
 
 
 def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     monkeypatch.setenv("KEDI_AGENT", "claude")
 
@@ -1555,7 +1575,7 @@ def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch)
 def test_configure_rejects_conflicting_environment_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.setenv("KEDI_ADAPTER", "pydantic")
     monkeypatch.setenv("KEDI_AGENT", "claude")
 
@@ -1585,3 +1605,20 @@ def test_profile_cache_identity_includes_adapter_selection_and_command() -> None
 def test_public_python_api_exports_adapter_types_and_mcp_spec() -> None:
     assert kedi.AdapterLike is api_state_module.AdapterLike
     assert kedi.McpServerSpec.__name__ == "McpServerSpec"
+
+
+def test_configure_loads_the_dotenv_of_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214: dotenv's default search starts at the calling module (inside the kedi package),
+    # so a script's project .env loaded only by accident. configure() reads the cwd's .env.
+    (tmp_path / ".env").write_text("KEDI_DOTENV_PROBE=from-cwd\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KEDI_DOTENV_PROBE", raising=False)
+    try:
+        configure()
+        probe = os.environ.get("KEDI_DOTENV_PROBE")  # not os.environ: a failure would print it
+        assert probe == "from-cwd"
+    finally:
+        monkeypatch.delenv("KEDI_DOTENV_PROBE", raising=False)
+        reset_config()

@@ -342,12 +342,7 @@ def run_idle(
                 else interactive(adapter=adapter, model=model)
             )
         except SnapshotTrustRequired as exc:
-            # The API names trusted=True; the terminal user needs the CLI flag.
-            raise SnapshotTrustRequired(
-                "This is a Python snapshot; loading it can execute arbitrary Python code "
-                "and its saved values may contain credentials. Rerun with --trust-snapshot "
-                "only if you trust its source."
-            ) from exc
+            raise SnapshotTrustRequired(exc.cli_message, cli_message=exc.cli_message) from exc
         with session as active_session:
             console = IdleConsole(
                 active_session,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import replace
 from types import MappingProxyType
 from typing import Any, cast
@@ -714,3 +715,63 @@ def test_lowering_uses_existing_adapter_surfaces_for_each_output_contract() -> N
     invalid = replace(no_instructions, output=cast(Any, object()))
     with pytest.raises(TypeError, match="Unsupported Kedi output contract"):
         lower_request_sync(adapter, invalid)
+
+
+def test_interrupted_sync_waiter_retires_its_ticket() -> None:
+    # #214 2.2: a KeyboardInterrupt while queued must not leave the ticket blocking every
+    # later turn.
+    state = ConversationState(session_id="interrupted-sync-waiter")
+    first = state.reserve_turn()
+    waiting = state.reserve_turn()
+    condition = state._turn_condition
+    real_wait = condition.wait
+
+    def interrupted_wait(*args: Any, **kwargs: Any) -> bool:
+        condition.wait = real_wait  # type: ignore[method-assign]
+        raise KeyboardInterrupt
+
+    condition.wait = interrupted_wait  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        with state.adapter_turn("test", ticket=waiting):
+            raise AssertionError("an interrupted turn must not enter")
+    state.cancel_turn(first)
+    with state.adapter_turn("test") as turn:
+        assert turn.turn_sequence == 2
+    state.close()
+
+
+def test_repeatedly_cancelled_async_waiter_finishes_an_activated_turn() -> None:
+    # #214 2.2: a second cancellation while the begin settles must still finish the turn.
+    async def scenario() -> int:
+        state = ConversationState(session_id="double-cancel")
+        begun = threading.Event()
+        release = threading.Event()
+        real_begin = state._begin_turn
+
+        def slow_begin(*args: Any) -> Any:
+            begun.set()
+            release.wait(5)
+            return real_begin(*args)
+
+        state._begin_turn = slow_begin  # type: ignore[method-assign]
+
+        async def enter() -> None:
+            async with state.adapter_turn_async("test"):
+                raise AssertionError("a cancelled turn must not enter")
+
+        task = asyncio.create_task(enter())
+        await asyncio.to_thread(begun.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        state._begin_turn = real_begin  # type: ignore[method-assign]
+        async with state.adapter_turn_async("test") as turn:
+            sequence = turn.turn_sequence
+        state.close()
+        return sequence
+
+    assert asyncio.run(asyncio.wait_for(scenario(), 10)) == 1

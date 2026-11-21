@@ -241,3 +241,27 @@ def test_endpoint_categories(url, expected) -> None:
 
 def test_unknown_endpoint_is_hashed() -> None:
     assert observer._endpoint_category("https://private.example/v1").startswith("custom:")
+
+
+def test_message_cache_keeps_only_the_current_request_messages(tmp_path: Path) -> None:
+    # #214 6.11: the fingerprint cache held every message ever seen.
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    capability = observer.PydanticRequestEvidenceCapability(records_dir=tmp_path, trial_id="t")
+    kept = ModelRequest(parts=[UserPromptPart(content="system context")])
+    for index in range(5):
+        messages = [kept, ModelRequest(parts=[UserPromptPart(content=f"turn {index}")])]
+        capability._capture_request(
+            None,
+            SimpleNamespace(messages=messages),  # type: ignore[arg-type]
+            sequence=index,
+            since_previous_seconds=None,
+        )
+        assert set(capability._message_cache) == {id(message) for message in messages}
+
+
+def test_string_revision_tokens_follow_content() -> None:
+    # #214 6.11: equal-length strings at a reused address must not share a revision.
+    assert observer._revision_token("abc") == observer._revision_token("ab" + "c")
+    assert observer._revision_token("abc") != observer._revision_token("abd")
+    assert observer._revision_token(b"abc") != observer._revision_token("abc")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast as _py_ast
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
@@ -166,14 +166,15 @@ def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
         return []
     header_bytes = source.source.encode("utf-8")[proc.loc.start_byte :]
     header = header_bytes.split(b"\n", 1)[0].decode("utf-8")
-    cursor = header.find("(") + 1
     declarations: List[Tuple[str, Span]] = []
-    for name in proc.params:
-        match = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", header[cursor:])
-        if match is None:
+    params = set(proc.params)
+    for segment_start in _parameter_starts(header, header.find("(") + 1):
+        segment = header[segment_start:]
+        start_char = segment_start + len(segment) - len(segment.lstrip())
+        name = re.split(r"\W", header[start_char:], maxsplit=1)[0]
+        if name not in params:
             continue
-        start_char = cursor + match.start()
-        end_char = cursor + match.end()
+        end_char = start_char + len(name)
         start_offset = len(header[:start_char].encode("utf-8"))
         end_offset = len(header[:end_char].encode("utf-8"))
         declarations.append(
@@ -183,16 +184,40 @@ def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
                     start_byte=proc.loc.start_byte + start_offset,
                     end_byte=proc.loc.start_byte + end_offset,
                     start_line=proc.loc.start_line,
-                    start_col=start_offset + 1,
+                    start_col=proc.loc.start_col + start_offset,
                     end_line=proc.loc.start_line,
-                    end_col=end_offset + 1,
+                    end_col=proc.loc.start_col + end_offset,
                     source_path=proc.loc.source_path,
                     source_id=proc.loc.source_id,
                 ),
             )
         )
-        cursor = end_char
     return declarations
+
+
+def _parameter_starts(header: str, start: int) -> Iterator[int]:
+    """Offsets where each top-level parameter of ``header`` begins, from ``start``.
+
+    Commas inside brackets, quotes or backticks (types and defaults) do not split.
+    """
+    yield start
+    depth = 0
+    quote: str | None = None
+    for index in range(start, len(header)):
+        char = header[index]
+        if quote is not None:
+            if char == quote and header[index - 1] != "\\":
+                quote = None
+        elif char in "'\"`":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return
+            depth -= 1
+        elif char == "," and depth == 0:
+            yield index + 1
 
 
 def _param_decl_span(proc: ProcedureDef, name: str) -> Optional[Span]:
@@ -572,4 +597,8 @@ def _procedure_scope_entries(
 
     for proc in prog.procedures:
         visit(proc, ())
+    for stmt in _iter_control_statements(prog.toplevel_body):
+        # Procedures defined inside top-level blocks.
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            visit(stmt.proc, ())
     return entries

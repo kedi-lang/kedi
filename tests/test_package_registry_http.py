@@ -47,7 +47,7 @@ def _git(repository: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _package_repository(tmp_path: Path) -> tuple[Path, str]:
+def _package_repository(tmp_path: Path, *, manifest_extra: str = "") -> tuple[Path, str]:
     repository = tmp_path / "package-repository"
     repository.mkdir()
     subprocess.run(
@@ -59,7 +59,7 @@ def _package_repository(tmp_path: Path) -> tuple[Path, str]:
     source = repository / "src" / "kedi_http"
     source.mkdir(parents=True)
     (repository / "package.kedi").write_text(
-        "> package: kedi_http:\n  version: 1.0\n  source: src/kedi_http\n",
+        "> package: kedi_http:\n  version: 1.0\n  source: src/kedi_http\n" + manifest_extra,
         encoding="utf-8",
     )
     (source / "main.kedi").write_text("= verified\n", encoding="utf-8")
@@ -276,3 +276,21 @@ def test_registry_rejects_yanked_package_before_git_fetch(tmp_path: Path) -> Non
                 registry_root=tmp_path / "installed",
                 api_client=HTTPRegistryAPIClient(registry_url),
             )
+
+
+def test_registry_package_cannot_pull_a_direct_url_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214 4.2: a remote package names index projects; `pkg @ file://...` is refused before
+    # anything is installed. Local packages keep direct references (see
+    # test_package_dependencies).
+    repository, verified_commit = _package_repository(
+        tmp_path, manifest_extra="  python_dependencies:\n    evil @ file:///tmp/evil.whl\n"
+    )
+    api_root = tmp_path / "registry-api"
+    _write_registry_api(api_root, repository=repository, commit=verified_commit)
+
+    with _serve_registry(api_root) as registry_url:
+        monkeypatch.setenv("KEDI_REGISTRY_URL", registry_url)
+        with pytest.raises(ValueError, match="uses a direct URL"):
+            add_package("kedi_http", registry_root=tmp_path / "installed")

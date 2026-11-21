@@ -13,7 +13,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from kedi.agent_adapter import PydanticAdapter
 from kedi.cli import main as cli_main
-from kedi.forms import Form, FormActivation, FormError, load_forms
+from kedi.forms import Form, FormActivation, FormError, _python_use, load_forms
 from kedi.groups import form_fingerprint
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import TemplateBlock
@@ -514,3 +514,32 @@ def test_proposals_reach_imported_modules(tmp_path: Path) -> None:
         asyncio.run(runtime.aclose())
 
     assert "Answer q tersely." in model.prompts[0]
+
+
+def test_the_python_gate_looks_inside_nested_procedures() -> None:
+    # #214 K5: the form parser already rejects procedures in a form body; this keeps
+    # the Python ban itself from going blind when a body does contain one.
+    program = parse_program(
+        "@outer() -> str:\n    @helper() -> str:\n        = `'x'.upper()`\n    = <helper()>\n"
+    )
+    assert "forms cannot contain Python" in (_python_use(program.procedures[0].body) or "")
+
+
+def test_a_form_must_bind_names_the_loop_map_body_reads() -> None:
+    # #214 5.5: a loop body's names stay visible to its map body, which reads them after
+    # the group runs. A group nested one block deeper binds names the map cannot see.
+    loop_body = (
+        "@f(items: list) -> list:\n  [out: list] = `[]`\n  > loop [item]: `items`:\n"
+        "    > evolve: draft:\n      [plan] << Plan <item>.\n  > map:\n    `out.append(plan)`\n"
+        "  = `out`\n= `f([1])`\n"
+    )
+    dropped = {"f.draft": Form(">> Think about <item>: [notes]")}
+    with pytest.raises(FormError, match="must bind 'plan'"):
+        compile_program(parse_program(loop_body), forms=dropped)
+
+    nested = loop_body.replace(
+        "    > evolve: draft:\n      [plan] << Plan <item>.\n",
+        "    > if: `True`:\n      > evolve: draft:\n        [plan] << Plan <item>.\n",
+    )
+    assert nested != loop_body
+    compile_program(parse_program(nested), forms=dropped)

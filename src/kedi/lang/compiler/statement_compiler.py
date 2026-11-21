@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from contextlib import nullcontext
 from dataclasses import replace
+from threading import Lock
 from typing import Any, Callable
 
 from pydantic import ValidationError
@@ -56,6 +57,7 @@ from ..ast import (
     McpDirectiveStmt,
     ModelDirectiveStmt,
     OutputSegment,
+    ProcDefStmt,
     ProcedureDef,
     PythonBlock,
     RawInvokeStmt,
@@ -72,6 +74,7 @@ from ..ast import (
     TaskStmt,
     TemplateBlock,
     TemplateLine,
+    TypeDefStmt,
     UseDirectiveStmt,
     VariableInitBlockStmt,
     VariableInitStmt,
@@ -81,6 +84,7 @@ from .control_flow import (
     assert_conditional_loop_capacity,
     branch_trace,
     child_scope,
+    defines_scoped_names,
     evaluate_condition,
     evaluate_iterable,
     group_trace,
@@ -560,13 +564,7 @@ class StatementExecutor:
         finally:
             pop_type_env(self.rt)
 
-            # Restore nested procedure scoping
-            procs = self.rt._procedures
-            for name in new_proc_names:
-                if name in procs:
-                    del procs[name]
-            for name, old_fn in saved_procs.items():
-                procs[name] = old_fn
+            _restore_procedures(self.rt, saved_procs, new_proc_names)
 
         return last_return
 
@@ -693,7 +691,6 @@ class StatementExecutor:
     ) -> Any:
         from kedi.run_budget import RunBudget, run_budget_scope
 
-        from ..ast import ProcDefStmt, TypeDefStmt
         from .procedure_compiler import ProcedureCompiler
         from .type_system import register_type
 
@@ -763,20 +760,33 @@ class StatementExecutor:
                     frames = [record[0] for record in records]
                     results: list[Any] = [_NO_RETURN] * len(frames)
 
+                    # Procedures and types live in runtime-wide tables, so iterations that
+                    # define them would replace each other's definitions: run those one at
+                    # a time, each with its own scope bookkeeping.
+                    one_at_a_time = Lock() if defines_scoped_names(stmt.map_body) else nullcontext()
+
                     def run_map(index: int, frame: Any) -> None:
                         _, map_active = records[index]
-                        with active_scope(self.rt, frame), run_budget_scope(RunBudget()):
-                            with block_agent_profile_scope(map_active):
-                                results[index], _ = self._execute_block(
-                                    stmt.map_body or [],
-                                    proc,
-                                    frame,
-                                    type_scope,
-                                    saved_procs,
-                                    new_proc_names,
-                                    map_active,
-                                    profile_registry,
-                                )
+                        iteration_saved: dict[str, Any] = {}
+                        iteration_new: set[str] = set()
+                        with one_at_a_time, active_scope(self.rt, frame):
+                            with (
+                                run_budget_scope(RunBudget()),
+                                block_agent_profile_scope(map_active),
+                            ):
+                                try:
+                                    results[index], _ = self._execute_block(
+                                        stmt.map_body or [],
+                                        proc,
+                                        frame,
+                                        dict(type_scope),
+                                        iteration_saved,
+                                        iteration_new,
+                                        map_active,
+                                        profile_registry,
+                                    )
+                                finally:
+                                    _restore_procedures(self.rt, iteration_saved, iteration_new)
 
                     run_map_continuations(self.rt, stmt, frames, run_map)
                     for result in results:
@@ -913,7 +923,6 @@ class StatementExecutor:
         self, stmt: Stmt, env: dict[str, Any], is_toplevel: bool = False
     ) -> None:
         """Execute a single statement (for top-level execution)."""
-        from ..ast import ProcDefStmt
 
         if isinstance(stmt, ShowStmt):
             self.compiler.execute_show(stmt, env)
@@ -961,3 +970,11 @@ class StatementExecutor:
         for name in list(closure_env):
             if name in env:
                 closure_env[name] = env[name]
+
+
+def _restore_procedures(rt: KediRuntime, saved: dict[str, Any], new: set[str]) -> None:
+    """Undo a block's nested procedure definitions."""
+    procs = rt._procedures
+    for name in new:
+        procs.pop(name, None)
+    procs.update(saved)

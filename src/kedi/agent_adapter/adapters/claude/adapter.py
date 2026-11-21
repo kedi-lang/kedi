@@ -4,7 +4,10 @@ from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Generator, Mapping, Sequence, cast
 
-from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook
+from kedi.agent_adapter.adapters.claude.hooks import (
+    _with_kedi_approval_hook,
+    raising_fatal_hook_errors,
+)
 from kedi.agent_adapter.adapters.claude.messages import (
     _active_claude_hook_identities,
     _claude_invocation_usage,
@@ -244,6 +247,7 @@ class ClaudeAdapter(HookRegistrationMixin):
             with (
                 delegation_scope(self._subagent_failure_policy),
                 agent_event_run(self.shortname) as resolver,
+                raising_fatal_hook_errors(),
             ):
 
                 def observe_message(message: Message) -> None:

@@ -57,6 +57,7 @@ from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
 from kedi.lang import compile_program, parse_program
+from kedi.run_budget import RunBudgetExceeded
 from tests.telemetry_helpers import installed_recording_backend
 
 
@@ -810,6 +811,38 @@ def test_codemode_sequential_gate_releases_cancelled_waiter() -> None:
     asyncio.run(run())
 
 
+def test_sequential_gate_is_released_when_the_holder_is_cancelled_while_exiting() -> None:
+    # #214 2.13: a cancellation while the exiting holder waits for the condition lock must
+    # not leave the gate exclusive.
+    async def run() -> None:
+        gate = _SequentialDispatchGate()
+        inside = asyncio.Event()
+        leave = asyncio.Event()
+
+        async def hold() -> None:
+            async with gate.enter(sequential=True):
+                inside.set()
+                await leave.wait()
+
+        holder = asyncio.create_task(hold())
+        await inside.wait()
+        async with gate._condition:
+            leave.set()
+            await asyncio.sleep(0)
+            holder.cancel()
+            await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError):
+            await holder
+
+        async def enter_again() -> bool:
+            async with gate.enter(sequential=True):
+                return True
+
+        assert await asyncio.wait_for(enter_again(), 2)
+
+    asyncio.run(run())
+
+
 def test_codemode_preserves_first_concurrent_host_error() -> None:
     async def run() -> None:
         session = CodeModeSession(CodeModeLimits(max_concurrent_calls=2))
@@ -832,6 +865,45 @@ def test_codemode_preserves_first_concurrent_host_error() -> None:
                 invoke=invoke,
             )
         assert arrived == 2
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_codemode_fatal_host_error_ends_the_run_even_when_the_script_catches_it() -> None:
+    # #214 K2: a budget stop caught by generated code must still end the run, while an
+    # ordinary tool error the script handles stays handled.
+    async def run() -> None:
+        session = CodeModeSession(CodeModeLimits())
+        session.update_tools([_integer_tool("spend"), _integer_tool("flaky")])
+        session.get_tool_schema(tool_names=["spend", "flaky"])
+
+        async def invoke(name: str, _arguments: dict[str, Any]) -> Any:
+            if name == "spend":
+                raise RunBudgetExceeded("request_limit", 1, 1, 0)
+            raise RuntimeError("transient")
+
+        guarded = "try:\n    await {name}(value=1)\nexcept Exception:\n    pass\n'after'"
+        with pytest.raises(RunBudgetExceeded):
+            await session.execute_code(code=guarded.format(name="spend"), invoke=invoke)
+        result = await session.execute_code(code=guarded.format(name="flaky"), invoke=invoke)
+        assert "after" in json.dumps(result)
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_codemode_sandbox_memory_is_bounded_and_the_session_survives() -> None:
+    # #214 K3: generated code cannot grow the host process past the Monty heap ceiling.
+    async def run() -> None:
+        session = CodeModeSession(CodeModeLimits(max_memory_bytes=32 * 1024 * 1024))
+
+        async def unused(_name: str, _arguments: dict[str, Any]) -> Any:
+            raise AssertionError("no tool is called")
+
+        result = await session.execute_code(code="x = [0] * (10**8)\nlen(x)", invoke=unused)
+        assert "memory limit exceeded" in json.dumps(result)
+        assert "2" in json.dumps(await session.execute_code(code="1 + 1", invoke=unused))
         await session.close()
 
     asyncio.run(run())

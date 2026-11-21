@@ -9,6 +9,16 @@ from lsprotocol import types as lsp
 
 from kedi.lang.ast import Span
 from kedi.lsp import coordinates
+from kedi.lsp.completion_source import parse_completion_source
+from kedi.lsp.python_virtual.document import compute_python_virtual_document
+from tests.lsp_helpers import (
+    definition_at,
+    diagnostics_for,
+    inlay_hints_for_lines,
+    references_at,
+    rename_at,
+    signature_help_at,
+)
 
 
 def test_coordinate_conversions_handle_utf16_and_tree_sitter_edges() -> None:
@@ -100,3 +110,125 @@ def test_coordinate_source_caches_lines_and_line_starts() -> None:
     source = coordinates.CoordinateSource("a\nb", None)
     assert source.lines is source.lines
     assert source._line_starts is source._line_starts
+
+
+# --- #214 LSP coordinate and coverage fixes ------------------------------------------------
+
+_URI = "file:///tmp/audit.kedi"
+_PATH = "/tmp/audit.kedi"
+
+
+def _starts(locations: list[lsp.Location]) -> list[tuple[int, int]]:
+    return [(item.range.start.line, item.range.start.character) for item in locations]
+
+
+def test_references_after_non_ascii_text_resolve() -> None:
+    # 6.6: candidates were resolved at their byte column, which drifts after `ş`.
+    source = "@f(x: str) -> str:\n  = şş <x> şş <x>\n= <f(`'a'`)>\n"
+    assert _starts(references_at(source, _URI, _PATH, "x", True)) == [(0, 3), (1, 8), (1, 15)]
+
+
+def test_tab_indented_python_fence_keeps_whole_lines() -> None:
+    # 6.8: the dedent counted a tab as four characters and cut into the line.
+    source = "@f() -> int:\n  = ```\n\tvalue = 1\n\treturn value\n  ```\n= `f()`\n"
+    virtual = compute_python_virtual_document(source, _PATH, focus_line=2)
+    assert "    return value" in virtual["text"].splitlines()
+
+
+def test_signature_help_and_inlay_hints_inside_control_blocks() -> None:
+    # 6.12: calls inside `> if:` bodies were skipped.
+    source = "@add(a: int, b: int) -> int:\n  = `a + b`\n> if: `True`:\n  [r: int] = <add(1, 2)>\n= `1`\n"
+    help_ = signature_help_at(source, _PATH, "1, 2", offset=3)
+    assert help_ is not None and help_.active_parameter == 1
+    assert [item.label for item in inlay_hints_for_lines(source, _PATH, 0, 5)] == ["a: ", "b: "]
+
+
+def test_signature_help_label_offsets_count_utf16_units() -> None:
+    # 6.12: offsets index the label in UTF-16 code units.
+    source = "@add(a: Annotated[str, '𝄞'], b: int) -> str:\n  = <a>\n= <add(x, 1)>\n"
+    help_ = signature_help_at(source, _PATH, "x, 1", offset=3)
+    assert help_ is not None
+    (signature,) = help_.signatures
+    start, end = signature.parameters[1].label
+    units = signature.label.encode("utf-16-le")
+    assert units[2 * start : 2 * end].decode("utf-16-le").startswith("b")
+
+
+def test_parameter_declarations_skip_names_inside_types_and_defaults() -> None:
+    # 6.14: the next parameter was searched from the end of the previous name.
+    nested = (
+        "@outer() -> str:\n  @f(a: str = `'(b)'`, b: str = `'c'`) -> str:\n    = <a> <b>\n"
+        "  = <f()>\n= <outer()>\n"
+    )
+    found = definition_at(nested, _URI, _PATH, "<b>", offset=1)
+    assert found is not None and (found.range.start.line, found.range.start.character) == (1, 23)
+    typed = "@f(note: Annotated[str, 'a b'], b: str) -> str:\n  = <b>\n= <f(x, y)>\n"
+    found = definition_at(typed, _URI, _PATH, "<b>", offset=1)
+    assert found is not None and found.range.start.character == 32
+
+
+def test_references_and_rename_cover_export_lists() -> None:
+    # 6.17: `> export:` entries were neither references nor renamed.
+    source = (
+        "> export:\n  helper\n  Item\n@helper() -> str:\n  = x\n~Item(a: int)\n"
+        "@main() -> str:\n  > use: helper\n  [r] << Call <helper()>\n  = <r>\n= <main()>\n"
+    )
+    assert (1, 2) in _starts(references_at(source, _URI, _PATH, "helper", True, occurrence=2))
+    assert (2, 2) in _starts(references_at(source, _URI, _PATH, "Item", True, occurrence=2))
+    edit = rename_at(source, _URI, _PATH, "helper", "assist", occurrence=2)
+    assert edit is not None and edit.changes is not None
+    assert (1, 2) in {(e.range.start.line, e.range.start.character) for e in edit.changes[_URI]}
+
+
+def test_completion_recovery_keeps_later_byte_offsets() -> None:
+    # 6.22: a placeholder longer than the unfinished line shifted every later span.
+    source = "@f() -> str:\n  = x\n  >\n@g() -> str:\n  = y\n= <f()>\n"
+    program = parse_completion_source(source, None, 2)
+    (later,) = [proc for proc in program.procedures if proc.name == "g"]
+    assert later.loc is not None and later.loc.start_byte == source.encode().index(b"@g")
+    only_line = "@f() -> str:\n  >\n@g() -> str:\n  = y\n= <f()>\n"
+    assert {proc.name for proc in parse_completion_source(only_line, None, 1).procedures} == {
+        "f",
+        "g",
+    }
+
+
+def test_diagnostics_check_procedures_defined_in_top_level_blocks() -> None:
+    # 6.23: procedures inside top-level blocks were not visited.
+    source = "> if: `True`:\n  @g() -> int:\n    [y] := `2`\n    = `1`\n= `1`\n"
+    assert [d.code for d in diagnostics_for(source, _PATH)] == ["K-ASSIGN-UNKNOWN"]
+
+
+def test_export_references_only_for_listed_top_level_symbols() -> None:
+    # 6.17: an export of other names adds nothing; a nested namesake is not the exported one.
+    listed = (
+        "> export:\n  other\n> export:\n  helper\n@other() -> str:\n  = o\n"
+        "@helper() -> str:\n  = x\n= <helper()>\n"
+    )
+    assert (3, 2) in _starts(references_at(listed, _URI, _PATH, "helper", True, occurrence=2))
+    nested = (
+        "> export:\n  helper\n@helper() -> str:\n  = x\n@outer() -> str:\n"
+        "  @helper() -> str:\n    = inner\n  = <helper()>\n= <outer()> <helper()>\n"
+    )
+    assert (1, 2) not in _starts(references_at(nested, _URI, _PATH, "helper", True, occurrence=3))
+    assert (1, 2) in _starts(references_at(nested, _URI, _PATH, "helper", True, occurrence=2))
+    local_type = (
+        "> export:\n  Item\n~Item(a: int)\n@f() -> int:\n  ~Item(b: int)\n"
+        "  [i: Item] = `Item(b=1)`\n  = `i.b`\n= `f()`\n"
+    )
+    assert (1, 2) not in _starts(references_at(local_type, _URI, _PATH, "Item", True, occurrence=3))
+    assert (1, 2) in _starts(references_at(local_type, _URI, _PATH, "Item", True, occurrence=2))
+
+
+def test_parameter_split_handles_unclosed_headers_and_unknown_names() -> None:
+    # 6.14: a header without its closing parenthesis still splits, and a segment that is
+    # not a parameter is skipped.
+    from kedi.lang.ast import ProcedureDef
+    from kedi.lsp.features import scope
+
+    assert list(scope._parameter_starts("@f(a, [b, c], `d,e`, 'f,g'", 3)) == [3, 5, 13, 20]
+    source = "@f(extra, b) -> str:\n  = <b>\n"
+    loc = Span(0, len(source), 1, 1, 2, 8)
+    proc = ProcedureDef(name="f", params=["b"], loc=loc)
+    with coordinates.source_coordinates(source, None):
+        assert [name for name, _span in scope._param_decls(proc)] == ["b"]

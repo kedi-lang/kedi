@@ -6,7 +6,7 @@ import dotenv
 
 
 def main(*args: Any, **kwargs: Any) -> Any:
-    dotenv.load_dotenv()
+    dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
 
     from .cli import main as cli_main
 

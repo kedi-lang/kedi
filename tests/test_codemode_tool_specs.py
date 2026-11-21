@@ -19,8 +19,15 @@ from kedi.agent_adapter.codemode.tool_specs import (
     approval_policies,
     codemode_projection,
 )
+from kedi.agent_adapter.hooks import PreToolUseDecision
+from kedi.agent_adapter.hooks.dispatcher import (
+    HookDispatcher,
+    HookDispatcherSnapshot,
+    bind_hook_dispatcher,
+)
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import McpServerSpec
+from kedi.agent_profile.hooks import HookSettings
 
 
 def test_tool_spec_bridge_exposes_only_uniform_controls() -> None:
@@ -421,3 +428,55 @@ def test_codemode_mcp_configs_and_result_normalization() -> None:
             await spec.fn()
 
     asyncio.run(run())
+
+
+def test_codemode_runs_pre_tool_use_before_approval_and_approves_the_edit() -> None:
+    # #214 2.1: the documented order is pre_tool_use -> edit -> approval -> execution, so an
+    # edited argument is what gets approved, and the hook runs once.
+    events: list[str] = []
+    approved: list[dict[str, Any]] = []
+
+    def hook(event: Any) -> PreToolUseDecision:
+        events.append("pre")
+        return PreToolUseDecision.edit({"path": "edited"})
+
+    def review(request: Any) -> ApprovalDecision:
+        events.append("approval")
+        approved.append(dict(request.arguments))
+        return ApprovalDecision.allow()
+
+    def write(*, path: str) -> str:
+        events.append("body")
+        return path
+
+    bridge = CodeModeToolSpecBridge(
+        [
+            ToolSpec(
+                fn=write,
+                name="write",
+                risk="mutating",
+                json_schema={
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            )
+        ],
+        limits=CodeModeLimits(),
+        policies=(ApprovalPolicy.dynamic(review),),
+        adapter_shortname="test",
+    )
+    dispatcher = HookDispatcher(
+        HookDispatcherSnapshot.compose(None, HookSettings(pre_tool_use=(hook,)))
+    )
+
+    async def run() -> Any:
+        with bind_hook_dispatcher(dispatcher):
+            try:
+                return await bridge._invoke("write", {"path": "original"})
+            finally:
+                await bridge.close()
+
+    assert asyncio.run(run()) == "edited"
+    assert events == ["pre", "approval", "body"]
+    assert approved == [{"path": "edited"}]

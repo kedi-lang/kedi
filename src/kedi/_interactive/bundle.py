@@ -356,7 +356,12 @@ def read_python_bundle(path: str | Path, *, trusted: bool) -> LoadedBundle:
     # This gate precedes even manifest parsing and optional dependency inspection.
     if trusted is not True:
         raise SnapshotTrustRequired(
-            "Python snapshots can execute arbitrary Python code and contain credentials; pass trusted=True only for a trusted snapshot"
+            "Python snapshots can execute arbitrary Python code and contain credentials; pass trusted=True only for a trusted snapshot",
+            cli_message=(
+                "This is a Python snapshot; loading it can execute arbitrary Python code "
+                "and its saved values may contain credentials. Rerun with --trust-snapshot "
+                "only if you trust its source."
+            ),
         )
     root: Path | None = None
     try:

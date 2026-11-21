@@ -21,6 +21,7 @@ import kedi.artifacts.projection as artifacts_projection_module
 from kedi.agent_adapter.conversation import ConversationState
 from kedi.artifacts import (
     ArtifactAccessError,
+    ArtifactError,
     ArtifactExpiredError,
     ArtifactHandle,
     ArtifactInputError,
@@ -1753,3 +1754,26 @@ def test_artifact_management_tool_functions_delegate_to_manager() -> None:
         assert release.fn(ref_id=artifact.ref.ref_id)["status"] == "released"
     finally:
         manager.close()
+
+
+def test_file_store_restore_rejects_a_reference_id_another_session_holds(tmp_path: Path) -> None:
+    # #214 4.9: records are keyed by reference id, so a copied session directory must not
+    # replace the artifact of the session that owns that id.
+    root = tmp_path / "artifacts"
+    store = FileArtifactStore(root)
+    store.put(_record(session_id="owner"), serialize_artifact("value", preview_chars=10))
+    copy = root / "copy"
+    copy.mkdir()
+    for source in (root / "owner").iterdir():
+        target = copy / source.name
+        target.write_bytes(source.read_bytes())
+        if source.suffix == ".json":
+            metadata = json.loads(source.read_text(encoding="utf-8"))
+            metadata["session_id"] = "copy"
+            target.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="already held by session 'owner'"):
+        store.restore_session(
+            "copy", monotonic_now=0, wall_now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+        )
+    assert store.get_record("owner", "art_test").session_id == "owner"

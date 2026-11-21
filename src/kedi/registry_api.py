@@ -7,11 +7,12 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from http.client import HTTPMessage
 from pathlib import PurePosixPath
-from typing import Any
+from typing import IO, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .package_manifest import validate_package_name
 
@@ -109,7 +110,7 @@ class HTTPRegistryAPIClient:
             headers={"Accept": "application/json", "User-Agent": "kedi-package-registry/1"},
         )
         try:
-            with urlopen(request, timeout=REGISTRY_REQUEST_TIMEOUT_SECONDS) as response:
+            with _registry_open(request, self.base_url) as response:
                 _require_same_origin(self.base_url, response.geturl())
                 declared_size = response.headers.get("Content-Length")
                 if declared_size is not None and int(declared_size) > MAX_REGISTRY_RESPONSE_BYTES:
@@ -280,6 +281,31 @@ def _is_loopback_hostname(hostname: str | None) -> bool:
         return ipaddress.ip_address(hostname).is_loopback
     except ValueError:
         return False
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    """Check every redirect hop before following it, not only the final URL."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self._base_url = base_url
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        _require_same_origin(self._base_url, newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _registry_open(request: Request, base_url: str) -> Any:
+    opener = build_opener(_SameOriginRedirectHandler(base_url))
+    return opener.open(request, timeout=REGISTRY_REQUEST_TIMEOUT_SECONDS)
 
 
 def _require_same_origin(base_url: str, response_url: str) -> None:

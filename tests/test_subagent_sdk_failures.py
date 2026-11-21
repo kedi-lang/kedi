@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Generator, Sequence
 from contextlib import asynccontextmanager, nullcontext
+from threading import Lock
+from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
@@ -31,6 +33,7 @@ from kedi.agent_adapter.adapters.langchain.runtime import (
 from kedi.agent_adapter.adapters.pydantic.live import InputDeliveryCapability, run_with_input
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import SubagentConversationContext
+from kedi.agent_adapter.subagents.communication import stop_descendants
 from kedi.agent_adapter.subagents.control import (
     LiveInput,
     RunInterrupted,
@@ -691,3 +694,30 @@ async def test_failed_native_stop_drains_its_operation_without_restarting(
     finally:
         native.cancel()
         await asyncio.gather(native, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_descendant_cleanup_cancels_every_child_before_raising() -> None:
+    # #214 2.12: a child whose cancel fails (its loop is gone) must not stop the rest.
+    cancelled: list[str] = []
+
+    def cancel(child_id: str) -> bool:
+        if child_id == "gone":
+            raise KediExecutionError("owner event loop is closed")
+        cancelled.append(child_id)
+        return True
+
+    async def wait(_child_id: str) -> None:
+        return None
+
+    coordinator = SimpleNamespace(
+        _task_lock=Lock(),
+        _tasks={"gone": object(), "live": object()},
+        runs=SimpleNamespace(get=lambda _child: SimpleNamespace(parent_run_id="parent")),
+        cancel=cancel,
+        wait=wait,
+        _controls={},
+    )
+    with pytest.raises(KediExecutionError, match="owner event loop is closed"):
+        await stop_descendants(coordinator, "parent")  # type: ignore[arg-type]
+    assert cancelled == ["live"]

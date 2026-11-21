@@ -47,6 +47,7 @@ def validate_package_metadata(
     *,
     enforce_python_compatibility: bool = False,
     python_version: tuple[int, int] | None = None,
+    allow_direct_references: bool = True,
 ) -> None:
     """Validate metadata that tree-sitter syntax alone cannot prove.
 
@@ -63,9 +64,16 @@ def validate_package_metadata(
 
     for dependency in metadata.python_dependencies:
         try:
-            Requirement(dependency)
+            requirement = Requirement(dependency)
         except InvalidRequirement as exc:
             raise ValueError(f"invalid Python dependency {dependency!r}") from exc
+        # A remote package must not pull code from outside the package index through a
+        # direct reference (`pkg @ file://…`, `pkg @ https://…`); local packages may.
+        if not allow_direct_references and requirement.url is not None:
+            raise ValueError(
+                f"Python dependency {dependency!r} uses a direct URL; "
+                "name a package from the index instead"
+            )
 
     if metadata.python_requirement is None:
         return

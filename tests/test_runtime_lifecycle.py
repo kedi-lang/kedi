@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import linecache
 import threading
 
 import pytest
@@ -71,3 +72,39 @@ def test_close_rejects_new_invocations_while_joining_admitted_sync_work() -> Non
         await runtime.aclose()
 
     asyncio.run(scenario())
+
+
+def test_root_aclose_closes_imported_module_runtimes_and_their_linecache(tmp_path) -> None:
+    # #214 1.13 / 1.6: imported modules own their resources, and each runtime's Python
+    # origins are named apart in the process-wide linecache and released on close.
+    (tmp_path / "helpers.kedi").write_text(
+        "@double(x: int) -> int:\n  = `x * 2`\n\n> export:\n  double\n", encoding="utf-8"
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: helpers:\n  double\n\n= `double(21)`\n", encoding="utf-8")
+    runtime = compile_program(parse_program(main.read_text(), source_path=str(main)))
+    assert runtime.run_main() == 42
+    module = runtime._module_runtimes["helpers"]
+    assert module._python_origin_prefix != runtime._python_origin_prefix
+    origins = [*runtime._python_origins, *module._python_origins]
+    assert origins and all(name in linecache.cache for name in origins)
+
+    asyncio.run(runtime.aclose())
+
+    assert module.artifacts._closed
+    assert not any(name in linecache.cache for name in origins)
+
+
+def test_root_aclose_closes_every_module_runtime_before_raising() -> None:
+    root = compile_program(parse_program("= `1`\n"))
+    other = compile_program(parse_program("= `2`\n"))
+    other.module_name = "other"
+    root._module_runtimes["other"] = other
+
+    async def fail() -> None:
+        raise RuntimeError("root close failed")
+
+    root._lifecycle.aclose = fail  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="root close failed"):
+        asyncio.run(root.aclose())
+    assert other.artifacts._closed

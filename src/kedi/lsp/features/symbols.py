@@ -239,6 +239,29 @@ def _profile_use_entry_spans(
     return spans
 
 
+def _export_name_spans(prog: Program | ProgramWithValidation, name: str) -> list[Span]:
+    """Spans of ``name`` in the program's ``> export:`` lists."""
+    spans: list[Span] = []
+    for export in prog.exports:
+        if export.loc is None or name not in export.names:
+            continue
+        lines = range(export.loc.start_line, export.loc.end_line + 1)
+        for line_number in lines:  # pragma: no branch - a listed name is on one of them
+            line = _program_line_text(prog, line_number, export.loc.source_path) or ""
+            search_start = line.find(":") + 1 if line.strip().startswith("> export:") else 0
+            name_span = _name_token_span_on_line(
+                prog,
+                line_number=line_number,
+                source_path=export.loc.source_path,
+                name=name,
+                search_start=search_start,
+            )
+            if name_span is not None:
+                spans.append(name_span)
+                break
+    return spans
+
+
 def _use_single_target_span(
     prog: Program | ProgramWithValidation,
     stmt: UseDirectiveStmt,

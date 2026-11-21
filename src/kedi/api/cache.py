@@ -6,6 +6,7 @@ import copy
 import hashlib
 import re
 import weakref
+from collections import OrderedDict
 from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -27,11 +28,14 @@ from kedi.lang import parse_program
 
 _MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 
+# Both caches keep the most recently used entries only.
+_CACHE_LIMIT = 256
 
-_PARSE_CACHE: dict[tuple[str, str | None, str], Any] = {}
+_PARSE_CACHE: OrderedDict[tuple[str, str | None, str], Any] = OrderedDict()
+_PARSE_CACHE_LOCK = Lock()
 
 
-_RESPONSE_CACHE: dict[str, Any] = {}
+_RESPONSE_CACHE: OrderedDict[str, Any] = OrderedDict()
 
 
 _RESPONSE_CACHE_LOCK = Lock()
@@ -99,22 +103,37 @@ def _parse_cached(
 ) -> tuple[Any, str]:
     digest = _source_hash(source)
     key = (kind, source_path, digest)
-    program = _PARSE_CACHE.get(key)
-    if program is None:
-        program = parse_program(source, source_path=source_path)
-        _PARSE_CACHE[key] = program
+    with _PARSE_CACHE_LOCK:
+        program = _PARSE_CACHE.get(key)
+        if program is not None:
+            _PARSE_CACHE.move_to_end(key)
+            return program, digest
+    program = parse_program(source, source_path=source_path)
+    with _PARSE_CACHE_LOCK:
+        _remember(_PARSE_CACHE, key, program)
     return program, digest
+
+
+def _remember(cache: OrderedDict[Any, Any], key: Any, value: Any) -> None:
+    """Store ``value`` as the newest entry, evicting the oldest beyond the limit."""
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > _CACHE_LIMIT:
+        cache.popitem(last=False)
 
 
 def cache_info() -> CacheInfo:
     with _RESPONSE_CACHE_LOCK:
         response_entries = len(_RESPONSE_CACHE)
-    return CacheInfo(parse_entries=len(_PARSE_CACHE), response_entries=response_entries)
+    with _PARSE_CACHE_LOCK:
+        parse_entries = len(_PARSE_CACHE)
+    return CacheInfo(parse_entries=parse_entries, response_entries=response_entries)
 
 
 def clear_cache() -> None:
     global _RESPONSE_CACHE_GENERATION
-    _PARSE_CACHE.clear()
+    with _PARSE_CACHE_LOCK:
+        _PARSE_CACHE.clear()
     with _RESPONSE_CACHE_LOCK:
         _RESPONSE_CACHE.clear()
         _RESPONSE_CACHE_GENERATION += 1
@@ -125,7 +144,16 @@ def clear_cache() -> None:
 def _stable_repr(value: Any) -> str:
     if callable(value):
         return f"callable:{_object_identity(value)}"
-    return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
+    text = repr(value)
+    if _MEMORY_ADDRESS_RE.search(text) is None:
+        return text
+    # The repr names an object by address, so equal reprs need not mean equal values: key
+    # on the object's identity, or, when it cannot be tracked, on a token no call repeats.
+    try:
+        weakref.ref(value)
+    except TypeError:
+        return f"uncacheable:{next(_IDENTITY_SERIAL)}"
+    return f"object:{type(value).__qualname__}:{_object_identity(value)}"
 
 
 def _isolate_cached(value: Any) -> Any:
@@ -295,6 +323,7 @@ def _claim_response_cache_key(
     with _RESPONSE_CACHE_LOCK:
         cached = _RESPONSE_CACHE.get(cache_key, _CACHE_MISS)
         if cached is not _CACHE_MISS:
+            _RESPONSE_CACHE.move_to_end(cache_key)
             return cached, None, False
         generation = _RESPONSE_CACHE_GENERATION
         flight = _RESPONSE_IN_FLIGHT.get(cache_key)
@@ -324,7 +353,7 @@ def _finish_response_flight(
         stored_result = _CACHE_MISS
     with _RESPONSE_CACHE_LOCK:
         if error is None and flight.generation == _RESPONSE_CACHE_GENERATION:
-            _RESPONSE_CACHE[cache_key] = stored_result
+            _remember(_RESPONSE_CACHE, cache_key, stored_result)
         if _RESPONSE_IN_FLIGHT.get(cache_key) is flight:
             _RESPONSE_IN_FLIGHT.pop(cache_key)
     if error is None:

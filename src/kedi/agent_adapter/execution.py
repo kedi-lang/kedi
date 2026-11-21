@@ -270,6 +270,8 @@ class _HostLoops:
         self._cleanups: dict[
             asyncio.AbstractEventLoop, dict[int, Callable[[], Awaitable[None]]]
         ] = {}
+        # Strong references to cleanups scheduled on a loop from its own thread.
+        self._pending: set[asyncio.Task[None]] = set()
 
     @contextmanager
     def use(self, loop: asyncio.AbstractEventLoop) -> Generator[None, None, None]:
@@ -284,7 +286,13 @@ class _HostLoops:
                 if last:
                     del self._users[loop]
                 cleanups = list(self._cleanups.pop(loop, {}).values()) if last else []
-            if cleanups:
+            if cleanups and _running_loop() is loop:
+                # On the loop's own thread, blocking on the cleanup would wait forever: run
+                # it as soon as the current callback returns.
+                task = loop.create_task(_run_cleanups(cleanups))
+                self._pending.add(task)
+                task.add_done_callback(self._pending.discard)
+            elif cleanups:
                 asyncio.run_coroutine_threadsafe(_run_cleanups(cleanups), loop).result()
 
     def defer(self, key: int, cleanup: Callable[[], Awaitable[None]]) -> bool:
@@ -336,8 +344,16 @@ class _OperationLoop:
 
 
 async def _run_cleanups(cleanups: list[Callable[[], Awaitable[None]]]) -> None:
+    """Run every cleanup, then raise the first failure: one broken client must not leak
+    the others."""
+    failure: Exception | None = None
     for cleanup in cleanups:
-        await cleanup()
+        try:
+            await cleanup()
+        except Exception as exc:
+            failure = failure or exc
+    if failure is not None:
+        raise failure
 
 
 _OPERATION_LOOP: contextvars.ContextVar[_OperationLoop | None] = contextvars.ContextVar(

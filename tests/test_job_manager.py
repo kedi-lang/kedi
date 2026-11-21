@@ -6,6 +6,8 @@ Mock-backed integration tests can't exercise real rate limits, so the controller
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from kedi.engine import (
@@ -192,3 +194,56 @@ def test_engine_does_not_retry_terminal_error() -> None:
 def test_engine_success_passes_through() -> None:
     eng = _engine()
     assert eng.schedule([], lambda: 42).result() == 42
+
+
+def test_engine_breaker_ignores_terminal_errors_and_first_retry_waits_base_delay() -> None:
+    # #214 5.8: validation failures are not backend trouble, and backoff() is 0-based.
+    delays: list[float] = []
+    eng = JobManagerEngine(
+        max_workers=1,
+        breaker_threshold=2,
+        base_delay=1.0,
+        _sleep=delays.append,
+    )
+    eng.policy.backoff = lambda attempt, *, retry_after=None: float(attempt)  # type: ignore[method-assign]
+
+    def invalid() -> str:
+        raise ValueError("bad request")
+
+    for _ in range(3):
+        with pytest.raises(ValueError):
+            eng.schedule([], invalid).result()
+    calls = {"n": 0}
+
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RateLimitError()
+        return "done"
+
+    assert eng.schedule([], flaky).result() == "done"
+    assert delays == [0.0]
+    eng.shutdown()
+
+
+def test_engine_worker_runs_stolen_top_level_work_under_its_own_permit() -> None:
+    # #214 5.1: a worker waiting inside its permitted job may run another top-level job;
+    # with one permit, asking for a second one deadlocked.
+    eng = JobManagerEngine(max_workers=1, initial_concurrency=1, _sleep=lambda _d: None)
+    inner_future: list[object] = []
+    queued = threading.Event()
+
+    def submit_inner() -> None:
+        inner_future.append(eng.schedule([], lambda: "inner"))
+        queued.set()
+
+    def outer() -> str:
+        submitter = threading.Thread(target=submit_inner)
+        submitter.start()
+        queued.wait(5)
+        submitter.join()
+        return eng.wait(inner_future[0])  # type: ignore[arg-type]
+
+    result = eng.schedule([], outer)
+    assert result.result(timeout=10) == "inner"
+    eng.shutdown()
