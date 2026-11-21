@@ -80,11 +80,22 @@ def run_tests_cli(
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    codegen_agent: str | None = None,
+    codegen_model: str | None = None,
+    codegen_retries: int | None = None,
+    quiet: bool = False,
     use_cache: bool = True,
     runtime_args: CliArgs | None = None,
     forms: Mapping[str, Form] | None = None,
 ) -> Tuple[int, str]:
-    ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
+    ok, err = maybe_run_codegen(
+        source,
+        agent=codegen_agent,
+        model=codegen_model,
+        retries=codegen_retries,
+        use_cache=use_cache,
+        quiet=quiet,
+    )
     if not ok:
         return 1, (err or "Code generation failed")
     kwargs: dict[str, Any] = {
@@ -407,7 +418,7 @@ def maybe_run_codegen(
 
         # Use provided values or fall back to defaults (already handled in CLI)
         agent_kind = agent or "pydantic_ai"
-        max_retries = retries or 5
+        max_retries = 5 if retries is None else retries
 
         ok = run_codegen(
             Path(source_path),

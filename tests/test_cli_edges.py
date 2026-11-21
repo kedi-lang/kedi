@@ -338,6 +338,59 @@ def test_cli_optimize_success_and_failure_paths(
     assert result.output == "program\n"
 
 
+def test_cli_test_forwards_codegen_flags_and_quiet(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    # 5.10: --test forwards the codegen flags and --quiet to codegen, and an
+    # explicit --codegen-retries 0 means 0 retries.
+    import kedi.app as app_module
+
+    source = tmp_path / "auto.kedi"
+    source.write_text(
+        "@build(name: str, raw) -> str:\n  > auto:\n    implement build\n  = ok\n",
+        encoding="utf-8",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_codegen(*args: Any, **kwargs: Any) -> bool:
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(app_module, "run_codegen", fake_run_codegen)
+    result = CliRunner().invoke(
+        cli_module.main,
+        [
+            str(source),
+            "--test",
+            "--codegen-agent",
+            "mock",
+            "--codegen-model",
+            "some/model",
+            "--codegen-retries",
+            "0",
+            "--quiet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0]["agent_kind"] == "mock"
+    assert calls[0]["model"] == "some/model"
+    assert calls[0]["max_retries"] == 0
+    assert calls[0]["quiet"] is True
+
+
+def test_cli_test_and_eval_together_is_usage_error(tmp_path: Path) -> None:
+    # 5.10: --test --eval together is a clear usage error instead of
+    # silently dropping --eval.
+    source = _source(tmp_path)
+    result = CliRunner().invoke(cli_module.main, [str(source), "--test", "--eval"])
+
+    assert result.exit_code == 2
+    assert "--test" in result.output and "--eval" in result.output
+
+
 def test_cli_validation_codegen_program_and_no_cache_paths(
     tmp_path: Path,
     monkeypatch: Any,

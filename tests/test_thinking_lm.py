@@ -87,6 +87,22 @@ class TestStripThinking:
         assert result.output.startswith("[[ ## capital ## ]]")
         assert "Stockholm" in result.output
 
+    def test_field_marker_fallback_keeps_earlier_fields(self) -> None:
+        # 5.4: the first field marker starts the structured output; an
+        # earlier field must not be swallowed into the thinking trace.
+        raw = "[[ ## reasoning ## ]] r [[ ## answer ## ]] 42 [[ ## completed ## ]]"
+        result = _strip_thinking(raw)
+        assert result.thinking == ""
+        assert result.output == raw
+
+    def test_field_marker_fallback_keeps_task_completed_field(self) -> None:
+        # 5.4: only a field literally named "completed" is the terminator;
+        # "task_completed" is an ordinary field.
+        raw = "thinking here [[ ## task_completed ## ]] done"
+        result = _strip_thinking(raw)
+        assert result.thinking == "thinking here "
+        assert result.output == "[[ ## task_completed ## ]] done"
+
     def test_field_marker_fallback_multi_word_field(self) -> None:
         raw = "garbage text\n[[ ## first name ## ]]\nAlice\n"
         result = _strip_thinking(raw)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -24,6 +25,46 @@ def test_dspy_introspection_finds_student_predictor() -> None:
         student = SimpleNamespace(predictor=dspy.Predict("a -> b"))
 
     assert find_primary_predictor(StudentModule()) is not None
+
+
+def test_gepa_metric_wrapper_id_cache_survives_id_reuse() -> None:
+    # 5.7: a non-weakref-able prediction cached by id() must not hand its
+    # score to a different object that reuses the id after it is deleted.
+    class SlotPrediction:
+        __slots__ = ()
+
+    wrapper = GEPAMetricWrapper()
+    prediction = SlotPrediction()
+    wrapper._store_cached_feedback(prediction, 0.25, "feedback-one")
+    freed_id = id(prediction)
+    del prediction
+    gc.collect()
+    # Allocate many same-sized objects; on the unfixed code the freed id is
+    # recycled quickly and the new object reads the dead score. With the fix
+    # the cache holds the prediction alive, so its id can never be recycled —
+    # either way no fresh object may ever hit the dead entry. (Whether the
+    # allocator recycled the id on this run is not asserted: on fixed code
+    # it cannot happen by design.)
+    holders: list[object] = []
+    for _ in range(200_000):
+        candidate = SlotPrediction()
+        holders.append(candidate)
+        assert wrapper._lookup_cached_feedback(candidate) is None
+        if id(candidate) == freed_id:
+            break
+
+
+def test_gepa_metric_wrapper_id_cache_rejects_stale_identity() -> None:
+    # 5.7: an id-cache entry whose stored object is not the looked-up one
+    # is stale and must not hit, even if the entry was planted directly.
+    class SlotPrediction:
+        __slots__ = ()
+
+    wrapper = GEPAMetricWrapper()
+    stored = SlotPrediction()
+    other = SlotPrediction()
+    wrapper._prediction_id_cache[id(other)] = (stored, (0.25, "stale"))
+    assert wrapper._lookup_cached_feedback(other) is None
 
 
 def test_gepa_metric_wrapper_helper_edges() -> None:
@@ -332,6 +373,73 @@ def test_gepa_optimizer_fake_compile_paths(
         "normalize_optimized_prompt_prefix",
         lambda span, prompt: None,
     )
+    with pytest.warns(UserWarning, match="No optimized prompt"):
+        prompts, score = optimizer.optimize_procedure(
+            "p",
+            ["x"],
+            {},
+            [make_optimize_span("missing", [OutputSegment(name="answer")])],
+            [("x", "y")],
+            None,
+            lambda *_: (1.0, None),
+        )
+    assert prompts == {}
+    assert score == 0.0
+
+
+def test_gepa_missing_extraction_warns_without_normalize_patch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 5.6: an extractor that returns nothing must give GEPASpanResult(prompt=None)
+    # and the warning — without patching normalize_optimized_prompt_prefix to
+    # return None. On the unfixed code the missing extraction normalizes to ""
+    # and is silently stored as an empty prompt.
+    import kedi.optimization.gepa as gepa_module
+    import kedi.optimization.gepa_session as gepa_session_module
+
+    class FakeGEPA:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+        def compile(self, **_: Any) -> object:
+            return SimpleNamespace()
+
+    fake_dspy = SimpleNamespace(
+        LM=lambda **kwargs: SimpleNamespace(
+            model=kwargs.get("model"), __call__=lambda prompt: ["ok"]
+        ),
+        GEPA=FakeGEPA,
+        settings=SimpleNamespace(lm=None),
+    )
+    monkeypatch.setattr(gepa_session_module, "dspy", fake_dspy)
+    monkeypatch.setattr(gepa_module, "build_reflection_lm", lambda *args: None)
+
+    source = tmp_path / "source.kedi"
+    source.write_text("= ok\n", encoding="utf-8")
+    log_dir = tmp_path / "source.kedi.gepa" / "p__missing"
+    log_dir.mkdir(parents=True)
+    (log_dir / "gepa_state.bin").write_bytes(b"state")
+
+    optimizer = gepa_module.GEPAOptimizer(
+        OptimizerConfig(max_validation_examples=1),
+        KediRuntime(),
+        source,
+    )
+    cast(Any, optimizer).dspy_config_service = SimpleNamespace(verify_configured=lambda: None)
+    cast(Any, optimizer).example_formatter = SimpleNamespace(
+        format_examples=lambda data, params, span=None, proc_name=None: [SimpleNamespace()]
+    )
+    cast(Any, optimizer).module_builder = SimpleNamespace(
+        build_module=lambda *args: SimpleNamespace()
+    )
+    cast(Any, optimizer).metric_wrapper = SimpleNamespace(
+        wrap_metric=lambda *args, **kwargs: lambda *_: 1.0
+    )
+    cast(Any, optimizer).prompt_extractor = SimpleNamespace(
+        extract_prompts=lambda module, spans: {}
+    )
+    cast(Any, optimizer).score_calculator = SimpleNamespace(calculate_score=lambda *args: 0.6)
+
     with pytest.warns(UserWarning, match="No optimized prompt"):
         prompts, score = optimizer.optimize_procedure(
             "p",

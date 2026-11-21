@@ -809,6 +809,32 @@ def test_parser_telemetry_handles_bytes_multiple_diagnostics_and_internal_errors
     assert backend.finished_spans[0].attributes["error.type"] == "RuntimeError"
 
 
+def test_runtime_span_failure_to_start_leaves_active_counter_balanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 5.15: a span factory that raises must not leak the active counter: the
+    # +1 is only recorded once the span has started.
+    import kedi.telemetry.runtime as runtime_module
+
+    deltas: list[int] = []
+
+    def recording_add(*args: Any, **kwargs: Any) -> None:
+        deltas.append(args[2])
+
+    def raising_span(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("span factory failed")
+
+    monkeypatch.setattr(runtime_module, "add_up_down_counter", recording_add)
+    monkeypatch.setattr(runtime_module, "span", raising_span)
+    monkeypatch.setattr(runtime_module, "telemetry_enabled", lambda *args, **kwargs: True)
+
+    with pytest.raises(RuntimeError, match="span factory failed"):
+        with runtime_span("kedi run failed to start", "run_program"):
+            pass
+
+    assert deltas == []
+
+
 def test_runtime_cancellation_and_backend_lifecycle_are_observable() -> None:
     previous = get_backend()
     backend = RecordingTelemetryBackend()

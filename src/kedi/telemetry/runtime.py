@@ -67,8 +67,6 @@ def runtime_span(
     enabled = telemetry_enabled("runtime", level)
     started_at = perf_counter()
     outcome = "success"
-    if enabled and metrics.active is not None:
-        add_up_down_counter("runtime", metrics.active, 1, attributes=dimensions)
 
     with span(
         "runtime",
@@ -77,6 +75,10 @@ def runtime_span(
         level=level,
         attributes=attributes,
     ) as active:
+        # The active counter is only meaningful once the span has started;
+        # incrementing before span entry leaks +1 when the span fails to start.
+        if enabled and metrics.active is not None:
+            add_up_down_counter("runtime", metrics.active, 1, attributes=dimensions)
         try:
             yield active
         except asyncio.CancelledError as exc:

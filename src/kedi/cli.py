@@ -25,6 +25,7 @@ from kedi.lang.parser.diagnostics import KediParseError
 from kedi.package_audit import PackageAuditResult, audit_installed_packages
 from kedi.package_registry import add_package, install_package
 from kedi.registry_api import RegistryAPIError
+from kedi.settings import ADAPTER_CHOICES
 from kedi.skill_registry import install_skill_path, install_skill_repo
 from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
@@ -187,7 +188,7 @@ def _run_notebook_command(arguments: list[str]) -> int:
 )
 @click.option(
     "--adapter",
-    type=click.Choice(["pydantic", "langchain", "claude", "codex", "acp"]),
+    type=click.Choice(ADAPTER_CHOICES),
     envvar="KEDI_ADAPTER",
     default="pydantic",
     help="Backend adapter for template execution",
@@ -407,6 +408,8 @@ def main(
         return 0
     if trust_snapshot and (not idle_mode or load_session_path is None):
         raise click.UsageError("--trust-snapshot requires --idle --load.")
+    if test and do_eval:
+        raise click.UsageError("--test and --eval cannot be combined.")
     if idle_mode:
         if source is not None or command_source is not None:
             raise click.UsageError("--idle does not accept SOURCE or -c/--command.")
@@ -573,6 +576,10 @@ def main(
                         source,
                         adapter=adapter,
                         model=adapter_model,
+                        codegen_agent=codegen_agent,
+                        codegen_model=codegen_model,
+                        codegen_retries=codegen_retries,
+                        quiet=quiet,
                         use_cache=not no_cache,
                         runtime_args=runtime_args,
                         forms=forms,

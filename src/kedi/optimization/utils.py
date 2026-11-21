@@ -111,18 +111,18 @@ def span_to_instruction(
     return base
 
 
-def normalize_optimized_prompt_prefix(span: OptimizeSpan, instructions: str | None) -> str:
+def normalize_optimized_prompt_prefix(span: OptimizeSpan, instructions: str) -> str:
     """Convert a full DSPy instruction string into the stored prefix form.
 
     Kedi persists only the optimized prefix and keeps the original span lines as the
     canonical typed seed prompt. GEPA/DSPy often surface a full instruction string
     that ends with that canonical seed prompt. Strip any trailing copies of the seed
     so reloading the saved prompt does not duplicate the base instructions.
-    """
-    if instructions is None:
-        return ""
 
-    current = str(instructions).rstrip()
+    ``instructions`` must be a string; a missing extraction is signalled by the
+    caller (``None``) before this runs, never by an empty prefix.
+    """
+    current = instructions.rstrip()
     if not current:
         return ""
 

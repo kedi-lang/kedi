@@ -324,6 +324,25 @@ def test_native_objects_optional_python_values_and_sandbox_aliases():
         parse_field("settings", "callbacks", "callback")
 
 
+def test_parse_scalar_keeps_trailing_underscore_fraction_as_string() -> None:
+    # 5.16: "1._" is not a float; it stays the string "1._".
+    from kedi.directive_values import parse_scalar
+
+    assert parse_scalar("1._") == "1._"
+    assert parse_scalar("1.5_") == "1.5_"
+    assert parse_scalar("1.") == 1.0
+    assert parse_scalar("1.5") == 1.5
+    assert parse_scalar("1_000.5") == 1000.5
+    assert parse_scalar("1_000") == 1000
+
+
+def test_string_rules_keep_literal_with_trailing_underscore_fraction() -> None:
+    # 5.16: string rules must not route through parse_scalar's float coercion.
+    from kedi.directive_values import parse_field
+
+    assert parse_field("settings", "api_key", "1._") == "1._"
+
+
 @pytest.mark.parametrize(
     "source",
     [

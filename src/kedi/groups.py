@@ -18,10 +18,14 @@ from typing import Literal
 from kedi.lang.ast import (
     ConditionalLoopStmt,
     FormProducer,
+    GroupStmt,
     IfStmt,
     LoopStmt,
     RawInvokeStmt,
+    SendStmt,
     Stmt,
+    TaskGroupStmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
 )
@@ -144,7 +148,9 @@ def _model_call_ordinals(body: Sequence[Stmt]) -> dict[int, int]:
 
     def visit(statements: Sequence[Stmt]) -> None:
         for statement in statements:
-            if isinstance(statement, (TemplateBlock, TemplateLine, RawInvokeStmt)) or (
+            if isinstance(
+                statement, (TemplateBlock, TemplateLine, RawInvokeStmt, TaskStmt, SendStmt)
+            ) or (
                 isinstance(statement, (IfStmt, ConditionalLoopStmt))
                 and statement.condition_segments is not None
             ):
@@ -156,6 +162,11 @@ def _model_call_ordinals(body: Sequence[Stmt]) -> dict[int, int]:
                 visit(statement.body)
                 visit(statement.map_body or [])
             elif isinstance(statement, ConditionalLoopStmt):
+                visit(statement.body)
+            elif isinstance(statement, TaskGroupStmt):
+                for arm in statement.arms:
+                    visit(arm.body or [])
+            elif isinstance(statement, GroupStmt):
                 visit(statement.body)
 
     visit(body)

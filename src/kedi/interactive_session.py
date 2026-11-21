@@ -99,9 +99,11 @@ class InteractiveSession:
             resolved_name = source_name or f"<interactive:{cell_number}>"
             if resolved_name in self._source_names:
                 raise ValueError(f"Interactive source name {resolved_name!r} was already used")
-            self._source_names.add(resolved_name)
 
             program = parse_program(source, source_path=resolved_name)
+            # Only a successfully parsed fragment claims the name; a parse
+            # error leaves it free for a later fragment.
+            self._source_names.add(resolved_name)
             try:
                 prepared = self._compiler.prepare_fragment(
                     program,
