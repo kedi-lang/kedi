@@ -7,13 +7,16 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from packaging.requirements import InvalidRequirement, Requirement
-
+# Stdlib only: the dependency-locks CI job runs this script with a bare
+# setup-python (no third-party packages installed).
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_REF = re.compile(r"^\s*uses:\s*([^\s#]+)@([^\s#]+)", re.MULTILINE)
 EXACT_ACTION_REF = re.compile(r"[0-9a-f]{40}")
 REQUIREMENT_OPERATOR = re.compile(r"(?:===|==|~=|!=|<=|>=|<|>)")
 EXACT_SEMVER = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?")
+_REQUIREMENT_NAME = re.compile(r"[A-Za-z0-9._-]+(?:\[[^\]]*\])?")
+_SPECIFIER = re.compile(r"(===|==|~=|!=|<=|>=|<|>)\s*([^\s,;]+)")
+_VERSION = re.compile(r"[0-9][0-9A-Za-z._+!]*")
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -28,13 +31,23 @@ def _requirement_has_bound(requirement: str) -> bool:
 
 def _requirement_is_exact(requirement: str) -> bool:
     requirement = requirement.split(";", 1)[0].strip()
-    try:
-        parsed = Requirement(requirement)
-    except InvalidRequirement:
+    name_match = _REQUIREMENT_NAME.match(requirement)
+    if name_match is None:
         return False
-    specifiers = list(parsed.specifier)
+    rest = requirement[name_match.end() :].strip()
+    if not rest:
+        return False
+    specifiers: list[tuple[str, str]] = []
+    for part in rest.split(","):
+        match = _SPECIFIER.fullmatch(part.strip())
+        if match is None:
+            return False
+        specifiers.append((match.group(1), match.group(2)))
     return (
-        len(specifiers) == 1 and specifiers[0].operator == "==" and "*" not in specifiers[0].version
+        len(specifiers) == 1
+        and specifiers[0][0] == "=="
+        and "*" not in specifiers[0][1]
+        and _VERSION.fullmatch(specifiers[0][1]) is not None
     )
 
 

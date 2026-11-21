@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts import check_dependency_pins
+
+
+def test_script_runs_without_third_party_packages() -> None:
+    """The dependency-locks CI job runs this script with a bare setup-python.
+
+    A third-party import (e.g. `packaging`) breaks the job with
+    ModuleNotFoundError, so the script must stay stdlib-only.
+    """
+    text = (Path(__file__).resolve().parents[1] / "scripts/check_dependency_pins.py").read_text(
+        encoding="utf-8"
+    )
+    assert "packaging" not in text
 
 
 @pytest.mark.parametrize(
