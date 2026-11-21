@@ -646,6 +646,7 @@ def main(
                 model=adapter_model,
                 runtime_args=runtime_args,
                 forms=forms,
+                use_cache=not no_cache,
             )
             if out:
                 click.echo(out)

@@ -462,9 +462,12 @@ def test_codegen_orchestrator_happy_path(tmp_path: Path) -> None:
     assert results and all(c.success for s in results for c in s.cases)
 
 
-def test_codegen_orchestrator_success_with_no_cache_removes_generated_cache(
+def test_codegen_orchestrator_success_with_no_cache_keeps_generated_cache_for_run(
     tmp_path: Path,
 ) -> None:
+    # 1.2 (Tekir Q 1.2 decision): a successful generation keeps the cache so
+    # the program run that follows can load the generated procedure. Cleanup
+    # with use_cache=False happens in app.py after the run, not here.
     src = tmp_path / "g.kedi"
     src.write_text(
         "@f():\n  > auto: \n    implement a function returning ok\n\n= <f()>\n",
@@ -473,6 +476,27 @@ def test_codegen_orchestrator_success_with_no_cache_removes_generated_cache(
     mgr = CodegenManager(MockPassingAgent(), use_cache=False)
 
     assert mgr.orchestrate_generation(src, "@f():", "implement", "spec")
+    cache = tmp_path / "g.cache.kedi"
+    assert cache.exists()
+    assert "# >>> kedi-codegen: f" in cache.read_text(encoding="utf-8")
+
+
+def test_no_cache_test_run_keeps_generated_cache_until_after_run(tmp_path: Path) -> None:
+    # 1.2 end-to-end: with use_cache=False the generated procedure must
+    # still run (the cache is present during the run) and the cache file
+    # must be gone afterwards.
+    from kedi.app import run_tests_cli
+
+    src = tmp_path / "g.kedi"
+    src.write_text(
+        "@f():\n  > auto: \n    implement a function returning ok\n\n= <f()>\n",
+        encoding="utf-8",
+    )
+    code, out = run_tests_cli(str(src), codegen_agent="mock", use_cache=False)
+    assert code == 0, out
+    # The generated tests must actually have run — on base the cache is
+    # deleted before the run, so the suite is empty and nothing runs.
+    assert "f::basic: OK" in out and "f::return_type: OK" in out
     assert not (tmp_path / "g.cache.kedi").exists()
 
 
@@ -678,7 +702,14 @@ def test_codegen_keeps_one_loop_for_tests_and_implementation(
         assert asyncio.run(async_generate()) if async_host else generate()
     assert len(loops) == 2
     assert loops[0].is_closed()
-    assert not source.with_suffix(".cache.kedi").exists()
+    if fail_implementation:
+        # A failed generation cleans its own cache block.
+        assert not source.with_suffix(".cache.kedi").exists()
+    else:
+        # 1.2 (Tekir Q 1.2 decision): a successful generation keeps the
+        # cache for the run that follows; the caller (app.py) removes it
+        # after the run, so run_codegen on its own leaves it behind.
+        assert source.with_suffix(".cache.kedi").exists()
 
 
 def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(

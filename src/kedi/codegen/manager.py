@@ -240,7 +240,12 @@ class CodegenManager:
             success = self._orchestrate_generation(source_path, proc_header, prompt, spec, name)
             return success
         finally:
-            if not success or not self.use_cache:
+            # Only a failed generation cleans its cache block here: on
+            # success the cache must survive so the program run that
+            # follows can load the generated procedure. With
+            # use_cache=False the caller (app.py) removes the cache after
+            # the run, in a finally.
+            if not success:
                 self.cleanup_failed_cache(source_path, name)
 
     def _orchestrate_generation(
