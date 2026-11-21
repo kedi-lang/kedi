@@ -3467,7 +3467,7 @@ def test_host_main_forwards_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_main(*, args: list[str] | None, prog_name: str) -> None:
         calls.append((args, prog_name))
 
-    def fake_load_dotenv() -> None:
+    def fake_load_dotenv(*_args: object) -> None:
         nonlocal dotenv_calls
         dotenv_calls += 1
 

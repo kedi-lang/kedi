@@ -363,6 +363,40 @@ def test_parallel_map_uses_record_local_template_outputs() -> None:
         engine.shutdown()
 
 
+def test_parallel_map_iterations_that_define_procedures_do_not_cross_talk() -> None:
+    # #214 1.11: procedures live in a runtime-wide table, so each iteration must see its own
+    # helper and none may leak once the map finishes.
+    class ItemAdapter(MockAdapter):
+        def produce_sync(self, *, template: str, output_schema=None, **kwargs: Any):
+            return AttrDict({"seen": int(template.split("candidate ", 1)[1].split(" ", 1)[0])})
+
+    engine = ThreadEngine(max_workers=4)
+    runtime = compile_program(
+        parse_program(
+            """
+@outer() -> list:
+  [results: list] = `[]`
+  > loop [item]: `list(range(8))`:
+    >> candidate <item> as [seen: int]
+  > map:
+    @tag() -> int:
+      = `item * 100`
+    `__import__("time").sleep(0.05)`
+    `results.append((seen, tag()))`
+  = `sorted(results)`
+= `outer()`
+""".lstrip()
+        ),
+        adapter=ItemAdapter(),
+        engine=engine,
+    )
+    try:
+        assert runtime.run_main() == [(item, item * 100) for item in range(8)]
+        assert "tag" not in runtime._procedures
+    finally:
+        engine.shutdown()
+
+
 def test_parallel_map_chains_a_second_template_per_iteration_record() -> None:
     class ChainedAdapter(MockAdapter):
         def __init__(self) -> None:
@@ -1407,3 +1441,13 @@ def test_loop_iteration_limit_must_be_a_positive_integer() -> None:
     with pytest.raises(ValueError, match="positive integer"):
         with kedi.context(loop_iteration_limit=False):
             pass
+
+
+def test_scoped_name_detection_looks_into_nested_blocks() -> None:
+    from kedi.lang.compiler.statement_compiler import _defines_scoped_names
+
+    program = parse_program(
+        "@p() -> int:\n    > if: `True`:\n        @q() -> str:\n            = `'x'`\n"
+        "    = `1`\n= `p()`\n"
+    )
+    assert _defines_scoped_names(program.procedures[0].body)

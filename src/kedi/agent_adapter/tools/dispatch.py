@@ -34,9 +34,10 @@ class SequentialDispatchGate:
             try:
                 yield
             finally:
-                async with self._condition:
-                    self._exclusive = False
-                    self._condition.notify_all()
+                # Release synchronously: a cancellation while waiting for the condition lock
+                # must not leave the gate exclusive forever.
+                self._exclusive = False
+                await self._notify_waiters()
             return
 
         async with self._condition:
@@ -47,7 +48,14 @@ class SequentialDispatchGate:
         try:
             yield
         finally:
+            self._active_parallel -= 1
+            if self._active_parallel == 0:
+                await self._notify_waiters()
+
+    async def _notify_waiters(self) -> None:
+        async def notify() -> None:
             async with self._condition:
-                self._active_parallel -= 1
-                if self._active_parallel == 0:
-                    self._condition.notify_all()
+                self._condition.notify_all()
+
+        # Shielded so the waiters are woken even when the releasing task is cancelled.
+        await asyncio.shield(notify())

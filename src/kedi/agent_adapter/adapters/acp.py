@@ -461,6 +461,9 @@ class ACPAdapter(HookRegistrationMixin):
         self._clients: dict[
             tuple[tuple[str, ...], str, tuple[tuple[str, str], ...]], ACPClient
         ] = {}
+        # Concurrent runs share one client per command; the lock keeps them from each
+        # starting (and leaking) their own subprocess.
+        self._clients_lock = Lock()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_acp_profile_stack_{id(self)}",
             default=(),
@@ -564,9 +567,11 @@ class ACPAdapter(HookRegistrationMixin):
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
-        for client in self._clients.values():
+        with self._clients_lock:
+            clients = tuple(self._clients.values())
+            self._clients.clear()
+        for client in clients:
             client.close()
-        self._clients.clear()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
@@ -593,10 +598,12 @@ class ACPAdapter(HookRegistrationMixin):
                 "or ACPAdapter(command=...)."
             )
         key = (command, cwd, tuple(sorted(env.items())))
-        client = self._clients.get(key)
-        if client is None:
-            client = ACPClient(command, env=env, cwd=cwd, request_timeout=self._request_timeout)
-            self._clients[key] = client
+        with self._clients_lock:
+            client = self._clients.get(key)
+            if client is None or client._closed:
+                # A closed client can never serve another request; start a fresh one.
+                client = ACPClient(command, env=env, cwd=cwd, request_timeout=self._request_timeout)
+                self._clients[key] = client
         return client, cwd, float(timeout)
 
     @staticmethod

@@ -170,7 +170,13 @@ class ConversationState:
             raise RuntimeError("nested turns on the same conversation are not supported")
         active_ticket = ticket or self.reserve_turn()
         lane = lane_identity or adapter_shortname
-        context = self._begin_turn(active_ticket, adapter_shortname, lane)
+        try:
+            context = self._begin_turn(active_ticket, adapter_shortname, lane)
+        except BaseException:
+            # Interrupted while queued (e.g. KeyboardInterrupt): retire the ticket, or every
+            # later turn would wait for it forever.
+            self.cancel_turn(active_ticket)
+            raise
         self._sync_turn_local.active = True
         succeeded = False
         try:
@@ -219,11 +225,15 @@ class ConversationState:
             context = await asyncio.shield(begin_task)
         except asyncio.CancelledError as cancellation:
             self.cancel_turn(active_ticket)
-            try:
-                context = await asyncio.shield(begin_task)
-            except _ConversationTurnCancelled:
-                pass
-            else:
+            # Wait for the queued begin to settle even through repeated cancellation: a turn
+            # it activated must be finished, or the conversation stays locked.
+            while True:
+                try:
+                    context = await asyncio.shield(begin_task)
+                except _ConversationTurnCancelled:
+                    break
+                except asyncio.CancelledError:
+                    continue
                 _run_cleanups(
                     self._finish_turn(
                         context,
@@ -232,6 +242,7 @@ class ConversationState:
                         succeeded=False,
                     )
                 )
+                break
             raise cancellation
         owner_token = self._async_turn_owner.set(current_task)
         succeeded = False

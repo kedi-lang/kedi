@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Lock
@@ -872,7 +873,7 @@ def test_reset_config_restores_default_config(monkeypatch: pytest.MonkeyPatch) -
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
 
@@ -1293,7 +1294,7 @@ def test_configure_builds_default_adapter_lazily(
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     configure()
@@ -1328,7 +1329,7 @@ def test_configure_uses_adapter_env_when_not_explicit(
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     configure(temperature=0.1)
 
     @query
@@ -1360,7 +1361,7 @@ def test_configure_explicit_model_overrides_env(
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     configure(model=None)
 
     @query
@@ -1405,7 +1406,7 @@ def test_configure_builds_langchain_adapter_lazily(
 
 
 def test_configure_rejects_removed_dspy_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     with pytest.raises(ValueError, match="unknown adapter"):
@@ -1538,7 +1539,7 @@ def test_response_cache_splits_by_adapter_instance() -> None:
 
 
 def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     monkeypatch.setenv("KEDI_AGENT", "claude")
 
@@ -1555,7 +1556,7 @@ def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch)
 def test_configure_rejects_conflicting_environment_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda *_args: False)
     monkeypatch.setenv("KEDI_ADAPTER", "pydantic")
     monkeypatch.setenv("KEDI_AGENT", "claude")
 
@@ -1585,3 +1586,20 @@ def test_profile_cache_identity_includes_adapter_selection_and_command() -> None
 def test_public_python_api_exports_adapter_types_and_mcp_spec() -> None:
     assert kedi.AdapterLike is api_state_module.AdapterLike
     assert kedi.McpServerSpec.__name__ == "McpServerSpec"
+
+
+def test_configure_loads_the_dotenv_of_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #214: dotenv's default search starts at the calling module (inside the kedi package),
+    # so a script's project .env loaded only by accident. configure() reads the cwd's .env.
+    (tmp_path / ".env").write_text("KEDI_DOTENV_PROBE=from-cwd\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KEDI_DOTENV_PROBE", raising=False)
+    try:
+        configure()
+        probe = os.environ.get("KEDI_DOTENV_PROBE")  # not os.environ: a failure would print it
+        assert probe == "from-cwd"
+    finally:
+        monkeypatch.delenv("KEDI_DOTENV_PROBE", raising=False)
+        reset_config()

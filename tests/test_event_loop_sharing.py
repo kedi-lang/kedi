@@ -1049,3 +1049,39 @@ def test_codex_sync_turn_inline_on_a_running_loop_keeps_a_tool_loop_of_its_own(
     finally:
         client.close()
     assert seen[0].is_closed()
+
+
+def test_loop_cleanups_all_run_before_the_first_failure_is_raised() -> None:
+    # #214 2.7: one failing client cleanup must not leak the others.
+    ran: list[str] = []
+
+    async def broken() -> None:
+        ran.append("broken")
+        raise RuntimeError("close failed")
+
+    async def healthy() -> None:
+        ran.append("healthy")
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        asyncio.run(execution._run_cleanups([broken, healthy]))
+    assert ran == ["broken", "healthy"]
+
+
+def test_host_loop_cleanup_on_its_own_thread_is_scheduled_not_awaited() -> None:
+    # #214 2.7: leaving the last use from the loop's own thread must not block on the loop.
+    host_loops = execution._HostLoops()
+    ran: list[str] = []
+
+    async def cleanup() -> None:
+        ran.append("cleanup")
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        with host_loops.use(loop):
+            assert host_loops.defer(1, cleanup)
+        assert ran == []
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))
+    assert ran == ["cleanup"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import linecache
+import secrets
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -127,6 +129,8 @@ class KediRuntime:
         self._initial_globals_env: ValueEnv = {}
         self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
+        # linecache is process-global: the prefix keeps two runtimes' origin names apart.
+        self._python_origin_prefix = secrets.token_hex(4)
         self._python_origins: Dict[str, KediPythonOrigin] = {}
         self._python_origin_keys: Dict[tuple[Any, ...], str] = {}
         self._program: Any | None = None
@@ -247,14 +251,34 @@ class KediRuntime:
         )
 
     async def aclose(self) -> None:
-        """Cancel owned child runs and close runtime-owned session resources."""
+        """Cancel owned child runs and close runtime-owned session resources.
 
+        The program's root runtime also closes the runtimes of the modules it imported:
+        each owns its own subagent coordinator and artifacts. Every runtime is closed even
+        when an earlier one fails; the first failure is raised afterwards.
+        """
+
+        runtimes: list[KediRuntime] = [self]
+        if self.module_name == "main":
+            runtimes.extend(rt for rt in self._module_runtimes.values() if rt is not self)
+        failure: Exception | None = None
+        for runtime in runtimes:
+            try:
+                await runtime._close_own_resources()
+            except Exception as exc:
+                failure = failure or exc
+        if failure is not None:
+            raise failure
+
+    async def _close_own_resources(self) -> None:
         await self._lifecycle.aclose()
         await self._subagent_coordinator.aclose()
         if self._implicit_conversation_state is not None:
             self._implicit_conversation_state.close()
         if self.conversation_state is None:
             self.artifacts.close()
+        for filename in self._python_origins:
+            linecache.cache.pop(filename, None)
 
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:

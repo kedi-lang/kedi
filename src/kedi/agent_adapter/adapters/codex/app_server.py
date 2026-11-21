@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
 from collections import deque
@@ -33,6 +34,10 @@ from .live import TurnBindings, ensure_turn_current, run_cancellable_binding, ru
 JsonObject = dict[str, Any]
 AwaitResult = Callable[[Context, Awaitable[Any]], Any]
 ServerApprovalHandler = Callable[[str, Mapping[str, Any]], Any]
+
+# Thread deletes during close are best effort and must not stall shutdown.
+_CLOSE_REQUEST_TIMEOUT_SECONDS = 2.0
+
 
 _NATIVE_APPROVAL_METHODS = frozenset(
     {
@@ -443,8 +448,8 @@ class CodexAppServerClient:
                     with suppress(CodexAppServerError, TimeoutError):
                         self.delete_thread(resolved_thread_id)
 
-    def delete_thread(self, thread_id: str) -> None:
-        self.request("thread/delete", {"threadId": thread_id})
+    def delete_thread(self, thread_id: str, *, timeout: float | None = None) -> None:
+        self.request("thread/delete", {"threadId": thread_id}, timeout=timeout)
         with self._state_lock:
             self._retained_threads.discard(thread_id)
 
@@ -464,9 +469,14 @@ class CodexAppServerClient:
                 return
             with self._state_lock:
                 retained_threads = tuple(self._retained_threads)
-            for thread_id in retained_threads:
-                with suppress(CodexAppServerError, TimeoutError):
-                    self.delete_thread(thread_id)
+        # Outside the start lock: the stdout reader takes it to fail waiters when the server
+        # disconnects, so holding it here turned each delete into a full request timeout.
+        for thread_id in retained_threads:
+            with suppress(CodexAppServerError, TimeoutError):
+                self.delete_thread(thread_id, timeout=_CLOSE_REQUEST_TIMEOUT_SECONDS)
+        with self._start_lock:
+            if self._closed:
+                return
             self._closed = True
             self._fail_waiters(CodexAppServerDisconnected("Codex App Server client closed."))
             self._stop_process()
@@ -561,6 +571,8 @@ class CodexAppServerClient:
                 text=True,
                 bufsize=1,
                 env=process_env,
+                # Its own group, so closing also stops the tool processes Codex started.
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise ModuleNotFoundError(
@@ -1035,9 +1047,17 @@ class CodexAppServerClient:
                     process.kill()
                 with suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=2)
+        if os.name == "posix":  # pragma: no branch - POSIX-only group cleanup
+            # The server runs in its own group; tool processes it started must not outlive it.
+            with suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
         for thread in (reader, stderr_reader):
             if thread is not None and thread is not current_thread():
                 thread.join(timeout=2)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:  # pragma: no branch - both pipes are always requested
+                with suppress(OSError):
+                    stream.close()
 
     def _disconnect_error(self, message: str) -> CodexAppServerDisconnected:
         with self._state_lock:

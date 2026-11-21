@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
 from pathlib import Path
@@ -233,7 +233,18 @@ class SubagentCoordinator:
             parent_concurrency=parent_concurrency,
             subagent_definitions=subagent_definitions,
         )
-        return await self.wait(handle.run_id)
+        return await self._wait_foreground(handle.run_id)
+
+    async def _wait_foreground(self, run_id: str) -> DelegationResult:
+        """Wait for a child the caller is blocked on; cancelling the caller cancels it."""
+        try:
+            return await self.wait(run_id)
+        except asyncio.CancelledError:
+            # Otherwise the child keeps running (and spending budget) until the run closes.
+            self.cancel(run_id)
+            with suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(self.wait(run_id), INTERRUPT_CLEANUP_SECONDS)
+            raise
 
     def start(
         self,
@@ -423,7 +434,7 @@ class SubagentCoordinator:
             parent_concurrency=parent_concurrency,
             subagent_definitions=subagent_definitions,
         )
-        return await self.wait(handle.run_id)
+        return await self._wait_foreground(handle.run_id)
 
     def start_continuation(
         self,

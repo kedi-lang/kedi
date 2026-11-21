@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from kedi.agent_adapter.meta import AdapterCapabilities
+from kedi.errors import KediExecutionError
 
 from .control import (
     INTERRUPT_CLEANUP_SECONDS,
@@ -73,8 +74,13 @@ async def stop_descendants(coordinator: SubagentCoordinator, run_id: str) -> Non
             for child_id in coordinator._tasks
             if coordinator.runs.get(child_id).parent_run_id == run_id
         )
+    failure: KediExecutionError | None = None
     for child_id in children:
-        coordinator.cancel(child_id)
+        try:
+            coordinator.cancel(child_id)
+        except KediExecutionError as exc:
+            # One child whose loop is gone must not leave its siblings running.
+            failure = failure or exc
     cleanup = asyncio.gather(
         *(coordinator.wait(child_id) for child_id in children), return_exceptions=True
     )
@@ -88,3 +94,5 @@ async def stop_descendants(coordinator: SubagentCoordinator, run_id: str) -> Non
         control = coordinator._controls.get(child_id)
         if control is not None:
             await control.wait_quiescent()
+    if failure is not None:
+        raise failure

@@ -386,6 +386,8 @@ class JobManagerEngine(ThreadEngine):
         self.breaker = CircuitBreaker(breaker_threshold)
         self._clock = _clock
         self._sleep = _sleep
+        # Set while this thread holds an AIMD permit; see _run_with_policy.
+        self._permit_holder = threading.local()
 
     def schedule(self, deps: Sequence[Future], job: Job) -> Future:
         # A re-entrant job (tool on a worker issuing a nested template) must NOT re-acquire an AIMD
@@ -396,8 +398,13 @@ class JobManagerEngine(ThreadEngine):
         return super().schedule(deps, lambda: self._run_with_policy(job))
 
     def _run_with_policy(self, job: Job) -> Any:
+        if getattr(self._permit_holder, "held", False):
+            # A top-level job stolen by a worker that is waiting inside its own permitted job:
+            # it runs under that permit, since the limiter is not reentrant.
+            return job()
         self.breaker.check()
         self.limiter.acquire()
+        self._permit_holder.held = True
         start = self._clock()
         try:
             attempt = 0
@@ -408,9 +415,11 @@ class JobManagerEngine(ThreadEngine):
                     self.breaker.record_success()
                     return result
                 except BaseException as exc:  # noqa: BLE001
-                    self.breaker.record_failure()
                     retryable = self.policy.is_retryable(exc)
                     if retryable:
+                        # Only backend trouble counts against the breaker, not a bad
+                        # request or a validation failure.
+                        self.breaker.record_failure()
                         self.limiter.on_throttle()
                     attempt += 1
                     elapsed = self._clock() - start
@@ -424,8 +433,9 @@ class JobManagerEngine(ThreadEngine):
                     self._sleep(
                         min(
                             remaining,
+                            # backoff() is 0-based: the first retry waits the base delay.
                             self.policy.backoff(
-                                attempt, retry_after=self.policy.retry_after_of(exc)
+                                attempt - 1, retry_after=self.policy.retry_after_of(exc)
                             ),
                         )
                     )
@@ -433,4 +443,5 @@ class JobManagerEngine(ThreadEngine):
                     if self._clock() - start >= self.policy.deadline:
                         raise
         finally:
+            self._permit_holder.held = False
             self.limiter.release()

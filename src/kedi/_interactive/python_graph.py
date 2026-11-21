@@ -54,6 +54,7 @@ _RUNTIME_FIELDS = (
     "_source_map",
     "_source_text",
     "_python_origin_counter",
+    "_python_origin_prefix",
     "_python_origins",
     "_python_origin_keys",
     "_validation_tests",

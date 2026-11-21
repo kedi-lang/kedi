@@ -811,6 +811,38 @@ def test_codemode_sequential_gate_releases_cancelled_waiter() -> None:
     asyncio.run(run())
 
 
+def test_sequential_gate_is_released_when_the_holder_is_cancelled_while_exiting() -> None:
+    # #214 2.13: a cancellation while the exiting holder waits for the condition lock must
+    # not leave the gate exclusive.
+    async def run() -> None:
+        gate = _SequentialDispatchGate()
+        inside = asyncio.Event()
+        leave = asyncio.Event()
+
+        async def hold() -> None:
+            async with gate.enter(sequential=True):
+                inside.set()
+                await leave.wait()
+
+        holder = asyncio.create_task(hold())
+        await inside.wait()
+        async with gate._condition:
+            leave.set()
+            await asyncio.sleep(0)
+            holder.cancel()
+            await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError):
+            await holder
+
+        async def enter_again() -> bool:
+            async with gate.enter(sequential=True):
+                return True
+
+        assert await asyncio.wait_for(enter_again(), 2)
+
+    asyncio.run(run())
+
+
 def test_codemode_preserves_first_concurrent_host_error() -> None:
     async def run() -> None:
         session = CodeModeSession(CodeModeLimits(max_concurrent_calls=2))

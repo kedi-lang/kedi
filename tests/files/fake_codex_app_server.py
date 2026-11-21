@@ -103,6 +103,13 @@ def request_native_approval(
     send({"id": request_id, "method": method, "params": params})
 
 
+grandchild_pid_file = os.getenv("KEDI_CODEX_FAKE_GRANDCHILD_PID")
+if grandchild_pid_file:
+    import subprocess
+
+    grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    Path(grandchild_pid_file).write_text(str(grandchild.pid), encoding="utf-8")
+
 for raw_line in sys.stdin:
     message = json.loads(raw_line)
     record(message)
@@ -257,6 +264,8 @@ for raw_line in sys.stdin:
         complete_turn(message["params"]["expectedTurnId"], message["params"]["input"][0]["text"])
         continue
     if method == "thread/delete":
+        if os.getenv("KEDI_CODEX_FAKE_HANG_DELETE"):
+            continue
         send({"id": request_id, "result": {}})
         continue
     if request_id in pending_tools and "result" in message:

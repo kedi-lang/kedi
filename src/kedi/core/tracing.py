@@ -122,7 +122,9 @@ def register_python_origin(
             return cached
 
         self._python_origin_counter += 1
-        filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+        filename = (
+            f"<kedi-python:{kind}:{self._python_origin_prefix}:{self._python_origin_counter}>"
+        )
         self._python_origins[filename] = KediPythonOrigin(
             filename=filename,
             kind=kind,

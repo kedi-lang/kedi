@@ -13,10 +13,15 @@ from kedi.agent_adapter.adapters.langchain.tools import (
     _langchain_external_tool_spec,
     _langchain_tool_error,
 )
-from kedi.agent_adapter.approvals.policy import ApprovalPolicy, ToolApprovalDenied
+from kedi.agent_adapter.approvals.policy import (
+    ApprovalCancelled,
+    ApprovalPolicy,
+    ToolApprovalDenied,
+)
 from kedi.agent_adapter.approvals.reason import accepts_tool_reason, split_tool_reason
 from kedi.agent_adapter.hooks import (
     HookDeniedError,
+    HookExecutionError,
     ToolOrigin,
     dispatch_post_tool_result_failure,
     dispatch_post_tool_use,
@@ -38,6 +43,7 @@ from kedi.agent_adapter.tools.specs import (
     tool_has_artifact_boundary,
 )
 from kedi.agent_profile import AgentProfile
+from kedi.run_budget import RunBudgetExceeded
 
 
 def _langchain_cache_middleware(model: Any, *, enabled: bool) -> list[Any]:
@@ -118,6 +124,9 @@ def _langchain_approval_middleware(
                             )
             except (HookDeniedError, ToolApprovalDenied) as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))
+            except (HookExecutionError, ApprovalCancelled, RunBudgetExceeded):
+                # A crashed hook, a cancelled approval or an exhausted budget ends the run.
+                raise
             except Exception as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))
 

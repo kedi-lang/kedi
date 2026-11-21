@@ -688,7 +688,7 @@ def _resolve_kedi_otel_distribution(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    dotenv.load_dotenv()
+    dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
     cli.main(args=list(argv) if argv is not None else None, prog_name="kedi-terminal-bench")
     return 0
 

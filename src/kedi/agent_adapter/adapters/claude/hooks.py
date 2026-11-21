@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from time import monotonic
 from typing import Any, Mapping, Sequence
 
@@ -8,9 +11,10 @@ from kedi.agent_adapter.adapters.claude.tools import (
     _claude_tool_call_input,
     _claude_tool_specs_by_native_name,
 )
-from kedi.agent_adapter.approvals.policy import ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalCancelled, ApprovalPolicy
 from kedi.agent_adapter.hooks import (
     HookDeniedError,
+    HookExecutionError,
     ToolOrigin,
     current_hook_dispatcher,
     dispatch_post_tool_use,
@@ -22,6 +26,31 @@ from kedi.agent_adapter.hooks import (
 from kedi.agent_adapter.tools.execution import resolve_tool_arguments_async
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
+from kedi.run_budget import RunBudgetExceeded
+
+# Errors that must end the run, not just deny one tool: a crashed or timed-out hook, a
+# cancelled approval, an exhausted run budget.
+_FATAL_HOOK_ERRORS = (HookExecutionError, ApprovalCancelled, RunBudgetExceeded)
+_fatal_hook_error: ContextVar[list[BaseException] | None] = ContextVar(
+    "kedi_claude_fatal_hook_error", default=None
+)
+
+
+@contextmanager
+def raising_fatal_hook_errors() -> Generator[None, None, None]:
+    """Raise, once the Claude run returns, the first fatal error a Kedi hook recorded.
+
+    Raising inside the SDK's hook callback would not stop the run (the CLI treats a failed
+    hook as non-blocking), so the hook denies the tool and the run ends here instead.
+    """
+    errors: list[BaseException] = []
+    token = _fatal_hook_error.set(errors)
+    try:
+        yield
+    finally:
+        _fatal_hook_error.reset(token)
+    if errors:
+        raise errors[0]
 
 
 def _with_kedi_approval_hook(
@@ -119,6 +148,9 @@ def _claude_pre_tool_use_hook(
             return _claude_hook_deny("Claude supplied an incomplete tool permission request.")
 
         tool, origin = _claude_hook_tool(tool_name, known_tools)
+        fatal = _fatal_hook_error.get()
+        if fatal:
+            return _claude_hook_deny(f"Kedi is stopping this run: {fatal[0]}")
         call_id = tool_use_id or new_tool_call_id()
         try:
             final_arguments = await dispatch_pre_tool_use(
@@ -142,6 +174,10 @@ def _claude_pre_tool_use_hook(
                     )
         except HookDeniedError as exc:
             return _claude_hook_deny(str(exc))
+        except _FATAL_HOOK_ERRORS as exc:
+            if fatal is not None:
+                fatal.append(exc)
+            return _claude_hook_deny(f"Kedi is stopping this run: {exc}")
         except Exception as exc:
             return _claude_hook_deny(f"Kedi rejected tool {tool.name!r}: {exc}")
 

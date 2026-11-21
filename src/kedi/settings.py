@@ -3,7 +3,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Literal
 
-dotenv.load_dotenv()
+dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
 
 # The adapter choices offered by the CLI (``--adapter``) and accepted by
 # ``kedi.configure()``: the framework adapters (pydantic, langchain) plus the

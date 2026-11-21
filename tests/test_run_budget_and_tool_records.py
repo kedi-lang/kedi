@@ -15,6 +15,10 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
 import kedi
+from kedi.agent_adapter.adapters.claude.hooks import (
+    _claude_pre_tool_use_hook,
+    raising_fatal_hook_errors,
+)
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.langchain.middleware import _langchain_approval_middleware
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
@@ -22,6 +26,7 @@ from kedi.agent_adapter.hooks import (
     AdapterHookSnapshot,
     HookDispatcher,
     HookDispatcherSnapshot,
+    HookExecutionError,
     PostToolResultFailureEvent,
     PostToolUseEvent,
     bind_hook_dispatcher,
@@ -534,3 +539,82 @@ def test_langchain_result_error_after_body_return_is_not_model_feedback() -> Non
     asyncio.run(exercise())
     assert calls == 1
     assert len(observed) == 1
+
+
+def _crashing_pre_hook(_event: Any) -> None:
+    raise RuntimeError("hook crashed")
+
+
+def test_langchain_crashed_pre_hook_ends_the_run_instead_of_denying_the_tool() -> None:
+    # #214 3.5: a crashed hook is a Kedi failure, not a tool denial the model can route around.
+    tool = python_callable_tool_spec("echo", lambda: "ran")
+    middleware = _langchain_approval_middleware(
+        profile=AgentProfile.empty(), tools=(tool,), approval_enabled=False
+    )
+    dispatcher = HookDispatcher(
+        HookDispatcherSnapshot.compose(
+            AdapterHookSnapshot.empty(), HookSettings(pre_tool_use=(_crashing_pre_hook,))
+        )
+    )
+
+    @dataclass(frozen=True)
+    class Request:
+        tool_call: dict[str, Any]
+        tool: Any = None
+
+        def override(self, **changes: Any) -> Request:
+            return replace(self, **changes)
+
+    async def handler(_request: Request) -> ToolMessage:
+        raise AssertionError("the tool must not run")
+
+    async def exercise() -> None:
+        with bind_hook_dispatcher(dispatcher):
+            await middleware.awrap_tool_call(
+                Request({"name": "echo", "args": {}, "id": "call-1"}), handler
+            )
+
+    with pytest.raises(HookExecutionError, match="hook crashed"):
+        asyncio.run(exercise())
+
+
+def test_claude_crashed_pre_hook_denies_the_tool_and_ends_the_run() -> None:
+    # #214 3.5: raising inside the SDK callback would not stop Claude, so the hook denies the
+    # tool, later tools are denied too, and the run raises once it returns.
+    tool = python_callable_tool_spec("echo", lambda: "ran")
+    hook = _claude_pre_tool_use_hook(profile=AgentProfile.empty(), tools=(tool,))
+    dispatcher = HookDispatcher(
+        HookDispatcherSnapshot.compose(
+            AdapterHookSnapshot.empty(), HookSettings(pre_tool_use=(_crashing_pre_hook,))
+        )
+    )
+    decisions: list[str] = []
+
+    async def exercise() -> None:
+        with bind_hook_dispatcher(dispatcher), raising_fatal_hook_errors():
+            for _ in range(2):
+                result = await hook({"tool_name": "echo", "tool_input": {}}, None, None)
+                decisions.append(result["hookSpecificOutput"]["permissionDecision"])
+
+    with pytest.raises(HookExecutionError, match="hook crashed"):
+        asyncio.run(exercise())
+    assert decisions == ["deny", "deny"]
+
+
+def test_claude_fatal_pre_hook_outside_a_run_scope_still_denies() -> None:
+    # Outside raising_fatal_hook_errors() there is no run to end; the tool is still denied.
+    tool = python_callable_tool_spec("echo", lambda: "ran")
+    hook = _claude_pre_tool_use_hook(profile=AgentProfile.empty(), tools=(tool,))
+    dispatcher = HookDispatcher(
+        HookDispatcherSnapshot.compose(
+            AdapterHookSnapshot.empty(), HookSettings(pre_tool_use=(_crashing_pre_hook,))
+        )
+    )
+
+    async def exercise() -> dict[str, Any]:
+        with bind_hook_dispatcher(dispatcher):
+            return await hook({"tool_name": "echo", "tool_input": {}}, None, None)
+
+    decision = asyncio.run(exercise())["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert "stopping this run" in decision["permissionDecisionReason"]
