@@ -401,9 +401,6 @@ def is_value_compatible(
         return False
 
 
-_MISSING = object()
-
-
 def _resolve_typedef_fields(
     rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]
 ) -> list[Any]:
@@ -438,15 +435,8 @@ def register_type(
     default_env = build_type_env(rt, local_env or {})
     # A field may refer to the type being defined (``children: list[Person]``); it
     # resolves as a forward reference that the finished model rebuilds against itself.
-    previous = type_env.get(typedef.name, _MISSING)
-    type_env[typedef.name] = ForwardRef(typedef.name)
-    try:
-        field_types = _resolve_typedef_fields(rt, typedef, type_env)
-    finally:
-        if previous is _MISSING:
-            del type_env[typedef.name]
-        else:
-            type_env[typedef.name] = previous
+    field_env = {**type_env, **default_env, typedef.name: ForwardRef(typedef.name)}
+    field_types = _resolve_typedef_fields(rt, typedef, field_env)
 
     for field, resolved in zip(typedef.fields, field_types, strict=True):
         annotation, description = _annotated_field_metadata(resolved)

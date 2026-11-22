@@ -78,6 +78,11 @@ releases it.
    interrupted waiter cancels its task and gives it time to clean up.
 9. **A forked child starts fresh.** The shared loop state resets after fork.
    Holds from before the fork are stale there and are ignored on release.
+10. **Cleanup attempts every owned resource.** A failing cleanup does not skip
+    later clients; the first failure is raised after all callbacks have run.
+    Synchronous work borrowing an async host loop must run in a worker thread,
+    including its final cleanup. Borrowing the host from its own thread is
+    rejected before admission instead of blocking that loop during teardown.
 
 ## Decisions and rejected alternatives
 

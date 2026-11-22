@@ -16,7 +16,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
 from contextlib import contextmanager, nullcontext
 from threading import Condition, Event, Lock, Thread
-from typing import Awaitable, Callable, Coroutine, Generator, ParamSpec, TypeVar, cast
+from typing import Awaitable, Callable, Coroutine, Generator, Iterable, ParamSpec, TypeVar, cast
 
 _T = TypeVar("_T")
 _P = ParamSpec("_P")
@@ -273,6 +273,11 @@ class _HostLoops:
 
     @contextmanager
     def use(self, loop: asyncio.AbstractEventLoop) -> Generator[None, None, None]:
+        if _running_loop() is loop:
+            raise RuntimeError(
+                "The async owner loop cannot wait on its own thread; "
+                "run synchronous Kedi code with asyncio.to_thread"
+            )
         with self._lock:
             self._users[loop] = self._users.get(loop, 0) + 1
         try:
@@ -335,9 +340,22 @@ class _OperationLoop:
             self._loops.release(held)
 
 
-async def _run_cleanups(cleanups: list[Callable[[], Awaitable[None]]]) -> None:
+async def _run_cleanups(
+    cleanups: Iterable[Callable[[], Awaitable[None] | None]],
+) -> None:
+    failure: BaseException | None = None
     for cleanup in cleanups:
-        await cleanup()
+        try:
+            result = cleanup()
+            if inspect.isawaitable(result):
+                await result
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+            else:
+                failure.add_note(f"Additional cleanup failure: {exc}")
+    if failure is not None:
+        raise failure
 
 
 _OPERATION_LOOP: contextvars.ContextVar[_OperationLoop | None] = contextvars.ContextVar(

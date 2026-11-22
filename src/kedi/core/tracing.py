@@ -6,6 +6,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
 )
+from uuid import uuid4
 
 from kedi.debugging import checkpoint
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
@@ -122,7 +123,7 @@ def register_python_origin(
             return cached
 
         self._python_origin_counter += 1
-        filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+        filename = f"<kedi-python:{kind}:{uuid4().hex}:{self._python_origin_counter}>"
         self._python_origins[filename] = KediPythonOrigin(
             filename=filename,
             kind=kind,
@@ -133,6 +134,7 @@ def register_python_origin(
             procedure_name=procedure_name,
         )
         self._python_origin_keys[origin_key] = filename
+        self._python_source_files.add(filename)
         cache_text = "\n" * compile_line_offset + (traceback_code or code)
         lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
         linecache.cache[filename] = (len(code), None, lines, filename)
@@ -153,3 +155,14 @@ def _hydrate_frame(self: KediRuntime, frame: KediTraceFrame) -> KediTraceFrame:
         procedure_name=frame.procedure_name,
         source_snippet=line,
     )
+
+
+def clear_python_origins(self: KediRuntime) -> None:
+    import linecache
+
+    with self._origin_counter_lock:
+        for filename in self._python_source_files:
+            linecache.cache.pop(filename, None)
+        self._python_source_files.clear()
+        self._python_origins.clear()
+        self._python_origin_keys.clear()
