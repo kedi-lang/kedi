@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile.activation import require_subagent_activation
+from kedi.errors import KediExecutionError
 
 from . import DelegationResult
 from .attempts import (
@@ -150,6 +151,10 @@ def bind_subagent_tools(
         run_id: str,
         timeout: float | None = None,
     ) -> dict[str, Any]:
+        from pydantic_ai.exceptions import RunCancelled
+
+        from kedi.run_budget import RunBudgetExceeded
+
         attempt = active_delegation_attempt_for_run(run_id)
         try:
             from .messaging import wait_for_child_call
@@ -157,23 +162,30 @@ def bind_subagent_tools(
             result = await wait_for_child_call(coordinator, coordinator.wait, run_id, timeout)
             if not isinstance(result, DelegationResult):
                 return dict(result)
-        except TimeoutError:
+        except BaseException as exc:
             status = coordinator.status(run_id)
-            if status == "running":
+            original = exc.original if isinstance(exc, KediExecutionError) else exc
+            if isinstance(exc, TimeoutError) and status == "running":
+                run = coordinator.runs.get(run_id)
+                return {"run_id": run.run_id, "subagent": run.profile_name, "status": status}
+            if attempt is not None:
+                # A waiter timeout or cancellation is local to this caller. The
+                # child remains observable until it reaches a terminal status.
+                if status != "running":
+                    attempt.fail(status=attempt_status_from_run(status), error=exc)
+            if (
+                status in {"failed", "timed_out"}
+                and isinstance(exc, Exception)
+                and not isinstance(exc, (RunBudgetExceeded, RunCancelled))
+                and not isinstance(original, (RunBudgetExceeded, RunCancelled))
+            ):
                 run = coordinator.runs.get(run_id)
                 return {
                     "run_id": run.run_id,
                     "subagent": run.profile_name,
                     "status": status,
+                    "error": run.error_message or "Subagent failed",
                 }
-            raise
-        except BaseException as exc:
-            if attempt is not None:
-                status = coordinator.status(run_id)
-                # A waiter timeout or cancellation is local to this caller. The
-                # child remains observable until it reaches a terminal status.
-                if status != "running":
-                    attempt.fail(status=attempt_status_from_run(status), error=exc)
             raise
         if attempt is not None:
             attempt.complete()

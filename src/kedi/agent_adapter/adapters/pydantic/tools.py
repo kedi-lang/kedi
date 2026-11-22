@@ -15,6 +15,7 @@ from typing import (
 
 from pydantic_ai import (
     ModelRetry,
+    ToolFailed,
 )
 from pydantic_ai.tools import (
     DeferredToolRequests,
@@ -92,13 +93,16 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
         async def validated_async_tool(*args: Any, **kwargs: Any) -> Any:
             if args:
                 raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
+            execution_started = False
             try:
-                result = tool.fn(**_validated_tool_arguments(tool, kwargs))
+                arguments = _validated_tool_arguments(tool, kwargs)
+                execution_started = True
+                result = tool.fn(**arguments)
                 if inspect.isawaitable(result):
                     result = await result
                 return result
             except Exception as exc:
-                retry = _model_retry_for_tool_error(tool, exc)
+                retry = _model_retry_for_tool_error(tool, exc, execution_started=execution_started)
                 if retry is None:
                     raise
                 raise retry from exc
@@ -109,11 +113,14 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
     def validated_tool(*args: Any, **kwargs: Any) -> Any:
         if args:
             raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
+        execution_started = False
         try:
-            result = tool.fn(**_validated_tool_arguments(tool, kwargs))
+            arguments = _validated_tool_arguments(tool, kwargs)
+            execution_started = True
+            result = tool.fn(**arguments)
             return result
         except Exception as exc:
-            retry = _model_retry_for_tool_error(tool, exc)
+            retry = _model_retry_for_tool_error(tool, exc, execution_started=execution_started)
             if retry is None:
                 raise
             raise retry from exc
@@ -308,10 +315,14 @@ def _approval_request_payload(request: ApprovalRequest) -> dict[str, Any]:
     }
 
 
-def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | None:
+def _model_retry_for_tool_error(
+    tool: ToolSpec, exc: Exception, *, execution_started: bool = False
+) -> Exception | None:
 
-    from kedi.agent_adapter.tools.errors import correctable_tool_error
+    from kedi.agent_adapter.tools.errors import correctable_tool_error, terminal_tool_failure
 
+    if execution_started and (failure := terminal_tool_failure(tool, exc)) is not None:
+        return ToolFailed(str(failure))
     message = correctable_tool_error(tool, exc)
     return ModelRetry(message) if message is not None else None
 

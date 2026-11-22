@@ -4,11 +4,11 @@ import asyncio
 from typing import Any
 
 import pytest
-from pydantic_ai.exceptions import ModelRetry, UsageLimitExceeded
+from pydantic_ai.exceptions import ModelRetry, ToolFailed, UsageLimitExceeded
 
 from kedi.agent_adapter.adapters.pydantic.tools import _validated_tool_function
 from kedi.agent_adapter.subagents.tool_schemas import build_subagent_tool_specs
-from kedi.agent_adapter.tools.errors import correctable_tool_error
+from kedi.agent_adapter.tools.errors import TerminalToolFailure, correctable_tool_error
 from kedi.run_budget import RunBudgetExceeded
 
 
@@ -92,7 +92,7 @@ def test_pydantic_async_tool_returns_failures_to_the_model(name):
         "delegate_task": {"subagent": "worker", "task": "work"},
         "wait_subagent": {"run_id": "abc"},
     }[name]
-    with pytest.raises(ModelRetry, match="UsageLimitExceeded"):
+    with pytest.raises(ToolFailed, match="UsageLimitExceeded"):
         asyncio.run(tool(**arguments))
     with pytest.raises(ModelRetry, match="Invalid arguments"):
         asyncio.run(tool(parameters={}))
@@ -120,12 +120,12 @@ def test_langchain_tools_return_failures_to_the_model():
         raise TypeError("delegate_task() got an unexpected keyword argument 'parameters'")
 
     spec = _specs(delegate_task=failing)["delegate_task"]
-    with pytest.raises(ToolException, match="TypeError"):
+    with pytest.raises(TerminalToolFailure, match="TypeError"):
         asyncio.run(_langchain_async_tool_function(spec)(subagent="worker", task="work"))
     with pytest.raises(ToolException, match="Invalid arguments"):
         asyncio.run(_langchain_async_tool_function(spec)(parameters={}))
     sync_spec = _specs(delegate_task=lambda **_: (_ for _ in ()).throw(ValueError("boom")))[
         "delegate_task"
     ]
-    with pytest.raises(ToolException, match="ValueError"):
+    with pytest.raises(TerminalToolFailure, match="ValueError"):
         _langchain_sync_tool_function(sync_spec)(subagent="worker", task="work")
