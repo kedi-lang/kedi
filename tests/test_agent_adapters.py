@@ -751,7 +751,8 @@ def test_langchain_codemode_projects_and_executes_tools(
     assert '"name":"double"' in events["agents"][-1]["system_prompt"]
     assert '"value":{"type":"integer"}' in events["agents"][-1]["system_prompt"]
     assert [type(item).__name__ for item in events["agents"][-1]["middleware"]] == [
-        "LangChainRunMiddleware"
+        "RequestRetryMiddleware",
+        "LangChainRunMiddleware",
     ]
 
 
@@ -1177,6 +1178,8 @@ def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) 
 def test_langchain_subagent_tool_errors_and_usage_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from kedi.agent_adapter.tools.errors import TerminalToolFailure
+
     _install_fake_langchain_modules(monkeypatch)
 
     class ToolException(Exception):
@@ -1188,8 +1191,9 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
         raise KediExecutionError("child failed")
 
     subagent = ToolSpec(fn=fail, name="delegate_task", metadata={"kind": "subagent"})
-    with pytest.raises(ToolException, match="child failed"):
+    with pytest.raises(TerminalToolFailure, match="child failed") as failed:
         langchain_tools_module._langchain_sync_tool_function(subagent)()
+    assert isinstance(failed.value.__cause__, KediExecutionError)
 
     async def async_fail() -> str:
         raise KediExecutionError("async child failed")
@@ -1199,8 +1203,32 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
         name="delegate_async",
         metadata={"kind": "subagent"},
     )
-    with pytest.raises(ToolException, match="async child failed"):
+    with pytest.raises(TerminalToolFailure, match="async child failed") as failed:
         asyncio.run(langchain_tools_module._langchain_async_tool_function(async_subagent)())
+    assert isinstance(failed.value.__cause__, KediExecutionError)
+
+    def reject_arguments(arguments: Any) -> Any:
+        raise ValueError("Invalid arguments for delegate_task")
+
+    malformed = ToolSpec(
+        fn=fail,
+        name="delegate_task",
+        metadata={"kind": "subagent"},
+        argument_validator=reject_arguments,
+    )
+    with pytest.raises(ToolException, match="Invalid arguments"):
+        langchain_tools_module._langchain_sync_tool_function(malformed)()
+    with pytest.raises(ToolException, match="Invalid arguments"):
+        asyncio.run(
+            langchain_tools_module._langchain_async_tool_function(
+                ToolSpec(
+                    fn=async_fail,
+                    name="delegate_async",
+                    metadata={"kind": "subagent"},
+                    argument_validator=reject_arguments,
+                )
+            )()
+        )
 
     ordinary = ToolSpec(fn=fail, name="ordinary")
     with pytest.raises(KediExecutionError, match="child failed"):
@@ -3786,6 +3814,7 @@ def test_pydantic_external_tool_approval_elevates_secret_paths(
 
 def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_toolsets() -> None:
     adapter = object.__new__(PydanticAdapter)
+    adapter.request_retries = 2
     adapter._default_history_processor = None
     adapter._tool_scope = ToolScope()
     _set_profile_stack(adapter)
@@ -3794,9 +3823,10 @@ def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_to
     run_kwargs = adapter._run_kwargs({}, tool_specs=adapter.scoped_tool_specs)
 
     assert isinstance(run_kwargs["toolsets"][0], ApprovalRequiredToolset)
-    assert len(run_kwargs["capabilities"]) == 3
-    assert isinstance(run_kwargs["capabilities"][1], HandleDeferredToolCalls)
-    assert type(run_kwargs["capabilities"][2]).__name__ == "_KediEmptyToolResultCapability"
+    assert len(run_kwargs["capabilities"]) == 4
+    assert type(run_kwargs["capabilities"][0]).__name__ == "RequestRetryCapability"
+    assert isinstance(run_kwargs["capabilities"][2], HandleDeferredToolCalls)
+    assert type(run_kwargs["capabilities"][3]).__name__ == "_KediEmptyToolResultCapability"
     assert PydanticAdapter.capabilities.supports("native_approvals")
     assert PydanticAdapter.capabilities.supports("native_approval_handler")
 

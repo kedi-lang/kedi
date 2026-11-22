@@ -227,6 +227,9 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
     "budget": {"request_limit": NONNEGATIVE_INT, "tool_attempt_limit": NONNEGATIVE_INT},
     "settings": {
         "tool_reason": ACTIVATION,
+        "request_retries": ValueRule(
+            "Additional attempts for transient model request errors", kind="int", minimum=0
+        ),
         "media_limit": ValueRule("Largest media value sent to the model", kind="size"),
         "context_limit": ValueRule(
             "Model context window in tokens for Kedi's request ceiling", kind="int", minimum=32_768

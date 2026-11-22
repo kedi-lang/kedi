@@ -37,7 +37,7 @@ class ToolOutputTooLargeError(ArtifactError):
         self.limit_bytes = limit_bytes
         super().__init__(
             f"tool output is {size_bytes} bytes, exceeding the inline safety limit of "
-            f"{limit_bytes} bytes; enable artifacts or request a narrower result"
+            f"{limit_bytes} bytes; enable `> artifacts:` for this tool or return less"
         )
 
 

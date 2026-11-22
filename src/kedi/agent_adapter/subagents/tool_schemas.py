@@ -167,7 +167,8 @@ def build_subagent_tool_specs(
                     "Wait for a background subagent and return its task_summary and "
                     "final_result. When a caller timeout expires while the child is still "
                     "running, return its running handle instead of failing the parent turn; "
-                    "call wait_subagent again. Completed runs may be waited more than once."
+                    "call wait_subagent again. Failed or timed-out children return their "
+                    "terminal status and error. Terminal runs may be waited more than once."
                 ),
                 json_schema={
                     "type": "object",
@@ -186,6 +187,17 @@ def build_subagent_tool_specs(
                     "oneOf": [
                         _delegation_result_schema(),
                         _subagent_handle_schema(),
+                        {
+                            "type": "object",
+                            "properties": {
+                                "run_id": {"type": "string"},
+                                "subagent": {"type": "string"},
+                                "status": {"enum": ["failed", "timed_out"]},
+                                "error": {"type": "string"},
+                            },
+                            "required": ["run_id", "subagent", "status", "error"],
+                            "additionalProperties": False,
+                        },
                     ]
                 },
                 metadata={"source": "kedi", "kind": "subagent_lifecycle"},

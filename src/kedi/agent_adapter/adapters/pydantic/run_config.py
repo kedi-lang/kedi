@@ -182,13 +182,22 @@ def _run_kwargs(
             *(toolsets or ()),
         ]
     capabilities = run_kwargs.get("capabilities")
+    from kedi.agent_adapter.request_retry import request_retry_limit
+
+    from .request_retry import RequestRetryCapability
+
+    capabilities = _with_capability(
+        capabilities,
+        RequestRetryCapability,
+        lambda: RequestRetryCapability(
+            request_retry_limit(self.active_profile.settings, self.request_retries)
+        ),
+    )
     from .user_capabilities import deferred_run_capabilities
 
     deferred = deferred_run_capabilities(self, tool_specs)
     if deferred:
-        if capabilities is not None and not isinstance(capabilities, (list, tuple)):
-            raise TypeError("Pydantic AI capabilities must be a list or tuple.")
-        capabilities = [*(capabilities or ()), *deferred]
+        capabilities.extend(deferred)
     if self.active_history_processor is not None:
         from .history_processing import reject_conflicting_history_capabilities
 

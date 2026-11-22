@@ -167,6 +167,7 @@ class LangChainAdapter(HookRegistrationMixin):
         codemode: bool | CodeModeSettings = False,
         query_artifact: bool = False,
         tool_reason: bool = False,
+        request_retries: int = 2,
         media_limit: int | None = None,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
@@ -184,6 +185,9 @@ class LangChainAdapter(HookRegistrationMixin):
         if not isinstance(tool_reason, bool):
             raise TypeError("tool_reason must be a boolean")
         self.tool_reason = tool_reason
+        from kedi.agent_adapter.request_retry import request_retry_limit
+
+        self.request_retries = request_retry_limit({}, request_retries)
         self.media_limit = media_limit_bytes({}, default=media_limit)
         for name, retries in (("tool_retries", tool_retries), ("output_retries", output_retries)):
             if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
@@ -310,6 +314,7 @@ class LangChainAdapter(HookRegistrationMixin):
             raise ValueError("Output spec must be provided.")
 
         output_model, unwrap_response = _langchain_typed_output(resolved_output_type)
+        response_schema = output_model.model_json_schema()
         instructions = cast(str | None, kwargs.pop("instructions", None))
         if instructions is None:
             instructions = self.active_profile.system
@@ -330,13 +335,15 @@ class LangChainAdapter(HookRegistrationMixin):
                 # LangChain validates a Pydantic response format with validate_python, which
                 # rejects JSON text for strict fields such as dates. Give it the JSON Schema and
                 # validate the model's JSON ourselves, inside the correction loop.
-                response_format=output_model.model_json_schema(),
+                response_format=response_schema,
                 system_prompt=system_prompt,
                 middleware=self._middleware_for_run(
                     model,
                     tools,
                     codemode_enabled=projection.enabled,
                     structured=True,
+                    output_schema=response_schema,
+                    output_model=output_model,
                     accept_output=lambda output: _accept_typed_output(output_model, output),
                 ),
             )
@@ -389,6 +396,8 @@ class LangChainAdapter(HookRegistrationMixin):
                     tools,
                     codemode_enabled=projection.enabled,
                     structured=True,
+                    output_schema=output_schema,
+                    output_state=output_state,
                     # LangChain returns raw JSON Schema output unvalidated.
                     accept_output=lambda output: accept_subagent_output(
                         output, validator, output_state
@@ -970,11 +979,19 @@ class LangChainAdapter(HookRegistrationMixin):
         codemode_enabled: bool = False,
         structured: bool = False,
         accept_output: Callable[[Any], Any] | None = None,
+        output_schema: dict[str, Any] | None = None,
+        output_model: type[BaseModel] | None = None,
+        output_state: SubagentOutputState | None = None,
     ) -> list[Any]:
+        from kedi.agent_adapter.adapters.langchain.duplicate_output import (
+            LangChainDuplicateOutputMiddleware,
+        )
+        from kedi.agent_adapter.adapters.langchain.request_retry import RequestRetryMiddleware
         from kedi.agent_adapter.adapters.langchain.runtime import (
             LangChainOutputCorrectionMiddleware,
             LangChainRunMiddleware,
         )
+        from kedi.agent_adapter.request_retry import request_retry_limit
 
         # The correction middleware is outermost, so the run middleware admits each correction.
         correction = (
@@ -988,6 +1005,20 @@ class LangChainAdapter(HookRegistrationMixin):
         )
         return [
             *correction,
+            *(
+                [
+                    LangChainDuplicateOutputMiddleware(
+                        schema=output_schema,
+                        output_model=output_model,
+                        output_state=output_state,
+                    )
+                ]
+                if output_schema is not None
+                else []
+            ),
+            RequestRetryMiddleware(
+                request_retry_limit(self.active_profile.settings, self.request_retries)
+            ),
             LangChainRunMiddleware(
                 archive=self._history_archive,
                 history_processor=self._history_processor_runner,

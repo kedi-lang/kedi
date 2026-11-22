@@ -13,6 +13,7 @@ from kedi.lang.ast import (
     ProcedureDef,
     Program,
     ProgramWithValidation,
+    RawInvokeStmt,
     Span,
     TypeApply,
     TypeExpr,
@@ -73,6 +74,7 @@ def compute_diagnostics(
         out.extend(_subagent_profile_diagnostics(prog))
         out.extend(_adapter_capability_diagnostics(prog))
         out.extend(_annotated_type_diagnostics(prog))
+        out.extend(_dict_output_diagnostics(prog))
         out.extend(_assignment_diagnostics(prog))
         out.extend(substitution_type_diagnostics(prog))
         out.extend(
@@ -171,6 +173,48 @@ def _annotated_type_diagnostics(
     for expr in _iter_type_exprs(prog):
         _collect_annotated_type_diagnostics(expr, out)
     return out
+
+
+def _dict_output_diagnostics(
+    prog: Program | ProgramWithValidation,
+) -> list[lsp.Diagnostic]:
+    out: list[lsp.Diagnostic] = []
+    for statements in (prog.toplevel_body, *(proc.body for proc in _all_procedures(prog))):
+        for stmt in _iter_control_statements(statements):
+            if isinstance(stmt, RawInvokeStmt):
+                _collect_dict_output_diagnostics(stmt.type_expr, out)
+            for segment in _segments_of(stmt):
+                if isinstance(segment, OutputSegment):
+                    _collect_dict_output_diagnostics(segment.type_expr, out)
+    return out
+
+
+def _collect_dict_output_diagnostics(
+    expr: TypeExpr | None,
+    out: list[lsp.Diagnostic],
+) -> None:
+    if isinstance(expr, (TypeRef, TypeApply)) and expr.name in {"dict", "Dict"}:
+        if expr.loc is not None:
+            out.append(
+                _warning(
+                    expr.loc,
+                    "K-OUTPUT-OPEN-DICT",
+                    "This model-output dict has an open-ended key structure. Use a TypedDict "
+                    "or custom type when the keys are known; for dynamic keys, explicitly "
+                    "describe the expected keys and values in the prompt or Annotated metadata.",
+                )
+            )
+    elif isinstance(expr, TypeApply):
+        # Annotated metadata describes values; it does not declare fixed keys.
+        if expr.name == "Annotated":
+            for arg in expr.args[:1]:
+                _collect_dict_output_diagnostics(arg, out)
+        elif expr.name in {"list", "List", "Optional", "Union"}:
+            for arg in expr.args:
+                _collect_dict_output_diagnostics(arg, out)
+    elif isinstance(expr, TypeUnion):
+        _collect_dict_output_diagnostics(expr.left, out)
+        _collect_dict_output_diagnostics(expr.right, out)
 
 
 def _assignment_diagnostics(

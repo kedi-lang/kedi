@@ -2756,16 +2756,29 @@ def test_background_subagent_must_be_observed_before_parent_finishes() -> None:
 
 
 @pytest.mark.parametrize("failure", [TimeoutError("child timed out"), RuntimeError("wait failed")])
-def test_wait_subagent_propagates_terminal_errors_without_delegation_attempt(monkeypatch, failure):
+def test_wait_subagent_returns_terminal_errors_without_delegation_attempt(monkeypatch, failure):
     _adapter, runtime, tools = _manager_tools()
+    runs = runtime._subagent_coordinator.runs
+    runs.create(
+        run_id="untracked",
+        parent_run_id=None,
+        root_run_id="untracked",
+        profile_name="worker",
+        depth=1,
+    )
+    runs.transition("untracked", "running")
+    runs.transition("untracked", "timed_out", error=failure)
 
     async def wait(*args, **kwargs):
         raise failure
 
     monkeypatch.setattr(runtime._subagent_coordinator, "wait", wait)
-    monkeypatch.setattr(runtime._subagent_coordinator, "status", lambda _: "timed_out")
-    with pytest.raises(type(failure), match=str(failure)):
-        asyncio.run(tools["wait_subagent"].fn(run_id="untracked"))
+    assert asyncio.run(tools["wait_subagent"].fn(run_id="untracked")) == {
+        "run_id": "untracked",
+        "subagent": "worker",
+        "status": "timed_out",
+        "error": str(failure),
+    }
 
 
 def test_wait_subagent_can_observe_result_outside_delegation_scope(
@@ -2889,8 +2902,9 @@ def test_background_subagent_runtime_timeout_starts_with_the_run(
             )
             await asyncio.sleep(0.02)
             assert tools["subagent_status"].fn(run_id=handle["run_id"])["status"] == "timed_out"
-            with pytest.raises(KediExecutionError, match="timed out after 0.005 seconds"):
-                await tools["wait_subagent"].fn(run_id=handle["run_id"])
+            result = await tools["wait_subagent"].fn(run_id=handle["run_id"])
+            assert result["status"] == "timed_out"
+            assert "timed out after 0.005 seconds" in result["error"]
         assert timed_out.snapshot()[0].status == "timed_out"
         assert not runtime._subagent_coordinator._cancel_requested
 

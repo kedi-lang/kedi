@@ -16,7 +16,7 @@ from kedi.agent_adapter.approvals.policy import ToolRisk
 from kedi.agent_adapter.codemode import CodeModeError
 from kedi.agent_adapter.codemode.tool_specs import CodeModeProjection
 from kedi.agent_adapter.subagents.tool_activity import with_live_tool_tracking
-from kedi.agent_adapter.tools.errors import correctable_tool_error
+from kedi.agent_adapter.tools.errors import correctable_tool_error, terminal_tool_failure
 from kedi.agent_adapter.tools.execution import arguments_target_secret_file
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
@@ -37,8 +37,8 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         "name": tool.name,
         "description": description,
         "args_schema": tool.json_schema,
-        # Only correctable failures become ToolException (see correctable_tool_error); LangChain
-        # returns those to the model and lets every other exception end the run.
+        # Argument corrections use ToolException; terminal execution failures are handled by
+        # the run middleware without consuming its correction counter.
         "handle_tool_error": True,
     }
     metadata = tool.metadata or {}
@@ -119,8 +119,11 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
         from kedi.agent_adapter.adapters.langchain.runtime import record_live_tool_result
         from kedi.agent_adapter.execution import run_sync
 
+        execution_started = False
         try:
-            result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
+            arguments = _validated_tool_arguments(tool, kwargs)
+            execution_started = True
+            result = tool.fn(*args, **arguments)
             if inspect.isawaitable(result):
                 result = run_sync(cast(Coroutine[Any, Any, Any], result))
             record_live_tool_result(result)
@@ -128,7 +131,7 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
         except CodeModeError as exc:
             _raise_langchain_codemode_error(exc)
         except Exception as exc:
-            _raise_langchain_tool_error(tool, exc)
+            _raise_langchain_tool_error(tool, exc, execution_started=execution_started)
             raise
 
     # The native result journal must settle before the physical tool barrier opens.
@@ -140,8 +143,11 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
     async def _tool(*args: Any, **kwargs: Any) -> Any:
         from kedi.agent_adapter.adapters.langchain.runtime import record_live_tool_result
 
+        execution_started = False
         try:
-            result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
+            arguments = _validated_tool_arguments(tool, kwargs)
+            execution_started = True
+            result = tool.fn(*args, **arguments)
             if inspect.isawaitable(result):
                 result = await result
             record_live_tool_result(result)
@@ -149,13 +155,17 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
         except CodeModeError as exc:
             _raise_langchain_codemode_error(exc)
         except Exception as exc:
-            _raise_langchain_tool_error(tool, exc)
+            _raise_langchain_tool_error(tool, exc, execution_started=execution_started)
             raise
 
     return with_live_tool_tracking(replace(tool, fn=_tool)).fn
 
 
-def _raise_langchain_tool_error(tool: ToolSpec, exc: Exception) -> None:
+def _raise_langchain_tool_error(
+    tool: ToolSpec, exc: Exception, *, execution_started: bool = False
+) -> None:
+    if execution_started and (failure := terminal_tool_failure(tool, exc)) is not None:
+        raise failure from exc
     message = correctable_tool_error(tool, exc)
     if message is not None:
         from langchain_core.tools import ToolException

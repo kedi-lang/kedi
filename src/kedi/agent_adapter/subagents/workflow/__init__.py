@@ -547,7 +547,9 @@ network, clock, or process access. Import `asyncio` when using `asyncio.gather`.
 functions below are already available as globals: do not import them. Await each function, pass a
 self-contained non-empty `task` by keyword, and optionally pass a JSON Schema object as
 `final_schema`. Results are dictionaries with `run_id`, `subagent`,
-`task_summary`, and `final_result`; use dictionary indexing. Independent work should run concurrently
+`task_summary`, and `final_result`; use dictionary indexing. `final_result` is the child's typed result when
+the call passed `final_schema` or the child's profile configures an output type; otherwise it is `None`
+and the child's answer is in `task_summary`. Independent work should run concurrently
 with `asyncio.gather`. The last expression is the workflow result; `print()` is only bounded debug
 output. Build task text from prior results with f-strings, keeping every string literal closed on its
 source line. After this tool returns, use its result to produce the parent response; never end the

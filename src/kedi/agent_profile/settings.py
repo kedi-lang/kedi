@@ -9,7 +9,7 @@ SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
 
 KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset(
-    {"tool_reason", "media_limit", "context_limit"}
+    {"tool_reason", "media_limit", "context_limit", "request_retries"}
 )
 
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(

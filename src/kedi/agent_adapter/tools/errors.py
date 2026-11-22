@@ -1,4 +1,4 @@
-"""Kedi tool corrections, independent of the framework's retry envelope."""
+"""Model-facing tool errors, independent of the framework's retry envelope."""
 
 from __future__ import annotations
 
@@ -7,9 +7,14 @@ from .specs import ToolSpec
 
 
 def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
+    from pydantic_ai.exceptions import RunCancelled
+
     from kedi.run_budget import RunBudgetExceeded
 
-    if isinstance(exc, RunBudgetExceeded):
+    original = exc.original if isinstance(exc, KediExecutionError) else exc
+    if isinstance(exc, (RunBudgetExceeded, RunCancelled)) or isinstance(
+        original, (RunBudgetExceeded, RunCancelled)
+    ):
         return None
     record = getattr(exc, "tool_call", None)
     if getattr(exc, "kedi_result_failure_stage", None) is not None or (
@@ -24,7 +29,6 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
 
         if isinstance(exc, (ToolApprovalDenied, HookDeniedError)):
             return str(exc)
-    original = exc.original if isinstance(exc, KediExecutionError) else exc
     if isinstance(original, CapabilityActivationError):
         return str(original)
     if kind == "filesystem" and isinstance(
@@ -51,8 +55,8 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
         if isinstance(original, WorkflowError):
             return str(original)
     if kind in {"subagent", "subagent_lifecycle"}:
-        # Whatever went wrong with a delegation, the calling model sees it and decides what to
-        # do next. Run budgets (above) and cancellation (a BaseException) still end the run.
+        # Shared sanitized feedback; adapters distinguish argument corrections from execution
+        # failures only after argument validation. Budgets and cancellation still end the run.
         from ..subagents.runs import safe_subagent_error_message
 
         message = safe_subagent_error_message(exc)
@@ -75,6 +79,23 @@ def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
             + ". Correct the arguments if they caused this, or continue without this result."
         )
     return None
+
+
+class TerminalToolFailure(RuntimeError):
+    """Model-facing execution failure that must not consume argument corrections."""
+
+
+def terminal_tool_failure(tool: ToolSpec, exc: Exception) -> TerminalToolFailure | None:
+    """Classify a failure after validation, without changing direct tool execution."""
+    metadata = tool.metadata or {}
+    kind = metadata.get("kedi_tool_kind") or metadata.get("kind")
+    if kind not in {"subagent", "subagent_lifecycle"}:
+        return None
+    original = exc.original if isinstance(exc, KediExecutionError) else exc
+    if isinstance(original, CapabilityActivationError):
+        return None
+    message = correctable_tool_error(tool, exc)
+    return TerminalToolFailure(message) if message is not None else None
 
 
 # ValueError and LookupError for rejected input or missing records, OSError for unreachable

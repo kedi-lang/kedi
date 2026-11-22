@@ -209,6 +209,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         codemode: bool | CodeModeSettings = False,
         query_artifact: bool = False,
         tool_reason: bool = False,
+        request_retries: int = 2,
         media_limit: int | None = None,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
@@ -231,6 +232,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if not isinstance(tool_reason, bool):
             raise TypeError("tool_reason must be a boolean")
         self.tool_reason = tool_reason
+        from kedi.agent_adapter.request_retry import request_retry_limit
+
+        self.request_retries = request_retry_limit({}, request_retries)
         self.media_limit = media_limit_bytes({}, default=media_limit)
         self._tool_reasons_var: ContextVar[dict[str, str | None]] = ContextVar(
             f"kedi_pydantic_tool_reasons_{id(self)}", default={}

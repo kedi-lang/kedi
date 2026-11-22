@@ -21,6 +21,7 @@ from pydantic_ai import UsageLimits
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.usage import RunUsage
 
+from kedi.agent_adapter.adapters.langchain.request_retry import retain_retry_continuation_reset
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings, cache_epoch_key
 from kedi.agent_adapter.compaction.langchain_archive import LangChainArtifactHistoryProcessor
 from kedi.agent_adapter.conversation import AdapterConversationContext
@@ -33,6 +34,7 @@ from kedi.agent_adapter.invocation import InvocationUsage
 from kedi.agent_adapter.output_schema import OutputCorrection
 from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.tools.dispatch import SequentialDispatchGate
+from kedi.agent_adapter.tools.errors import TerminalToolFailure
 from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries
 
 
@@ -206,7 +208,9 @@ class LangChainRunMiddleware(AgentMiddleware):
                     changed = settings.pop(key, None) is not None or changed
                 model = _without_stale_continuation(
                     model,
-                    reset_previous_response=directive.reset_continuation,
+                    reset_previous_response=retain_retry_continuation_reset(
+                        directive.reset_continuation
+                    ),
                 )
                 changed = model is not request.model or changed
                 cache_key = settings.get("prompt_cache_key")
@@ -256,12 +260,22 @@ class LangChainRunMiddleware(AgentMiddleware):
         state.limits.check_before_tool_call(projected)
         state.pending_tools += 1
         token = _TOOL_CALL.set(request.tool_call)
+        terminal_failure = False
         try:
             metadata = getattr(getattr(request, "tool", None), "metadata", None) or {}
             async with state.dispatch_gate.enter(
                 sequential=metadata.get("kedi_sequential") is True
             ):
-                result = await handler(request)
+                try:
+                    result = await handler(request)
+                except TerminalToolFailure as exc:
+                    terminal_failure = True
+                    result = ToolMessage(
+                        content=str(exc),
+                        name=request.tool_call["name"],
+                        tool_call_id=request.tool_call["id"],
+                        status="error",
+                    )
         finally:
             _TOOL_CALL.reset(token)
             state.pending_tools -= 1
@@ -273,7 +287,7 @@ class LangChainRunMiddleware(AgentMiddleware):
             message.content = "[]"
         if message is not None:
             state.completed_tools[message.tool_call_id] = message
-        if message is not None and message.status == "error":
+        if message is not None and message.status == "error" and not terminal_failure:
             name = call["name"]
             if state.corrections[name] >= self.tool_retries:
                 raise UnexpectedModelBehavior(
@@ -300,6 +314,8 @@ class LangChainOutputCorrectionMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         from langchain_core.messages import HumanMessage
 
+        from kedi.agent_adapter.adapters.langchain.duplicate_output import RejectedDuplicateOutput
+
         corrections: list[Any] = []
         attempt = 0
         deferred = _deferred_correction(request.messages)
@@ -318,7 +334,11 @@ class LangChainOutputCorrectionMiddleware(AgentMiddleware):
                 failed, feedback = [exc.ai_message], _structured_output_feedback(exc.source)
             else:
                 structured = response.structured_response
-                if structured is None and _answered_without_output(response.result):
+                if isinstance(response, RejectedDuplicateOutput):
+                    if attempt >= self.retries:
+                        raise response.error
+                    failed, feedback = list(response.result), str(response.error)
+                elif structured is None and _answered_without_output(response.result):
                     # A final text reply instead of the structured output (for example a tool
                     # call written as text) gets a correction, like Pydantic AI's output retry.
                     if attempt >= self.retries:
