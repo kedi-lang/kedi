@@ -83,7 +83,7 @@ current scope. A nested policy overlays only the fields it specifies. Setting
 | --- | --- | --- | --- |
 | `enabled` | `true` | Boolean | Enables artifact admission and management tools |
 | `query_artifacts` | `disabled` | `enabled` or `disabled` | Exposes bounded lexical retrieval for known artifacts |
-| `exclude_tools` | `[]` | Exact tool names, no wildcards | Keeps selected tool results inline without bypassing the 100,000-byte limit |
+| `exclude_tools` | `[]` | Exact tool names, no wildcards | Keeps selected tool results inline without bypassing the 100,000-byte limit. The list is a backtick Python expression; a plain list is a parse error. |
 | `store` | `memory` | `memory` or `file` | Payload store for newly admitted values |
 | `path` | `.kedi/artifacts` | String or `Path` | Root directory for the file store |
 | `threshold` | `100kb` | Non-negative byte size | Minimum serialized size for ordinary artifact conversion |

@@ -58,8 +58,17 @@ for retry, admission, streaming, and history boundaries.
 `idle_ttl`, `preview_chars`, `read_max_chars`, `session_quota`,
 `max_artifacts`, and `cleanup_interval`. The policy is lexical and enabled by
 default. `exclude_tools` lists exact tool names whose results skip artifact
-admission. Artifact querying is separately disabled by default and accepts
+admission; the list is a backtick Python expression, and a plain list is a
+parse error. Artifact querying is separately disabled by default and accepts
 `query_artifacts: enabled|disabled`. See [Tool Artifacts](../runtime/tool-artifacts.md).
+
+`> skills:` fields are `enabled`, `cwd`, `max_skills`, `include_registry`,
+`include_all`, and `exclude_paths`. The expanded form requires
+`enabled: true` to turn discovery on; without it, discovery stays disabled.
+`max_skills` is a positive integer (default `20`, maximum `100`),
+`include_registry` defaults to `true`, `include_all` defaults to `false`,
+and `exclude_paths` is a backtick Python list of paths. See
+[Skills](../agentic-engineering/skills.md).
 
 The expanded `> history:` form contains only subsettings. It requires
 `enabled: true|false` and accepts `compaction_mode: native|disabled` plus an
@@ -94,7 +103,8 @@ instead of eager composition; it defaults to `false`. See
 `> codemode:` accepts `enabled`, `preload_tools`, `default_search_limit`,
 `max_search_limit`, `max_hydrated_tools`, `max_discovery_result_bytes`,
 `max_code_chars`, `max_nested_calls`, `max_concurrent_calls`,
-`max_tool_result_bytes`, `max_total_tool_result_bytes`, `max_print_bytes`, and
+`max_tool_result_bytes`, `max_total_tool_result_bytes`, `max_print_bytes`,
+`max_memory_bytes`, `max_feed_seconds`, and
 `request_timeout`. `preload_tools` may be one exact exposed name or an indented
 list; preloading resolves schemas without executing tools. See
 [CodeMode](../agentic-engineering/codemode.md#preload-known-tools).
@@ -108,16 +118,20 @@ handlers. See [Agent Lifecycle Hooks](../agentic-engineering/hooks.md).
 
 ```kedi
 > mcp:
-    name: project_docs
     transport: stdio
     command: uv
     args: `["run", "docs-server"]`
     env: `{"LOG_LEVEL": "warning"}`
-    cwd: .
 ```
 
-Network transports use `url` instead of `command`/`args`. Valid normalized
+Network transports use `url` instead of `command`/`args`, and accept
+`headers` as a backtick mapping of HTTP header names to values. Valid normalized
 transports are documented in [MCP Servers](../agentic-engineering/mcp.md).
+
+> Note: `name:` and `cwd:` are not `> mcp:` fields — a server has no
+> name in the profile (servers are identified by the hash of their
+> specification, not by a name). Both lines parse as free-form text but
+> are ignored when the server specification is built.
 
 ## Procedure Tool Metadata
 

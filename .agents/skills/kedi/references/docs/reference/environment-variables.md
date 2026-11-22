@@ -12,10 +12,11 @@
 
 `KEDI_ADAPTER` and `KEDI_AGENT` are mutually exclusive. Python `configure()`,
 decorator arguments, source directives, and CLI options can provide more local
-selection. `KEDI_PARALLEL` accepts `0/1`, `true/false`, `on/off`, or a positive
-worker count; invalid values fail rather than silently selecting a mode.
-Unset or empty enables concurrency with eight workers. Use `KEDI_PARALLEL=0`
-for sequential execution; no variable is needed to enable concurrency.
+selection. `KEDI_PARALLEL` accepts `0/1`, `true/false`, `yes/no`, `on/off`, or
+a positive worker count; negative counts and other values fail rather than
+silently selecting a mode. Unset or empty enables concurrency with eight
+workers. Use `KEDI_PARALLEL=0` for sequential execution; no variable is needed
+to enable concurrency.
 
 ## Code Generation
 
@@ -96,7 +97,6 @@ resets active runtimes. These files and their contents must not be committed.
 | `KEDI_A2A_SECRET` | Direct server credential fallback |
 | `KEDI_A2A_MODEL` | Model override for the exported server profile |
 | `KEDI_A2A_STATE_DIR` | Directory that keeps A2A tasks and sessions across server restarts (`--state-dir`) |
-| `KEDI_A2A_STATE_DIR` | Persist A2A tasks and sessions across restarts; the `--state-dir` equivalent |
 
 Prefer a named variable through `--secret-env` or a mounted file through
 `--secret-file` over `KEDI_A2A_SECRET`. Client profiles reference their own

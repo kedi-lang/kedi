@@ -111,6 +111,7 @@ not only the adapter.
 | `mcp` | One or more `> mcp:` servers |
 | `profile_override` | Lexical/profile state changes |
 | `model_override` | Explicit `> model:` |
+| `model_fallback` | `> fallback:` ordered alternatives |
 | `effort` | Explicit `> effort:` |
 | `settings` | Nonempty `> settings:` |
 | `codemode` | `> codemode: enabled` progressive tool discovery and bounded execution |
@@ -118,13 +119,17 @@ not only the adapter.
 | `native_approval_handler` | Dynamic handler projected natively |
 | `subagents` | `> subagent:` |
 | `background_subagents` | Background lifecycle tools |
+| `live_subagent_input` | `> send` to a running child |
+| `subagent_interrupt` | `> interrupt` of a running child |
 | `artifacts` | `> artifacts:` enabled |
 | `native_artifacts` | Native artifact admission for adapter-owned tools |
 | `stateful_history` | History kept across requests by the adapter |
 | `history_replay` | Replaying stored history into a new run |
+| `history_processing` | `> history:` `processor` or `processor_condition` |
 | `native_compaction` | Adapter-native history compaction |
 | `request_budget` | `> budget:` `request_limit` |
 | `tool_attempt_budget` | `> budget:` `tool_attempt_limit` |
+| `media_input` | Media values attached to a prompt |
 | `stream_events` | Completed semantic commentary/final messages and run lifecycle events |
 | `hooks` | Agent lifecycle interception; support is declared separately for each event |
 

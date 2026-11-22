@@ -196,14 +196,21 @@ module can be restored; lambdas, local functions, closures, bound methods, and
 
 ## Adapter Support
 
-| Adapter | Prompt | Pre tool | Post tool | Tool failure | Tool origins |
-| --- | :---: | :---: | :---: | :---: | --- |
-| Pydantic AI | yes | yes | yes | yes | Kedi, MCP, adapter-native |
-| LangChain | yes | yes | yes | yes | Kedi, MCP, adapter-native |
-| Claude Agent SDK | yes | yes | yes | yes | Kedi, MCP, provider built-ins |
-| Codex App Server | yes | yes | yes | yes | Kedi projected tools |
-| WebGPU | yes | yes | yes | yes | Kedi, MCP |
-| ACP | yes | no | no | no | none |
+| Adapter | Prompt | Pre tool | Post tool | Tool failure | Result failure | Tool origins |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Pydantic AI | yes | yes | yes | yes | yes | Kedi, MCP, adapter-native |
+| LangChain | yes | yes | yes | yes | yes | Kedi, MCP, adapter-native |
+| Claude Agent SDK | yes | yes | yes | yes | yes | Kedi, MCP, provider built-ins |
+| Codex App Server | yes | yes | yes | yes | yes | Kedi projected tools |
+| WebGPU | yes | yes | yes | yes | yes | Kedi, MCP |
+| ACP | yes | no | no | no | no | none |
+| A2A | yes | no | no | no | no | none |
+
+"Tool failure" is `post_tool_use_failure` (a tool body that raised after
+execution started); "Result failure" is `post_tool_result_failure` (a failure
+after the tool body returned, for example artifact admission or a post-success
+hook). Both are declared in every full adapter's `HookCapabilities`; ACP and
+A2A declare prompt-only capabilities.
 
 Kedi validates support per event. A configuration that requests an unsupported
 event fails before model transport and is reported by the LSP. Dynamic adapter
