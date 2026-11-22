@@ -52,10 +52,17 @@ In PowerShell, activate
 To use a Codex subscription instead of a native OpenAI API key, on Python 3.11+:
 
 ```bash
-uv sync --dev --extra codex-model
+uv sync --dev
 codex login
 export KEDI_ADAPTER_MODEL=codex/gpt-6-luna
 ```
+
+The development group already includes the pinned
+`codex-auth-helper[websocket]==1.13.0`, so no extra is needed. Do not combine
+`--dev` with `--extra codex-model`: the two are declared conflicting in
+`pyproject.toml`, and `uv sync --dev --extra codex-model` fails to resolve.
+For an install without the development tools, use a separate environment with
+`uv sync --no-dev --extra codex-model` instead.
 
 These are model calls, not canned output. Wording, correctness, request counts,
 and latency can vary. A successful test with a stubbed provider is evidence of
