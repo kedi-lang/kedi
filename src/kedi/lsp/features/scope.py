@@ -619,12 +619,8 @@ def _procedure_scope_entries(
     prog: Union[Program, ProgramWithValidation],
 ) -> list[tuple[ProcedureDef, tuple[ProcedureDef, ...]]]:
     entries: list[tuple[ProcedureDef, tuple[ProcedureDef, ...]]] = []
-    seen: set[int] = set()
 
     def visit(proc: ProcedureDef, ancestors: tuple[ProcedureDef, ...]) -> None:
-        if id(proc) in seen:
-            return
-        seen.add(id(proc))
         entries.append((proc, ancestors))
         for child in _nested_procedures(proc):
             visit(child, ancestors + (proc,))

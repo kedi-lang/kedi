@@ -60,6 +60,27 @@ def test_default_call_with_commas() -> None:
     assert src[decls["p"][1][1] :].startswith("y=`1`")
 
 
+def test_default_with_escaped_backslash_does_not_split_the_header() -> None:
+    src = '@p(x=`"a\\\\b"`, y=`1`):\n  = <y>\n'
+    decls = _decls(src)
+    assert [name for name, _ in decls["p"]] == ["x", "y"]
+    assert src[decls["p"][1][1] :].startswith("y=`1`")
+
+
+def test_param_decls_without_a_paren_returns_empty() -> None:
+    from kedi.lang.ast import ProcedureDef, Span
+    from kedi.lsp.features.scope import _param_decls
+
+    source = "@p x\n"
+    proc = ProcedureDef(
+        name="p",
+        params=["x"],
+        loc=Span(0, 4, 1, 1, 1, 5),
+    )
+    with source_coordinates(source, PATH):
+        assert _param_decls(proc) == []
+
+
 def test_rename_never_rewrites_a_name_inside_a_default() -> None:
     src = "@p(x=`y`, y=`1`):\n  = <y>\n"
     edit = rename_at(src, URI, PATH, "y", "z", occurrence=2)
@@ -105,3 +126,15 @@ def test_header_segment_splitter() -> None:
         " b=`f(1, 2)`",
         " c",
     ]
+
+
+def test_header_segment_splitter_without_a_closing_paren() -> None:
+    header = "@p(a, b"
+    segments = _split_header_param_segments(header, header.find("(") + 1)
+    assert [header[s:e] for s, e in segments] == ["a", " b"]
+
+
+def test_header_segment_splitter_with_a_trailing_comma() -> None:
+    header = "@p(a,"
+    segments = _split_header_param_segments(header, header.find("(") + 1)
+    assert [header[s:e] for s, e in segments] == ["a"]

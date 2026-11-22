@@ -80,7 +80,7 @@ def _same_path(left: Optional[str], right: Optional[str]) -> bool:
         return False
     try:
         return Path(left).resolve() == Path(right).resolve()
-    except OSError:
+    except OSError:  # pragma: no cover - resolve() does not raise on local paths
         return left == right
 
 
