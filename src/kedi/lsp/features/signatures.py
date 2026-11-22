@@ -9,9 +9,14 @@ from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lang.parser import KediParseError
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import span_to_range as _span_to_range
-from kedi.lsp.coordinates import with_source_coordinates
+from kedi.lsp.coordinates import utf16_length, with_source_coordinates
 from kedi.lsp.features.directive_help import _format_proc_param
-from kedi.lsp.features.scope import _all_procedures, _segments_of
+from kedi.lsp.features.scope import (
+    _all_procedures,
+    _control_body_statements,
+    _iter_control_statements,
+    _segments_of,
+)
 from kedi.lsp.module_surface import imported_surface_for_program
 from kedi.lsp.parsing import parse_program
 
@@ -29,16 +34,18 @@ def compute_signature_help(
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
     proc_by_name.update(imported_surface.procedures)
 
-    # Find the innermost call_segment containing the cursor.
+    # Find the innermost call_segment containing the cursor. Control-flow
+    # bodies are child scopes, so walk them too: a call inside `> if:` is
+    # still a call the user is typing.
     target_call: Optional[CallSegment] = None
     for proc in _all_procedures(prog):
         if proc.loc is None or not _position_inside(pos, proc.loc):
             continue
-        for stmt in proc.body:
+        for stmt in _iter_control_statements(proc.body):
             call = _innermost_call_at(stmt, pos)
             if call is not None:
                 target_call = call
-    for stmt in prog.toplevel_body:
+    for stmt in _iter_control_statements(prog.toplevel_body):
         call = _innermost_call_at(stmt, pos)
         if call is not None:
             target_call = call
@@ -53,19 +60,21 @@ def compute_signature_help(
     if target is None or target.loc is None:
         return None
 
-    # Build signature label and parameter ranges.
+    # Build signature label and parameter ranges. LSP label offsets are
+    # UTF-16 code units, not Python characters: a non-BMP character in a
+    # parameter default (one Python character, two UTF-16 units) must not
+    # shift every later parameter's range.
     params_label_parts: List[str] = []
     param_infos: List[lsp.ParameterInformation] = []
-    cursor_byte_offset = 0  # within the label string
     label_prefix = f"@{target.name}("
-    cursor_byte_offset = len(label_prefix)
+    cursor_offset = utf16_length(label_prefix)
     for i, pname in enumerate(target.params):
         piece = _format_proc_param(target, pname)
         params_label_parts.append(piece)
-        start = cursor_byte_offset
-        end = cursor_byte_offset + len(piece)
+        start = cursor_offset
+        end = cursor_offset + utf16_length(piece)
         param_infos.append(lsp.ParameterInformation(label=(start, end)))
-        cursor_byte_offset = end + 2  # ", "
+        cursor_offset = end + 2  # ", "
     label = f"{label_prefix}{', '.join(params_label_parts)})"
     if target.return_type_annotation:
         label += f" -> {target.return_type_annotation}"
@@ -141,6 +150,8 @@ def compute_inlay_hints(
     def visit_stmt(stmt, enclosing_proc: Optional[ProcedureDef]) -> None:
         for seg in _segments_of(stmt):
             visit_segment(seg, enclosing_proc)
+        for child in _control_body_statements(stmt):
+            visit_stmt(child, enclosing_proc)
 
     def visit_segment(seg, enclosing_proc: Optional[ProcedureDef]) -> None:
         if isinstance(seg, CallSegment):
