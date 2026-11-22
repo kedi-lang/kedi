@@ -379,10 +379,13 @@ def run_trial(
             if state in {"completed", "budget_exhausted"}
             else terminal.close
         )
+        # Restore the previous handlers first: cleanup below (terminal close,
+        # conversation close) can block, and a second signal arriving during
+        # it must not re-enter this trial's handler.
         for cleanup_name, cleanup in (
+            ("signals", signal_state.restore),
             ("conversation", conversation.close if conversation is not None else None),
             ("terminal", terminal_cleanup),
-            ("signals", signal_state.restore),
             ("cwd", lambda: os.chdir(previous_cwd)),
             (
                 "source",
@@ -557,7 +560,10 @@ class _SignalState:
         self._previous.clear()
 
     def _handle(self, signum: int, _: FrameType | None) -> NoReturn:
-        self.terminal.close()
+        # Signal handlers run in async-signal context: they must not do
+        # blocking work. Terminal teardown (process termination with grace
+        # periods, reader joins, event flushes) happens in run_trial's
+        # finally block, in normal context, once this exception unwinds.
         if signum == signal.SIGTERM or signum == getattr(signal, "SIGALRM", None):
             raise _TrialTimedOut("trial terminated by Harbor")
         raise KeyboardInterrupt

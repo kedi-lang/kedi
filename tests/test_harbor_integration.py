@@ -1280,8 +1280,15 @@ def test_process_supervisor_validation_signals_and_main(
         lambda process_group, signum: signals.append((process_group, signum)),
     )
     supervisor._handle_signal(signal.SIGTERM, None)
-    assert signals == [(123, signal.SIGTERM)]
+    # The handler only records the request; it must not signal the child from
+    # signal context (it would block on _termination_lock if the main thread
+    # held it). The run loop drains the pending signal in normal context.
+    assert signals == []
     assert supervisor._requested_signal == signal.SIGTERM
+    assert supervisor._signal_pending == signal.SIGTERM
+    supervisor._drain_pending_signal()
+    assert signals == [(123, signal.SIGTERM)]
+    assert supervisor._signal_pending is None
     child.poll = lambda: 0
     supervisor._signal_child(signal.SIGKILL)
     supervisor._child = None
@@ -2787,7 +2794,9 @@ def test_runner_helpers_signal_state_and_main(
         signal_state._handle(signal.SIGTERM, None)
     with pytest.raises(KeyboardInterrupt):
         signal_state._handle(signal.SIGINT, None)
-    assert closed == [True, True]
+    # The handler must not close the terminal: teardown is blocking work that
+    # belongs in run_trial's finally block, not in async-signal context.
+    assert closed == []
 
     inactive_state = runner._SignalState(cast(TerminalSession, SimpleNamespace(close=lambda: None)))
     monkeypatch.setattr(runner, "threading_is_main", lambda: False)
