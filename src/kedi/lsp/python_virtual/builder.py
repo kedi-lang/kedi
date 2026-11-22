@@ -106,7 +106,16 @@ class VirtualBuilder:
             if source_line == end_line and end_char == 0:
                 continue
             if dedent:
-                start_char = min(end_char, start_char + min(dedent, _indent_width(line_text)))
+                # ``dedent`` is a visual column count (tabs count as 4, as in
+                # the parser's dedent_block), while ``start_char`` is a UTF-16
+                # character offset. Strip that many visual columns of leading
+                # whitespace and convert the resulting character index back
+                # to a UTF-16 offset; adding the column count to the
+                # character offset would eat source characters on tab
+                # indentation (one tab char is four columns).
+                strip_index = _dedent_char_index(line_text, dedent)
+                start_index = max(utf16_to_index(line_text, start_char), strip_index)
+                start_char = utf16_length(line_text[:start_index])
             if end_char < start_char:
                 continue
 
@@ -126,7 +135,9 @@ class VirtualBuilder:
                 "start": {"line": virtual_line, "character": virtual_start_char},
                 "end": {
                     "line": virtual_line,
-                    "character": virtual_start_char + max(0, end_char - start_char),
+                    # UTF-16 units, not Python characters: non-BMP text in
+                    # the body (e.g. an emoji in a string) is two units.
+                    "character": utf16_length(prefix + body),
                 },
             }
             self.mappings.append(
@@ -236,6 +247,26 @@ def _indent_width(line: str) -> int:
         else:
             break
     return width
+
+
+def _dedent_char_index(line: str, columns: int) -> int:
+    """Character index after stripping ``columns`` of leading whitespace.
+
+    Mirrors the parser's ``dedent_block``: a space removes one column and
+    a tab removes four, consuming whole whitespace characters.
+    """
+    removed = 0
+    index = 0
+    while index < len(line) and removed < columns:
+        if line[index] == " ":
+            removed += 1
+            index += 1
+        elif line[index] == "\t":
+            removed += 4
+            index += 1
+        else:
+            break
+    return index
 
 
 def _has_python_substance(text: str) -> bool:
