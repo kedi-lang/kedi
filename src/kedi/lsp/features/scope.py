@@ -619,12 +619,23 @@ def _procedure_scope_entries(
     prog: Union[Program, ProgramWithValidation],
 ) -> list[tuple[ProcedureDef, tuple[ProcedureDef, ...]]]:
     entries: list[tuple[ProcedureDef, tuple[ProcedureDef, ...]]] = []
+    seen: set[int] = set()
 
     def visit(proc: ProcedureDef, ancestors: tuple[ProcedureDef, ...]) -> None:
+        if id(proc) in seen:
+            return
+        seen.add(id(proc))
         entries.append((proc, ancestors))
         for child in _nested_procedures(proc):
             visit(child, ancestors + (proc,))
 
     for proc in prog.procedures:
         visit(proc, ())
+    # Procedures may also be defined inside top-level blocks (``> if:``,
+    # ``> loop:`` ...): they are ProcDefStmts in the top-level body, not
+    # entries of ``prog.procedures``. Diagnostics, completion, media, and
+    # substitution checks all read this list, so they must see them too.
+    for stmt in _iter_control_statements(prog.toplevel_body):
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            visit(stmt.proc, ())
     return entries
