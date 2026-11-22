@@ -5,6 +5,7 @@ import pytest
 
 from kedi.agent_adapter.execution import (
     RunDeadlineExceeded,
+    _operation_event_loop,
     run_sync,
     use_async_owner_loop,
     use_run_deadline,
@@ -12,7 +13,10 @@ from kedi.agent_adapter.execution import (
 
 
 @pytest.mark.parametrize("inside_loop", [False, True])
-def test_deadline_cancels_and_unwinds_before_returning(inside_loop: bool) -> None:
+@pytest.mark.parametrize("deadline_offset", [-1.0, 0.02])
+def test_deadline_cancels_and_unwinds_before_returning(
+    inside_loop: bool, deadline_offset: float
+) -> None:
     events: list[str] = []
 
     async def work() -> None:
@@ -23,10 +27,26 @@ def test_deadline_cancels_and_unwinds_before_returning(inside_loop: bool) -> Non
             events.append("closed")
 
     def invoke() -> None:
-        with use_run_deadline(time.monotonic() + 0.02):
-            with pytest.raises(RunDeadlineExceeded):
-                run_sync(work())
-        assert events == ["closed"]
+        async def start() -> asyncio.Task[None]:
+            task = asyncio.create_task(work())
+            await asyncio.sleep(0)
+            return task
+
+        async def cleanup(task: asyncio.Task[None]) -> None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        with _operation_event_loop():
+            # Start work before arming the deadline; loop startup can exceed 20 ms in CI.
+            task = run_sync(start())
+            try:
+                with use_run_deadline(time.monotonic() + deadline_offset):
+                    with pytest.raises(RunDeadlineExceeded):
+                        run_sync(task)
+                assert events == ["closed"]
+                assert task.cancelled()
+            finally:
+                run_sync(cleanup(task))
 
     async def outer() -> None:
         invoke()
