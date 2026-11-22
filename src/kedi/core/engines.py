@@ -69,8 +69,14 @@ def _default_engine(*, max_workers: int = 8) -> Any:
         workers = int(raw)
     except ValueError:
         raise RuntimeError(
-            f"Invalid KEDI_PARALLEL value {raw!r}: use 0/1/true/false/on/off or a worker count."
+            f"Invalid KEDI_PARALLEL value {raw!r}: use 0/1/true/false/yes/no/on/off "
+            "or a positive worker count."
         ) from None
-    if workers <= 0:
+    if workers < 0:
+        raise RuntimeError(
+            f"Invalid KEDI_PARALLEL value {raw!r}: use 0/1/true/false/yes/no/on/off "
+            "or a positive worker count."
+        )
+    if workers == 0:
         return SequentialEngine()
     return shared_thread_engine(max_workers=workers)

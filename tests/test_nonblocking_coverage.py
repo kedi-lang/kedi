@@ -176,7 +176,6 @@ def test_retry_after_of_variants() -> None:
         ("", True),
         ("  ", True),
         ("0", False),
-        ("-1", False),
         ("false", False),
         ("FALSE", False),
         ("no", False),
@@ -197,9 +196,10 @@ def test_default_engine_selection(monkeypatch: pytest.MonkeyPatch, value, parall
     assert bool(getattr(eng, "parallel", False)) is parallel
 
 
-@pytest.mark.parametrize("value", ["notint", "maybe", "2x", "true!"])
+@pytest.mark.parametrize("value", ["notint", "maybe", "2x", "true!", "-1", "-5"])
 def test_default_engine_rejects_garbage(monkeypatch: pytest.MonkeyPatch, value) -> None:
     # A1: an unrecognized KEDI_PARALLEL value must raise loudly, never silently flip parallel on.
+    # A negative worker count is not a spelling of sequential: only 0/false/no/off select it.
     monkeypatch.setenv("KEDI_PARALLEL", value)
     with pytest.raises(RuntimeError, match="Invalid KEDI_PARALLEL"):
         core_engines_module._default_engine()
