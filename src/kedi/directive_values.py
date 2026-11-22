@@ -253,7 +253,6 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "organization",
                 "fallback_model",
                 "model_provider",
-                "model_type",
                 "reasoning_effort",
                 "personality",
                 "summary",
@@ -268,13 +267,11 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "response_cache",
                 "streaming",
                 "stream_usage",
-                "cache",
-                "use_developer_role",
             )
         },
         "max_tokens": INTEGER,
         "response_cache_ttl": POSITIVE_INT,
-        **{name: NONNEGATIVE_INT for name in ("max_retries", "num_retries")},
+        "max_retries": NONNEGATIVE_INT,
         **{
             name: NUMBER
             for name in (
@@ -301,8 +298,6 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "allowed_tools",
                 "disallowed_tools",
                 "tools",
-                "launch_kwargs",
-                "train_kwargs",
             )
         },
     },
