@@ -47,6 +47,7 @@ def validate_package_metadata(
     *,
     enforce_python_compatibility: bool = False,
     python_version: tuple[int, int] | None = None,
+    allow_direct_urls: bool = True,
 ) -> None:
     """Validate metadata that tree-sitter syntax alone cannot prove.
 
@@ -63,9 +64,11 @@ def validate_package_metadata(
 
     for dependency in metadata.python_dependencies:
         try:
-            Requirement(dependency)
+            requirement = Requirement(dependency)
         except InvalidRequirement as exc:
             raise ValueError(f"invalid Python dependency {dependency!r}") from exc
+        if requirement.url is not None and not allow_direct_urls:
+            raise ValueError(f"Python dependency {dependency!r} uses a direct URL")
 
     if metadata.python_requirement is None:
         return

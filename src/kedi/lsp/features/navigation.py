@@ -57,6 +57,7 @@ from kedi.lsp.features.scope import (
 )
 from kedi.lsp.features.symbols import (
     SymbolRef,
+    _directive_name_span,
     _is_identifier,
     _location_for_span,
     _profile_use_entry_spans,
@@ -275,6 +276,8 @@ def _declaration_identifier_span(
         return name_token_span(sym.declaration_span, sym.name, prefix_len=1)
     if sym.kind == "type_field":
         return name_token_span(sym.declaration_span, sym.name, prefix_len=0)
+    if sym.kind == "agent_profile":
+        return _directive_name_span(prog, sym.declaration_span, sym.name) or sym.cursor_span
     return sym.declaration_span
 
 
@@ -446,36 +449,21 @@ def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Sp
         _collect_type_refs_in_expr(expr.right, name, out)
 
 
-@with_source_coordinates(1)
-def compute_prepare_rename(
-    source: str, source_path: Optional[str], pos: lsp.Position
-) -> Optional[lsp.Range]:
-    """Return the precise identifier range for the editor's rename popup.
-
-    Only renameable kinds are returned; everything else is ``None``
-    (which tells the editor "can't rename here").
-    """
-    try:
-        prog = parse_program(source, source_path=source_path)
-    except KediParseError:
-        return None
-    sym = _resolve_symbol_at(prog, pos)
-    if sym is None:
-        return None
+def _is_renameable_symbol(sym: SymbolRef, source_path: str | None) -> bool:
     if (
         sym.kind == "type"
         and sym.declaration_span is None
         and _known_lsp_type_origin(sym.name) is not None
     ):
-        return None
+        return False
     if (
         source_path is not None
         and sym.declaration_span is not None
         and sym.declaration_span.source_path is not None
         and Path(sym.declaration_span.source_path).resolve() != Path(source_path).resolve()
     ):
-        return None
-    if sym.kind not in (
+        return False
+    return sym.kind in (
         "procedure",
         "agent_tool",
         "type",
@@ -487,7 +475,21 @@ def compute_prepare_rename(
         "output_decl",
         "module_value",
         "imported_value",
-    ):
+        "agent_profile",
+    )
+
+
+@with_source_coordinates(1)
+def compute_prepare_rename(
+    source: str, source_path: Optional[str], pos: lsp.Position
+) -> Optional[lsp.Range]:
+    """Return a precise identifier range only for locally renameable symbols."""
+    try:
+        prog = parse_program(source, source_path=source_path)
+    except KediParseError:
+        return None
+    sym = _resolve_symbol_at(prog, pos)
+    if sym is None or not _is_renameable_symbol(sym, source_path):
         return None
     return _span_to_range(sym.cursor_span)
 
@@ -505,20 +507,7 @@ def compute_rename(
     except KediParseError:
         return None
     sym = _resolve_symbol_at(prog, pos)
-    if sym is None:
-        return None
-    if (
-        sym.kind == "type"
-        and sym.declaration_span is None
-        and _known_lsp_type_origin(sym.name) is not None
-    ):
-        return None
-    if (
-        source_path is not None
-        and sym.declaration_span is not None
-        and sym.declaration_span.source_path is not None
-        and Path(sym.declaration_span.source_path).resolve() != Path(source_path).resolve()
-    ):
+    if sym is None or not _is_renameable_symbol(sym, source_path):
         return None
     # Reject non-identifier new names.
     if not _is_identifier(new_name):

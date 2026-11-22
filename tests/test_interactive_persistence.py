@@ -676,7 +676,7 @@ def test_session_load_closes_partial_session_for_unexpected_restore_failure(
             super().__init__(**kwargs)
             created.append(self)
 
-    def fail_restore(_session: object, _payload: object) -> None:
+    def fail_restore(_session: object, _payload: object, **kwargs: Any) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(state, "_restore_payload", fail_restore)
@@ -753,10 +753,30 @@ def test_session_dump_load_restores_import_addressable_hook_handlers(tmp_path: P
         )
         session.dump(snapshot)
 
-    with kedi.load_session(snapshot) as restored:
+    with kedi.load_session(snapshot, trusted=True) as restored:
         hooks = restored._top_level_state.active_profile.hooks
         assert hooks is not None
         assert hooks.pre_tool_use == (operator.neg,)
+
+
+@pytest.mark.parametrize("location", ["default_profile", "active_profile"])
+@pytest.mark.parametrize("field", ["hooks", "hook_enforcement"])
+def test_untrusted_session_hooks_are_rejected_before_callable_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location: str, field: str
+) -> None:
+    with kedi.InteractiveSession() as session:
+        payload = state._build_snapshot_payload(session)
+    payload[location] = dict(payload["default_profile"])
+    payload[location][field] = {"pre_tool_use": [{"module": "operator", "qualname": "neg"}]}
+    snapshot = tmp_path / "hooks.kedi-state"
+    persistence.write_snapshot(snapshot, payload)
+
+    def unexpected_import(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("untrusted snapshot resolved a callable")
+
+    monkeypatch.setattr(persistence, "_resolve_importable_callable", unexpected_import)
+    with pytest.raises(SessionLoadError, match="trusted=True"):
+        kedi.load_session(snapshot)
 
 
 def test_session_dump_rejects_non_importable_hook_handlers(tmp_path: Path) -> None:

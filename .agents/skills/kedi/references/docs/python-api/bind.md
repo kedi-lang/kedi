@@ -150,7 +150,9 @@ def report(topic: str) -> str:
 
 With `reload=True`, the file's current source hash is part of the key, so a
 source edit produces a cache miss. The key also includes arguments,
-environment, backend/profile configuration, and tool names.
+environment, backend/profile configuration, and tool names. An argument
+counts by its `repr`; one whose `repr` names an object by memory address hits
+only when the same object is passed again.
 
 ## Missing and Invalid Files
 

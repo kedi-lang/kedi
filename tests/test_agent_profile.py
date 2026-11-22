@@ -439,6 +439,8 @@ def test_codemode_settings_validate_activation_and_limits() -> None:
         "max_tool_result_bytes": 256_000,
         "max_total_tool_result_bytes": 1_000_000,
         "max_print_bytes": 256_000,
+        "max_memory_bytes": 256 * 1024 * 1024,
+        "max_feed_seconds": 60.0,
         "request_timeout": 2.5,
     }
 

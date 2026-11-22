@@ -46,6 +46,7 @@ _QUERY_TOKEN = re.compile(r"[a-z0-9]+")
 # asyncio, so a tool with one of these names would be unreachable.
 _BUILTIN_NAMES = frozenset(name for name in vars(builtins) if not name.startswith("_"))
 _RESERVED_CALLABLE_NAMES = _BUILTIN_NAMES | {"asyncio"}
+_FATAL_HOST_ERRORS = (KediExecutionError, RunBudgetExceeded, CodeModeResultError)
 
 CODEMODE_INSTRUCTIONS = """\
 CodeMode is enabled. Application tools are available only through three control tools:
@@ -88,6 +89,8 @@ class CodeModeLimits:
     max_tool_result_bytes: int = 256_000
     max_total_tool_result_bytes: int = 1_000_000
     max_print_bytes: int = 256_000
+    max_memory_bytes: int = 256 * 1024 * 1024
+    max_feed_seconds: float = 60.0
     request_timeout: float = 60.0
 
     def __post_init__(self) -> None:
@@ -102,6 +105,7 @@ class CodeModeLimits:
             "max_tool_result_bytes": self.max_tool_result_bytes,
             "max_total_tool_result_bytes": self.max_total_tool_result_bytes,
             "max_print_bytes": self.max_print_bytes,
+            "max_memory_bytes": self.max_memory_bytes,
         }
         invalid = [name for name, value in integer_limits.items() if value <= 0]
         if invalid:
@@ -110,6 +114,8 @@ class CodeModeLimits:
             raise ValueError("default_search_limit cannot exceed max_search_limit")
         if self.request_timeout <= 0:
             raise ValueError("request_timeout must be positive")
+        if self.max_feed_seconds <= 0:
+            raise ValueError("max_feed_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,7 +482,10 @@ class CodeModeSession:
                 dispatch_cancelled = True
                 raise
             except Exception as exc:
-                if host_error is None or isinstance(exc, (KediExecutionError, CodeModeResultError)):
+                if host_error is None or (
+                    not isinstance(host_error, _FATAL_HOST_ERRORS)
+                    and isinstance(exc, _FATAL_HOST_ERRORS)
+                ):
                     host_error = exc
                 raise
             finally:
@@ -509,6 +518,9 @@ class CodeModeSession:
                         external_lookup=external_lookup,
                         print_callback=capture,
                     )
+                    if isinstance(host_error, _FATAL_HOST_ERRORS):
+                        await self._cancel_host_tasks()
+                        raise host_error
                     accepted = True
                 except asyncio.CancelledError:
                     dispatch_cancelled = True
@@ -520,9 +532,7 @@ class CodeModeSession:
                     if isinstance(exc, MontyCrashedError):
                         await self.reset()
                     if host_error is not None:
-                        if isinstance(
-                            host_error, (KediExecutionError, RunBudgetExceeded, CodeModeResultError)
-                        ):
+                        if isinstance(host_error, _FATAL_HOST_ERRORS):
                             raise host_error
                         raise CodeModeExecutionError(str(exc)) from host_error
                     result = None
@@ -568,7 +578,13 @@ class CodeModeSession:
             )
         if self._monty_session is None:
             self._monty_session = await self._session_stack.enter_async_context(
-                self._pool.checkout(script_name="kedi_codemode.py")
+                self._pool.checkout(
+                    script_name="kedi_codemode.py",
+                    limits={
+                        "max_memory": self.limits.max_memory_bytes,
+                        "max_feed_duration_secs": self.limits.max_feed_seconds,
+                    },
+                )
             )
         return self._monty_session
 

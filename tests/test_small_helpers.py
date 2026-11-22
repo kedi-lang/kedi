@@ -110,25 +110,22 @@ def test_procedure_type_render_uses_param_and_return_metadata() -> None:
     assert procedure_return_type_to_python(proc) == "list[str]"
 
 
-def test_tree_sitter_parser_handles_parser_initialized_inside_lock(
+def test_tree_sitter_language_handles_initialization_inside_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_parser = parser_module._parser
-    fake_parser = object()
+    original_language = parser_module.get_language()
 
     class RaceLock:
         def __enter__(self) -> None:
-            cast(Any, parser_module)._parser = fake_parser
+            cast(Any, parser_module)._language = original_language
 
         def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None
 
-    monkeypatch.setattr(parser_module, "_parser", None)
+    monkeypatch.setattr(parser_module, "_language", None)
     monkeypatch.setattr(parser_module, "_lock", RaceLock())
 
-    assert parser_module._get_parser() is fake_parser
-
-    monkeypatch.setattr(parser_module, "_parser", original_parser)
+    assert parser_module.get_language() is original_language
 
 
 def test_utils_parse_args_and_attrdict() -> None:

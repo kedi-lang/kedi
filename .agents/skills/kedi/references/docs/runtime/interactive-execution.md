@@ -142,9 +142,12 @@ Portable lifecycle hooks are stored without pickle. A handler is restorable only
 its module and qualified name resolve back to that exact callable. Importable
 top-level functions are supported; lambdas, local functions, closures, bound
 methods, and handlers from `__main__` make the dump fail during preflight.
-Load only session snapshots you trust. Restoring an import-addressable hook
-imports its Python module, so that module's normal import-time code may run;
-Kedi does not execute the hook handler itself during load.
+Restoring an import-addressable hook imports its Python module, so that module's
+normal import-time code may run; Kedi does not execute the hook handler itself
+during load. A portable snapshot that restores hook handlers therefore loads
+only with `trusted=True` (`--trust-snapshot` in the CLI); without it, loading
+stops before importing hook modules. Portable snapshots without hook handlers load
+without trust.
 
 Adapters and executors are not serialized. Supply them when the restored
 session needs those infrastructure dependencies:

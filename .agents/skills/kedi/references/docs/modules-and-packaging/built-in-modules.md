@@ -55,7 +55,10 @@ It does not install packages or validate their versions.
 
 ## `filesystem`
 
-See [`filesystem`](filesystem.md).
+`filesystem` exports `filesystem`, `readonlyfs`, `read_text_file`,
+`write_text_file`, `apply_patch`, `path_exists`, `list_directory`,
+`create_directory`, `remove_file`, `remove_directory`, and `get_file_info`.
+See [`filesystem`](filesystem.md) for the full table.
 
 ## `media`
 
@@ -115,6 +118,8 @@ See [Tool Reasons](../agentic-engineering/tool-reasons.md).
 encoded output. It is not an application API.
 
 `wordle` exports its game profile and game procedures; it requires a graphical
-environment and optional packages. See [Example Modules](example-modules.md)
-for its actual export list. These are demonstrations, not general-purpose
-stdlib contracts.
+environment and optional packages. Its exports are `WordleSetup`,
+`GuessValidation`, the `wordle` profile, `prepare_wordle_setup`,
+`validate_wordle_guess`, `play_wordle`, and `play_default_wordle`. See
+[Example Modules](example-modules.md) for the export table. These are
+demonstrations, not general-purpose stdlib contracts.

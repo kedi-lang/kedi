@@ -532,7 +532,7 @@ def test_profile_references_include_composition_subagent_and_use() -> None:
     )
 
     assert [(ref.range.start.line, ref.range.start.character) for ref in references] == [
-        (0, 0),
+        (0, len("> profile: ")),
         (4, len("    > use: ")),
         (5, len("    > subagent: ")),
         (11, len("> use: ")),

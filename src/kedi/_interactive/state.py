@@ -54,6 +54,7 @@ def load_session(
     engine: Any | None,
     conversation_state: ConversationState | None,
     close_conversation_state: bool | None,
+    trusted: bool = False,
 ) -> InteractiveSession:
     payload = read_snapshot(path)
     try:
@@ -62,6 +63,7 @@ def load_session(
             payload["default_profile"],
             decoder=SessionValueDecoder(kedi_models={}),
             kedi_models={},
+            trusted=trusted,
         )
         conversation_state, owns_conversation = _load_conversation(
             payload["conversation_session_id"],
@@ -97,7 +99,7 @@ def load_session(
         raise SessionLoadError(f"Invalid interactive session metadata: {exc}") from exc
 
     try:
-        _restore_payload(session, payload)
+        _restore_payload(session, payload, trusted=trusted)
     except SessionLoadError:
         session.close()
         raise
@@ -453,7 +455,9 @@ def _validate_payload_metadata(payload: dict[str, Any]) -> None:
                 raise SessionLoadError(f"fragments[{index}].{field} must be a string")
 
 
-def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> None:
+def _restore_payload(
+    session: InteractiveSession, payload: dict[str, Any], *, trusted: bool = False
+) -> None:
     fragments: list[ExecutedFragment] = []
     for entry in payload["fragments"]:
         source = entry["source"]
@@ -500,7 +504,7 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
     session._top_level_state.active_profile = (
         session._compiler.rt.default_agent_profile
         if active_data is None
-        else decode_profile(active_data, decoder=decoder, kedi_models=models)
+        else decode_profile(active_data, decoder=decoder, kedi_models=models, trusted=trusted)
     )
     session._cell_number = payload["cell_number"]
     session._source_names = set(payload["source_names"])

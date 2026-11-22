@@ -243,13 +243,16 @@ def prepare_package(
     manifest_path: Path,
     *,
     expected_name: str | None = None,
+    allow_direct_urls: bool = True,
 ) -> PreparedPackage:
     """Parse and validate all package inputs before any registry state changes."""
     if manifest_path.is_symlink():
         raise ValueError("Kedi package manifest must not be a symlink")
     resolved_manifest = manifest_path.expanduser().resolve()
     metadata = load_package_manifest(resolved_manifest)
-    validate_package_metadata(metadata, enforce_python_compatibility=True)
+    validate_package_metadata(
+        metadata, enforce_python_compatibility=True, allow_direct_urls=allow_direct_urls
+    )
     name = validate_package_name(metadata.name)
     if expected_name is not None and name != validate_package_name(expected_name):
         raise ValueError(
@@ -273,7 +276,9 @@ def install_package(
     """Install a package with an atomic, per-package registry transaction."""
     if source_kind not in _INSTALL_SOURCE_KINDS:
         raise ValueError(f"Unknown Kedi package installation source kind: {source_kind!r}")
-    prepared = prepare_package(manifest_path, expected_name=expected_name)
+    prepared = prepare_package(
+        manifest_path, expected_name=expected_name, allow_direct_urls=source_kind == "local"
+    )
     if registry_record is not None:
         if source_kind != "registry":
             raise ValueError("Registry provenance may only be attached to registry installations")
@@ -642,7 +647,9 @@ def install_git_package(source: str, *, registry_root: Path | None = None) -> In
         manifest_path = checkout / PACKAGE_MANIFEST_NAME
         _require_regular_file(manifest_path, "Kedi package manifest", error_type=ValueError)
         metadata = load_package_manifest(manifest_path)
-        validate_package_metadata(metadata, enforce_python_compatibility=True)
+        validate_package_metadata(
+            metadata, enforce_python_compatibility=True, allow_direct_urls=False
+        )
         source_path = _package_source_relative_path(metadata.source, error_type=ValueError)
         _run_git(
             [
@@ -766,7 +773,7 @@ def _checkout_registry_commit(
     preview_manifest = Path(checkout.parent) / PACKAGE_MANIFEST_NAME
     preview_manifest.write_text(f"{manifest_text}\n", encoding="utf-8")
     metadata = load_package_manifest(preview_manifest)
-    validate_package_metadata(metadata, enforce_python_compatibility=True)
+    validate_package_metadata(metadata, enforce_python_compatibility=True, allow_direct_urls=False)
     if metadata.name != record.name or metadata.version != record.version:
         raise PackageRegistryError(
             "Registry package metadata differs from the verified package manifest"

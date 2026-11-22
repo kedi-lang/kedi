@@ -199,10 +199,17 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "max_tool_result_bytes",
                 "max_total_tool_result_bytes",
                 "max_print_bytes",
+                "max_memory_bytes",
             )
         },
         "request_timeout": ValueRule(
             "Positive timeout in seconds", kind="number", minimum=0, exclusive_minimum=True
+        ),
+        "max_feed_seconds": ValueRule(
+            "Sandbox execution time per cell in seconds",
+            kind="number",
+            minimum=0,
+            exclusive_minimum=True,
         ),
     },
     "artifacts": {

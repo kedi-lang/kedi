@@ -8,7 +8,12 @@ from typing import Any
 from ..approvals.policy import ApprovalPolicy
 from ..approvals.reason import accepts_tool_reason, reason_schema, split_tool_reason
 from ..execution import run_in_worker
-from ..hooks.tool_wrapper import _is_async_callable, new_tool_call_id, with_hook_lifecycle
+from ..hooks.tool_wrapper import (
+    _is_async_callable,
+    dispatch_pre_tool_use,
+    new_tool_call_id,
+    with_hook_lifecycle,
+)
 from ..tools.execution import resolve_tool_arguments_async
 from ..tools.records import track_tool_call
 from ..tools.scope import defer_artifact_admission
@@ -216,6 +221,12 @@ class CodeModeToolSpecBridge:
             policies += tuple(self._policy_resolver(tool))
         call_id = new_tool_call_id()
         with track_tool_call(call_id):
+            final_arguments = await dispatch_pre_tool_use(
+                tool,
+                final_arguments,
+                adapter_shortname=self._adapter_shortname,
+                tool_call_id=call_id,
+            )
             for policy in policies:
                 final_arguments = await resolve_tool_arguments_async(
                     tool,
@@ -227,7 +238,10 @@ class CodeModeToolSpecBridge:
                 )
         with defer_artifact_admission():
             wrapped = with_hook_lifecycle(
-                tool, adapter_shortname=self._adapter_shortname, tool_call_id=call_id
+                tool,
+                adapter_shortname=self._adapter_shortname,
+                tool_call_id=call_id,
+                pre_hook_applied=True,
             )
             if _is_async_callable(wrapped.fn):
                 result = await wrapped.fn(**final_arguments)

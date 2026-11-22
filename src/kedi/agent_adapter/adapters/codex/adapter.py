@@ -516,7 +516,7 @@ class CodexAdapter(HookRegistrationMixin):
             "ephemeral": self._conversation_var.get() is None,
             "approvalPolicy": (
                 "untrusted"
-                if profile.approval is not None
+                if profile.approval is not None or self._approval_ceiling_var.get()
                 # Leave the App Server in approval-requesting mode by default so
                 # the Kedi bridge can enforce the same default-safe policy for
                 # Codex builtin and MCP tools as it does for Kedi ToolSpecs.

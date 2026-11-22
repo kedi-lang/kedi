@@ -16,6 +16,8 @@ CODEMODE_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
         "max_tool_result_bytes",
         "max_total_tool_result_bytes",
         "max_print_bytes",
+        "max_memory_bytes",
+        "max_feed_seconds",
         "request_timeout",
     }
 )
@@ -36,6 +38,8 @@ class CodeModeLimitValues(TypedDict):
     max_tool_result_bytes: int
     max_total_tool_result_bytes: int
     max_print_bytes: int
+    max_memory_bytes: int
+    max_feed_seconds: float
     request_timeout: float
 
 
@@ -55,6 +59,8 @@ class CodeModeSettings:
     max_tool_result_bytes: int = 256_000
     max_total_tool_result_bytes: int = 1_000_000
     max_print_bytes: int = 256_000
+    max_memory_bytes: int = 256 * 1024 * 1024
+    max_feed_seconds: float = 60.0
     request_timeout: float = 60.0
 
     def __post_init__(self) -> None:
@@ -62,7 +68,9 @@ class CodeModeSettings:
             raise TypeError("codemode enabled must be a boolean")
         object.__setattr__(self, "preload_tools", _normalize_preload_tools(self.preload_tools))
         integer_fields = {
-            name: getattr(self, name) for name in CODEMODE_LIMIT_FIELDS if name != "request_timeout"
+            name: getattr(self, name)
+            for name in CODEMODE_LIMIT_FIELDS
+            if name not in {"request_timeout", "max_feed_seconds"}
         }
         invalid_types = [
             name
@@ -76,12 +84,12 @@ class CodeModeSettings:
         non_positive = [name for name, value in integer_fields.items() if value <= 0]
         if non_positive:
             raise ValueError("codemode limits must be positive: " + ", ".join(sorted(non_positive)))
-        if isinstance(self.request_timeout, bool) or not isinstance(
-            self.request_timeout, (int, float)
-        ):
-            raise TypeError("codemode request_timeout must be a number")
-        if self.request_timeout <= 0:
-            raise ValueError("codemode request_timeout must be positive")
+        for name in ("request_timeout", "max_feed_seconds"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"codemode {name} must be a number")
+            if value <= 0:
+                raise ValueError(f"codemode {name} must be positive")
         if self.default_search_limit > self.max_search_limit:
             raise ValueError("codemode default_search_limit cannot exceed max_search_limit")
 
@@ -97,6 +105,8 @@ class CodeModeSettings:
             "max_tool_result_bytes": self.max_tool_result_bytes,
             "max_total_tool_result_bytes": self.max_total_tool_result_bytes,
             "max_print_bytes": self.max_print_bytes,
+            "max_memory_bytes": self.max_memory_bytes,
+            "max_feed_seconds": float(self.max_feed_seconds),
             "request_timeout": float(self.request_timeout),
         }
 

@@ -21,6 +21,7 @@ class SubagentSafetyCeiling:
     approval_policies: tuple[ApprovalPolicy | None, ...]
     cwd: Path
     sandbox: str | None = None
+    cwd_explicit: bool = True
 
     @classmethod
     def from_parent(
@@ -36,6 +37,7 @@ class SubagentSafetyCeiling:
             approval_policies=(profile.approval,),
             cwd=cwd,
             sandbox=sandbox,
+            cwd_explicit=settings.get("cwd") is not None,
         )
 
     def constrain_child(
@@ -51,7 +53,8 @@ class SubagentSafetyCeiling:
 
         child_sandbox = _sandbox_value(settings.get("sandbox"))
         effective_sandbox = _narrower_sandbox(self.sandbox, child_sandbox)
-        if settings.get("cwd") is not None:
+        cwd_explicit = self.cwd_explicit or settings.get("cwd") is not None
+        if cwd_explicit:
             settings["cwd"] = str(child_cwd)
         if self.sandbox is not None and child_sandbox is None:
             settings["sandbox"] = self.sandbox
@@ -63,6 +66,7 @@ class SubagentSafetyCeiling:
             approval_policies=(*self.approval_policies, profile.approval),
             cwd=child_cwd,
             sandbox=effective_sandbox,
+            cwd_explicit=cwd_explicit,
         )
 
 
