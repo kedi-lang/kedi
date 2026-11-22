@@ -117,8 +117,9 @@ def _exported_name_at_position(
         name_index = line.find(export_name)
         if name_index < 0:
             continue
-        start_col = name_index + 1
-        line_start = _line_start_byte_for_program(prog, pos.line + 1)
+        # ``Span`` columns are UTF-8 byte columns, not character indexes.
+        start_col = len(line[:name_index].encode("utf-8")) + 1
+        line_start = _line_start_byte_for_program(prog, pos.line + 1, export.loc.source_path)
         if line_start is None:
             continue
         start_byte = line_start + len(line[:name_index].encode("utf-8"))
@@ -128,7 +129,7 @@ def _exported_name_at_position(
             start_line=pos.line + 1,
             start_col=start_col,
             end_line=pos.line + 1,
-            end_col=start_col + len(export_name),
+            end_col=start_col + len(export_name.encode("utf-8")),
             source_path=export.loc.source_path,
         )
         if _position_inside(pos, span):
