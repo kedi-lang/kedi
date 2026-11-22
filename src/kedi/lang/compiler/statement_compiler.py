@@ -18,6 +18,7 @@ from ...agent_profile.directives import (
     eval_budget_directive,
     eval_codemode_directive,
     eval_effort_directive,
+    eval_fallback_directive,
     eval_history_directive,
     eval_hooks_directive,
     eval_mcp_directive,
@@ -48,6 +49,7 @@ from ..ast import (
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     EffortDirectiveStmt,
+    FallbackDirectiveStmt,
     GroupStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
@@ -627,6 +629,8 @@ class StatementExecutor:
             return active.merge(eval_adapter_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, ModelDirectiveStmt):
             return active.merge(eval_model_directive(self.rt, stmt, closure_env))
+        if isinstance(stmt, FallbackDirectiveStmt):
+            return active.merge(eval_fallback_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, EffortDirectiveStmt):
             return active.merge(eval_effort_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, ApprovalDirectiveStmt):

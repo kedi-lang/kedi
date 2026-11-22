@@ -160,6 +160,10 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             stmt = self._walk_model_directive(child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
+        elif t == "fallback_directive":
+            stmt = self._walk_fallback_directive(child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
         elif t == "agent_directive":
             stmt = self._walk_agent_directive(child)
             prog.toplevel_body.append(stmt)
@@ -601,6 +605,8 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return walk_evolve_directive(self, node, proc)
     if t == "model_directive":
         return self._walk_model_directive(node)
+    if t == "fallback_directive":
+        return self._walk_fallback_directive(node)
     if t == "agent_directive":
         return self._walk_agent_directive(node)
     if t == "adapter_directive":

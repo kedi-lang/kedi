@@ -543,6 +543,8 @@ class KediRuntime:
             requirements=profile.requirements,
             origins=dict(profile.requirement_origins),
         )
+        if profile.fallback_models:
+            validate_adapter_requirements(adapter=adapter, requirements=("model_fallback",))
 
         if profile.history_processing is not None and (
             profile.history_processing.processor is not None
@@ -609,6 +611,7 @@ class KediRuntime:
             return
         if (
             profile.model is not None
+            or profile.fallback_models is not None
             or profile.effort is not None
             or profile.mcp_servers
             or profile.settings

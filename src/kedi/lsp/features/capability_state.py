@@ -44,6 +44,8 @@ class _AdapterDiagnosticState:
     history_condition_enabled: bool | None = None
     codemode_loc: Span | None = None
     codemode_enabled: bool | None = None
+    fallback_loc: Span | None = None
+    fallback_enabled: bool | None = None
     requirements: tuple[tuple[AdapterCapability, Span | None], ...] = ()
 
 
@@ -107,6 +109,14 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         )
     for member in profile.requires_members:
         state = _with_requirements_state(state, member)
+    for member in sorted(
+        profile.fallback_members, key=lambda member: member.loc.start_byte if member.loc else -1
+    ):
+        state = replace(
+            state,
+            fallback_loc=member.loc,
+            fallback_enabled=True if any(value.plain_value for value in member.values) else None,
+        )
     # Do not execute a Python guard, or choose one of its possible backends,
     # while diagnosing the caller of a reusable configuration bundle.
     latest_selection = max(
@@ -130,6 +140,7 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
             or body.history_members
             or body.codemode_members
             or body.requires_members
+            or body.fallback_members
             for branch in branches
             if branch is not None
             for body in iter_profile_bodies(branch)
@@ -173,6 +184,7 @@ def _merge_adapter_state(
     codemode_owner = (
         inner if inner.codemode_loc is not None or inner.codemode_enabled is not None else outer
     )
+    fallback_owner = inner if inner.fallback_loc is not None else outer
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
         kind=selected.kind,
@@ -191,6 +203,8 @@ def _merge_adapter_state(
         history_condition_loc=condition_owner.history_condition_loc,
         codemode_loc=codemode_owner.codemode_loc,
         codemode_enabled=codemode_owner.codemode_enabled,
+        fallback_loc=fallback_owner.fallback_loc,
+        fallback_enabled=fallback_owner.fallback_enabled,
         requirements=_merge_requirement_entries(outer.requirements, inner.requirements),
     )
 

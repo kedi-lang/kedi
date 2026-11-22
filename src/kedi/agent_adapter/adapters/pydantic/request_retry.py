@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import FallbackExceptionGroup, RetryModelRequest
-from pydantic_ai.messages import ModelRequestAttempt, ModelResponse
-from pydantic_ai.models import Model, ModelRequestContext
+from pydantic_ai.messages import ModelMessage, ModelRequestAttempt, ModelResponse
+from pydantic_ai.models import Model, ModelRequestContext, ModelRequestParameters
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
 
 from kedi.agent_adapter.request_retry import (
@@ -18,6 +20,46 @@ from kedi.agent_adapter.request_retry import (
     transient_provider_error,
     wait_for_request_retry,
 )
+
+
+class _RequestFailureModel(WrapperModel):
+    """Observe HTTP failures before a native fallback capability handles them."""
+
+    def __init__(self, wrapped: Model, on_failure: Callable[[Exception], None]) -> None:
+        super().__init__(wrapped)
+        self._on_failure = on_failure
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        try:
+            return await super().request(messages, model_settings, model_request_parameters)
+        except Exception as error:
+            self._on_failure(error)
+            raise
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        run_context: RunContext[Any] | None = None,
+    ) -> AsyncGenerator[Any]:
+        opened = False
+        try:
+            async with super().request_stream(
+                messages, model_settings, model_request_parameters, run_context
+            ) as stream:
+                opened = True
+                yield stream
+        except Exception as error:
+            if not opened:
+                self._on_failure(error)
+            raise
 
 
 class RequestRetryCapability(AbstractCapability[Any]):
@@ -28,6 +70,8 @@ class RequestRetryCapability(AbstractCapability[Any]):
         self._accounted_requests = 0
         self._attempt = 1
         self._fallback_models: set[tuple[str, str]] = set()
+        self._candidate: Model | None = None
+        self._candidate_attempt = 0
 
     async def for_run(self, ctx: RunContext[Any]) -> RequestRetryCapability:
         return RequestRetryCapability(self.retries)
@@ -35,19 +79,39 @@ class RequestRetryCapability(AbstractCapability[Any]):
     async def before_model_request(
         self, ctx: RunContext[Any], request_context: ModelRequestContext
     ) -> ModelRequestContext:
+        self._ctx = ctx
         self._attempts.clear()
         self._pending_http.clear()
         self._accounted_requests = 0
         self._attempt = request_context.attempt
         self._fallback_models.clear()
+        self._candidate = None
+        self._candidate_attempt = 0
         self._remember_fallbacks(request_context.model)
         return request_context
+
+    def get_wrapper_model(self, model: Model) -> Model:
+        return _RequestFailureModel(
+            model, lambda error: self._record_http_failure(self._ctx, error)
+        )
+
+    def _record_http_failure(self, ctx: RunContext[Any], error: Exception) -> None:
+        if provider_status(error) is not None:
+            self._pending_http.add(self._attempt)
+            self._account_attempts(ctx, ())
 
     async def prepare_model_request(
         self, ctx: RunContext[Any], request_context: ModelRequestContext
     ) -> ModelRequestContext:
         self._attempt = request_context.attempt
         self._remember_fallbacks(request_context.model)
+        candidate = request_context.model
+        while isinstance(candidate, WrapperModel):
+            candidate = candidate.wrapped
+        if candidate is not self._candidate:
+            self._candidate = candidate
+            self._candidate_attempt = 0
+        self._candidate_attempt += 1
         return request_context
 
     def _remember_fallbacks(self, model: Model) -> None:
@@ -130,14 +194,12 @@ class RequestRetryCapability(AbstractCapability[Any]):
         if provider_status(error) is not None:
             # Native usage counts a step only after a response. HTTP failures are
             # actual requests too; account for them before admitting another attempt.
-            self._pending_http.add(request_context.attempt)
-            self._account_attempts(ctx, ())
-        if request_context.attempt > self.retries or not transient_provider_error(error):
+            self._record_http_failure(ctx, error)
+        attempt = self._candidate_attempt or request_context.attempt
+        if attempt > self.retries or not transient_provider_error(error):
             raise error
         if ctx.usage_limits is not None:
             ctx.usage_limits.check_before_request(ctx.usage)
-        if await wait_for_request_retry(
-            error, attempt=request_context.attempt, retries=self.retries
-        ):
+        if await wait_for_request_retry(error, attempt=attempt, retries=self.retries):
             raise RetryModelRequest() from error
         raise error

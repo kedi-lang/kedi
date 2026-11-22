@@ -120,6 +120,7 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_mcp=True,
         supports_profile_override=True,
         supports_model_override=True,
+        supports_model_fallback=True,
         supports_effort=True,
         supports_settings=True,
         supports_codemode=True,
@@ -168,6 +169,7 @@ class LangChainAdapter(HookRegistrationMixin):
         query_artifact: bool = False,
         tool_reason: bool = False,
         request_retries: int = 2,
+        fallback_models: Sequence[Any] | None = None,
         media_limit: int | None = None,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
@@ -188,6 +190,23 @@ class LangChainAdapter(HookRegistrationMixin):
         from kedi.agent_adapter.request_retry import request_retry_limit
 
         self.request_retries = request_retry_limit({}, request_retries)
+        if fallback_models is not None and (
+            isinstance(fallback_models, (str, bytes)) or not isinstance(fallback_models, Sequence)
+        ):
+            raise TypeError("fallback_models must be a sequence of model IDs or chat models")
+        alternatives = []
+        for alternative in fallback_models or ():
+            if isinstance(alternative, str):
+                alternative = alternative.strip()
+                valid = bool(alternative)
+            else:
+                from langchain_core.language_models import BaseChatModel
+
+                valid = isinstance(alternative, BaseChatModel)
+            if not valid:
+                raise TypeError("fallback_models must contain non-empty model IDs or chat models")
+            alternatives.append(alternative)
+        self.fallback_models = tuple(alternatives)
         self.media_limit = media_limit_bytes({}, default=media_limit)
         for name, retries in (("tool_retries", tool_retries), ("output_retries", output_retries)):
             if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
@@ -695,8 +714,8 @@ class LangChainAdapter(HookRegistrationMixin):
         )
         return settings
 
-    def _chat_model_for_run(self) -> Any:
-        model = self._model_for_run()
+    def _chat_model_for_run(self, model: Any = None) -> Any:
+        model = self._model_for_run() if model is None else model
         settings = self._settings_for_run(model)
         if not isinstance(model, str):
             if not settings:
@@ -986,6 +1005,7 @@ class LangChainAdapter(HookRegistrationMixin):
         from kedi.agent_adapter.adapters.langchain.duplicate_output import (
             LangChainDuplicateOutputMiddleware,
         )
+        from kedi.agent_adapter.adapters.langchain.fallback import LangChainModelFallbackMiddleware
         from kedi.agent_adapter.adapters.langchain.request_retry import RequestRetryMiddleware
         from kedi.agent_adapter.adapters.langchain.runtime import (
             LangChainOutputCorrectionMiddleware,
@@ -1003,6 +1023,15 @@ class LangChainAdapter(HookRegistrationMixin):
             if structured
             else []
         )
+        selected = self.active_profile.fallback_models
+        alternatives = self.fallback_models if selected is None else selected
+        backups = [
+            self._chat_model_for_run(self._resolve_model(item) if isinstance(item, str) else item)
+            for item in alternatives
+        ]
+        caching = _langchain_cache_middleware(
+            model, enabled=self._conversation_var.get() is not None
+        )
         return [
             *correction,
             *(
@@ -1016,6 +1045,8 @@ class LangChainAdapter(HookRegistrationMixin):
                 if output_schema is not None
                 else []
             ),
+            *(caching if backups else []),
+            *([LangChainModelFallbackMiddleware(*backups)] if backups else []),
             RequestRetryMiddleware(
                 request_retry_limit(self.active_profile.settings, self.request_retries)
             ),
@@ -1026,10 +1057,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 tool_retries=self._tool_retries,
                 conversation=self._conversation_var.get(),
             ),
-            *_langchain_cache_middleware(
-                model,
-                enabled=self._conversation_var.get() is not None,
-            ),
+            *(caching if not backups else []),
             *self._approval_middleware_for_run(
                 tools,
                 approval_enabled=not codemode_enabled,

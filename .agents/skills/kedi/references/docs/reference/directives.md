@@ -9,6 +9,8 @@
 | `> agent: acp:` | Select ACP and bind its explicit stdio `command` |
 | `> agent: a2a:` | Select a remote A2A endpoint, auth reference, and transport timeouts |
 | `> model: value` | Set plain or Python-evaluated model identifier |
+| `> fallback: value` | Replace ordered model alternatives; uses the effective primary (Pydantic AI/LangChain only) |
+| `> fallback:` | Supply an indented list of alternatives; ``> fallback: `[]` `` clears an inherited chain |
 | `> requires: capability` | Require one adapter capability before model I/O |
 | `> requires:` | Require an indented list of adapter capabilities |
 | `> effort: level` | Set `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
@@ -39,6 +41,15 @@ contain `>`-prefixed subdirectives. Kedi does not mix both forms in one body.
 `> system:` has been removed and produces a parse error. Use `> instructions:`
 instead; its body, substitutions, lexical scope, and precedence stay the same.
 The Python `system=` configuration parameter is unchanged.
+
+`> fallback:` is independent of `> model:` and accepts model IDs or backtick
+expressions returning an ID or list/tuple of IDs. It is available at top level,
+in procedures, and in profiles (including conditional and child profiles), not
+capability bundles. Lists replace rather than append; changing the primary does
+not clear the chain. An unresolved primary fails before invocation. `none` is
+not a reset literal. See
+[Ordered Fallback Models](../agentic-engineering/models-and-reasoning.md#ordered-fallback-models)
+for retry, admission, streaming, and history boundaries.
 
 `> artifacts:` fields are `enabled`, `query_artifacts`, `store`, `path`, `threshold`, `ttl`,
 `idle_ttl`, `preview_chars`, `read_max_chars`, `session_quota`,
@@ -114,8 +125,8 @@ return validation are not retried. See
 | `> workflow:` block with `> mode:` and `> tools:` | Set the mode and, in `delegate` mode, which subagent control tools the model sees |
 | `> output: Type` | Declare a profile's default structured child result; an explicit child-call `final_schema` overrides it |
 
-A profile body may contain adapter or agent selection, model, effort, instructions,
-settings, explicit requirements, approval, hooks, history, skills, CodeMode,
+A profile body may contain adapter or agent selection, model, fallback, effort,
+instructions, settings, explicit requirements, approval, hooks, history, skills, CodeMode,
 artifact policy, MCP, tools, child profiles, descendant budget, workflow mode,
 and output type. See
 [Profiles and Composition](../agentic-engineering/profiles.md#merge-rules) for

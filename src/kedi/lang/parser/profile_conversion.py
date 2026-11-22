@@ -21,6 +21,7 @@ from kedi.lang.ast import (
     ProfileDeferEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
+    ProfileFallbackEntry,
     ProfileHistoryEntry,
     ProfileHooksEntry,
     ProfileMaxAgentsEntry,
@@ -151,6 +152,7 @@ def _walk_profile_body(
     conditional_members: list[ProfileConditionalEntry] = []
     defer_members: list[ProfileDeferEntry] = []
     members: list[ProfileModelEntry] = []
+    fallback_members: list[ProfileFallbackEntry] = []
     agent_members: list[ProfileAgentEntry] = []
     adapter_members: list[ProfileAdapterEntry] = []
     effort_members: list[ProfileEffortEntry] = []
@@ -277,6 +279,11 @@ def _walk_profile_body(
                             loc=self._span(child),
                         )
                     )
+            elif child.type == "fallback_directive":
+                fallback = self._walk_fallback_directive(child)
+                fallback_members.append(
+                    ProfileFallbackEntry(values=fallback.values, loc=fallback.loc)
+                )
             elif child.type == "effort_directive":
                 value_node = _field(child, "value")
                 assert value_node is not None
@@ -503,6 +510,7 @@ def _walk_profile_body(
         )
     if (
         not members
+        and not fallback_members
         and not conditional_members
         and not defer_members
         and not agent_members
@@ -539,6 +547,7 @@ def _walk_profile_body(
         agent_members=agent_members,
         adapter_members=adapter_members,
         model_members=members,
+        fallback_members=fallback_members,
         effort_members=effort_members,
         approval_members=approval_members,
         hooks_members=hooks_members,

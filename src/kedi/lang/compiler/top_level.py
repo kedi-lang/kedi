@@ -14,6 +14,7 @@ from kedi.agent_profile.directives import (
     eval_budget_directive,
     eval_codemode_directive,
     eval_effort_directive,
+    eval_fallback_directive,
     eval_history_directive,
     eval_hooks_directive,
     eval_mcp_directive,
@@ -36,6 +37,7 @@ from kedi.lang.ast import (
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     EffortDirectiveStmt,
+    FallbackDirectiveStmt,
     GroupStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
@@ -253,6 +255,11 @@ def _execute_top_level_sequence(
         if isinstance(item, ModelDirectiveStmt):
             state.active_profile = state.active_profile.merge(
                 eval_model_directive(self.rt, item, env)
+            )
+            continue
+        if isinstance(item, FallbackDirectiveStmt):
+            state.active_profile = state.active_profile.merge(
+                eval_fallback_directive(self.rt, item, env)
             )
             continue
         if isinstance(item, EffortDirectiveStmt):

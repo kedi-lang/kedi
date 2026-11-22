@@ -13,6 +13,7 @@ if TYPE_CHECKING:
         AgentConnectionField,
         ArtifactsField,
         McpField,
+        ProfileModelEntry,
         SettingsField,
         Span,
         TemplateLine,
@@ -56,6 +57,12 @@ class ProfileModelMember(ProfileMember):
     kind: Literal["model"] = "model"
     plain_value: str | None = None
     backtick_code: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileFallbackMember(ProfileMember):
+    kind: Literal["fallback"] = "fallback"
+    values: tuple[ProfileModelEntry, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -191,6 +198,7 @@ ProfileMemberValue: TypeAlias = (
     ProfileAgentMember
     | ProfileAdapterMember
     | ProfileModelMember
+    | ProfileFallbackMember
     | ProfileEffortMember
     | ProfileApprovalMember
     | ProfileHooksMember

@@ -23,6 +23,7 @@ from .definitions import (
     ProfileBudgetMember,
     ProfileCodeModeMember,
     ProfileEffortMember,
+    ProfileFallbackMember,
     ProfileHistoryMember,
     ProfileHooksMember,
     ProfileMaxAgentsMember,
@@ -52,11 +53,13 @@ if TYPE_CHECKING:
         BudgetDirectiveStmt,
         CodeModeDirectiveStmt,
         EffortDirectiveStmt,
+        FallbackDirectiveStmt,
         HistoryDirectiveStmt,
         HooksDirectiveStmt,
         McpDirectiveStmt,
         McpField,
         ModelDirectiveStmt,
+        ProfileModelEntry,
         RequiresDirectiveStmt,
         SettingsDirectiveStmt,
         SettingsField,
@@ -155,6 +158,33 @@ def eval_model_directive(
         env=env,
     )
     return AgentProfile(model=model)
+
+
+def _eval_fallback_values(
+    rt: KediRuntime, values: Sequence[ProfileModelEntry], env: dict[str, Any]
+) -> AgentProfile:
+    models: list[str] = []
+    for entry in values:
+        value = (
+            _evaluate_directive_expression(rt, entry.backtick_code, env)
+            if entry.backtick_code is not None
+            else entry.plain_value
+        )
+        if isinstance(value, str):
+            models.append(value)
+        elif isinstance(value, (list, tuple)):
+            models.extend(value)
+        else:
+            raise TypeError(
+                "fallback directive must evaluate to a model ID or sequence of model IDs"
+            )
+    return AgentProfile(fallback_models=tuple(models))
+
+
+def eval_fallback_directive(
+    rt: KediRuntime, stmt: FallbackDirectiveStmt, env: dict[str, Any]
+) -> AgentProfile:
+    return _eval_fallback_values(rt, stmt.values, env)
 
 
 def eval_agent_directive(
@@ -687,6 +717,7 @@ def _member_to_patch(
     rt: KediRuntime,
     member: (
         ProfileModelMember
+        | ProfileFallbackMember
         | ProfileAgentMember
         | ProfileAdapterMember
         | ProfileEffortMember
@@ -739,6 +770,8 @@ def _member_to_patch(
             env=env,
         )
         return AgentProfile(model=model)
+    if member.kind == "fallback":
+        return _eval_fallback_values(rt, member.values, env)
     if member.kind == "effort":
         effort = eval_effort_value(
             rt,

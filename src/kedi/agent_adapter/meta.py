@@ -52,6 +52,7 @@ AdapterCapability = Literal[
     "mcp",
     "profile_override",
     "model_override",
+    "model_fallback",
     "effort",
     "settings",
     "codemode",
@@ -155,6 +156,7 @@ class AdapterCapabilities:
     supports_mcp: bool | None = None
     supports_profile_override: bool | None = None
     supports_model_override: bool | None = None
+    supports_model_fallback: bool = False
     supports_effort: bool | None = None
     supports_settings: bool | None = None
     supports_codemode: bool | None = None
@@ -199,6 +201,7 @@ class AdapterCapabilities:
             "mcp": self.supports_mcp,
             "profile_override": self.supports_profile_override,
             "model_override": self.supports_model_override,
+            "model_fallback": self.supports_model_fallback,
             "effort": self.supports_effort,
             "settings": self.supports_settings,
             "codemode": self.supports_codemode,

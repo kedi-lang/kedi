@@ -25,12 +25,14 @@ from kedi.lang.ast import (
     BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     EffortDirectiveStmt,
+    FallbackDirectiveStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
     PackageMetadata,
+    ProfileModelEntry,
     RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SettingsField,
@@ -349,6 +351,28 @@ def _walk_budget_directive(self: _Walker, node: Node) -> BudgetDirectiveStmt:
 def _walk_model_directive(self: _Walker, node: Node) -> ModelDirectiveStmt:
     plain, code = self._walk_simple_directive_value(node)
     return ModelDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
+
+def _walk_fallback_directive(self: _Walker, node: Node) -> FallbackDirectiveStmt:
+    body = _field(node, "body")
+    entries = (
+        [entry for entry in _named_children(body) if entry.type == "fallback_entry"]
+        if body is not None
+        else [node]
+    )
+    values = []
+    for entry in entries:
+        plain, code = self._walk_simple_directive_value(entry)
+        if plain is not None and (not plain.strip() or plain.startswith(('"', "'", "[", "{"))):
+            self._error(
+                entry,
+                "fallback model IDs must be plain text or a backtick expression",
+                code="K-FALLBACK-VALUE",
+            )
+        values.append(
+            ProfileModelEntry(plain_value=plain, backtick_code=code, loc=self._span(entry))
+        )
+    return FallbackDirectiveStmt(values=values, loc=self._span(node))
 
 
 def _walk_agent_directive(self: _Walker, node: Node) -> AgentDirectiveStmt:

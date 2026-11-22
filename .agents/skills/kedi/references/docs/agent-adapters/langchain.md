@@ -21,6 +21,40 @@ String models are passed through `langchain.chat_models.init_chat_model`.
 An existing chat model object may be supplied directly to `LangChainAdapter`.
 A missing model fails when the adapter first runs.
 
+## Model Fallback and Request Retries
+
+Use [ordered fallback models](../agentic-engineering/models-and-reasoning.md#ordered-fallback-models)
+through `> fallback:` or the adapter constructor:
+
+```python
+from kedi.agent_adapter import LangChainAdapter
+
+adapter = LangChainAdapter(
+    "openai:gpt-6-luna",
+    fallback_models=["openai:gpt-6.1-sol"],
+    request_retries=2,
+)
+```
+
+`fallback_models` accepts an ordered sequence of strings or native chat models.
+A scoped `AgentProfile.fallback_models` list of IDs replaces this default;
+`()` clears it and `None` inherits. Selection is invocation-local, not a mutation
+of the original chat model or its clients.
+
+Each candidate gets the bounded request retry policy for HTTP 408, 429, and 5xx
+errors before advancing. An active `settings.request_retries` overrides the
+constructor default; `0` disables same-model retries, not explicit fallback.
+Output/tool validation, tool-body failures, authentication, refusals, and control
+signals do not trigger fallback. Every attempt reenters admission and accounting,
+using the same usage limits and deadline without replaying completed tools or
+approvals. Only stream-opening failures before exposed content can recover.
+
+SDK retries may compound with Kedi retries. Use `ChatOpenAI(max_retries=0)` or the
+provider's equivalent when Kedi should own attempts. Strict request budgets
+reject enabled or uninspectable SDK retries rather than undercounting. Portable
+history is retained across models, while stale response IDs and incompatible
+server state are not reused; history-processor continuation resets remain active.
+
 ## Model Settings
 
 Kedi supports common constructor/runtime fields including `temperature`,

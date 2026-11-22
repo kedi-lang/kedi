@@ -52,6 +52,7 @@ from kedi.lang.ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    FallbackDirectiveStmt,
     GroupStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
@@ -482,6 +483,9 @@ class _Walker:
 
     def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
         return _directive_conversion._walk_model_directive(self, node)
+
+    def _walk_fallback_directive(self, node: Node) -> FallbackDirectiveStmt:
+        return _directive_conversion._walk_fallback_directive(self, node)
 
     def _walk_agent_directive(self, node: Node) -> AgentDirectiveStmt:
         return _directive_conversion._walk_agent_directive(self, node)

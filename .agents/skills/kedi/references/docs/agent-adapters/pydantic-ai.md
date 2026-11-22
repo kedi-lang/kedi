@@ -34,6 +34,43 @@ opt in. Python API adapter options can explicitly set `defer_model_check=False`
 to retain eager validation when the lazy adapter is constructed.
 
 
+## Model Fallback and Request Retries
+
+Use [ordered fallback models](../agentic-engineering/models-and-reasoning.md#ordered-fallback-models)
+through `> fallback:` or the adapter constructor:
+
+```python
+from kedi.agent_adapter import PydanticAdapter
+
+adapter = PydanticAdapter(
+    "openai:gpt-6-luna",
+    fallback_models=["openai:gpt-6.1-sol"],
+    request_retries=2,
+)
+```
+
+`fallback_models` accepts an ordered sequence of strings or native Pydantic AI
+`Model` objects. A scoped `AgentProfile.fallback_models` list of IDs replaces
+this default; `()` clears it and `None` inherits. Selection is local to a run
+and does not mutate the caller's models or SDK clients.
+
+Each candidate gets the bounded request retry policy for HTTP 408, 429, and 5xx
+errors before advancing. An active `settings.request_retries` overrides the
+constructor default; `0` disables same-model retries, not explicit fallback.
+Output/tool validation, tool-body failures, authentication, refusals, and control
+signals do not trigger fallback. Attempts share admission, usage limits and
+deadlines; completed tools and approvals are not replayed. Streaming recovery
+stops once response content reaches the caller.
+
+SDK retries may compound with Kedi retries. Disable them explicitly, for example
+with `AsyncOpenAI(max_retries=0)`, when Kedi should own attempts. Strict request
+budgets reject enabled or uninspectable SDK retries rather than undercounting.
+
+Native `pydantic_ai.capabilities.ModelFallback` backups and ordinary
+`FallbackModel` chains both pass through Kedi's per-attempt admission guard,
+including when `request_retries=0`. A spent request budget prevents the backup
+from starting; refused admission adds no provider attempt or token usage.
+
 ## Model Settings
 
 Supported settings are `max_tokens`, `temperature`, `top_p`, `timeout`,

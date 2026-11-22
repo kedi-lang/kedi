@@ -38,7 +38,7 @@ A profile body contains directives, not an executable procedure body:
 
 | Concern | Members | Meaning |
 | --- | --- | --- |
-| Backend | `adapter`, `agent`, `model`, `effort` | Select execution backend and model behavior. |
+| Backend | `adapter`, `agent`, `model`, `fallback`, `effort` | Select execution backend, primary model, ordered alternatives, and reasoning behavior. |
 | Instructions | `instructions`, `settings` | Supply instructions and supported runtime/model settings. |
 | Tools | `use`, `mcp`, `skills` | Expose procedures, external tools, and skill discovery. |
 | Permissions and lifecycle | `approval`, `hooks` | Mediate sensitive calls and lifecycle boundaries. |
@@ -121,6 +121,7 @@ It is not a reset to an empty configuration:
 | Member | Composition rule |
 | --- | --- |
 | Backend, model, effort, instructions, approval, output type, maximum starts, workflow mode | A specified value replaces the earlier value. Instructions are replaced, not concatenated. |
+| Fallback models | Replace the entire ordered list; omission inherits, and ``> fallback: `[]` `` clears it. A model override alone does not clear it. |
 | Settings | Merge by key; later values replace the same key. Nested dictionaries are not recursively merged. |
 | Tools and children | Merge by name. Later bindings win, and reintroduced names move to the end of the ordered list. |
 | MCP servers | Append in declaration/application order. |
@@ -153,6 +154,14 @@ Profile application and direct directives follow source order. A direct directiv
 does not have unconditional priority: a profile applied after it can replace it.
 Procedures capture the configuration at their definition site; see
 [Scoping and Capabilities](scoping-and-capabilities.md).
+
+`> fallback:` may be the only model-selection member in a profile. It uses the
+effective inherited primary and needs no adjacent `> model:`. The primary must
+resolve before invocation; a backup is never promoted implicitly. Procedures,
+conditional members, and subagent profiles retain normal lexical capture rules;
+local list replacement leaves the caller unchanged. Fallback is supported by
+Pydantic AI and LangChain, not harness adapters or capability bundles. See
+[Ordered Fallback Models](models-and-reasoning.md#ordered-fallback-models).
 
 ## Default Child Result Type
 

@@ -408,6 +408,11 @@ class ModelDirectiveStmt(Stmt):
 
 
 @dataclass
+class FallbackDirectiveStmt(Stmt):
+    values: List["ProfileModelEntry"] = field(default_factory=list)
+
+
+@dataclass
 class AgentConnectionField:
     name: str
     plain_value: Optional[str] = None
@@ -552,6 +557,7 @@ class ProfileDefStmt(Stmt):
     agent_members: List["ProfileAgentEntry"] = field(default_factory=list)
     adapter_members: List["ProfileAdapterEntry"] = field(default_factory=list)
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
+    fallback_members: List["ProfileFallbackEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     approval_members: List["ProfileApprovalEntry"] = field(default_factory=list)
     hooks_members: List["ProfileHooksEntry"] = field(default_factory=list)
@@ -604,6 +610,12 @@ class ProfileDeferEntry:
 class ProfileModelEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileFallbackEntry:
+    values: List[ProfileModelEntry] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
