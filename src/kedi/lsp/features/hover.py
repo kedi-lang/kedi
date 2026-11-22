@@ -23,6 +23,7 @@ from kedi.lang.ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    FallbackDirectiveStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
     IfStmt,
@@ -44,6 +45,7 @@ from kedi.lang.ast import (
     ProfileDeferEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
+    ProfileFallbackEntry,
     ProfileHistoryEntry,
     ProfileHooksEntry,
     ProfileMaxAgentsEntry,
@@ -99,6 +101,7 @@ from kedi.lsp.features.directive_help import (
     _artifacts_field_markdown,
     _codemode_directive_markdown,
     _effort_directive_markdown,
+    _fallback_directive_markdown,
     _history_directive_markdown,
     _hooks_directive_markdown,
     _known_type_markdown,
@@ -453,6 +456,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.model_members:
                 visit(member)
+            for member in node.fallback_members:
+                visit(member)
             for member in node.effort_members:
                 visit(member)
             for member in node.approval_members:
@@ -785,6 +790,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return f"**`> optimize: {node.name}:`** — GEPA / DSPy optimisation target."
     if isinstance(node, ModelDirectiveStmt):
         return _model_directive_markdown(node)
+    if isinstance(node, (FallbackDirectiveStmt, ProfileFallbackEntry)):
+        return _fallback_directive_markdown(node)
     if isinstance(node, AgentDirectiveStmt):
         return _agent_directive_markdown(node)
     if isinstance(node, AgentConnectionField):

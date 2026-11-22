@@ -27,6 +27,11 @@ def test_langchain_configuration_defers_optional_runtime_imports() -> None:
                 from kedi.agent_adapter import LangChainAdapter
 
                 adapter = LangChainAdapter(model="openai:test")
+                fallback_adapter = LangChainAdapter(
+                    model="openai:test", fallback_models=[" openai:backup "]
+                )
+                assert fallback_adapter.fallback_models == ("openai:backup",)
+                assert LangChainAdapter(fallback_models=[]).fallback_models == ()
                 with warnings.catch_warnings(record=True):
                     LangChainAdapter(
                         history_processor=lambda ctx: ctx.messages,

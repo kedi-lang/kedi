@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import Any, Mapping
 
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.fallback import FallbackModel
@@ -124,6 +125,14 @@ class BudgetedModel(WrapperModel):
             messages, model_settings, model_request_parameters, run_context
         ) as response:
             yield response
+
+
+class ModelAdmissionCapability(AbstractCapability[Any]):
+    """Guard the serving model after native capabilities select each attempt."""
+
+    def get_wrapper_model(self, model: Model) -> Model | None:
+        prepared = budget_model(model)
+        return prepared if prepared is not model else None
 
 
 async def _fallback_judgment(model: FallbackModel, value: Exception | ModelResponse) -> bool:

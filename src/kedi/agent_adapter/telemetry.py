@@ -65,6 +65,7 @@ def record_conversation_assets(
     profile_content = {
         "name": profile.name,
         "model": profile.model,
+        "fallback_models": profile.fallback_models,
         "adapter_kind": profile.adapter_kind,
         "adapter_shortname": profile.adapter_shortname,
         "agent_command": profile.agent_command,

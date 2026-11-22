@@ -21,6 +21,7 @@ from kedi.lang.ast import (
     BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
+    FallbackDirectiveStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
     IfStmt,
@@ -77,6 +78,19 @@ from kedi.lsp.features.symbols import (
 )
 
 _NO_MEDIA = MediaNames()
+
+
+def _fallback_capability_diagnostics(state: _AdapterDiagnosticState) -> list[lsp.Diagnostic]:
+    if state.fallback_enabled is not True:
+        return []
+    return _unsupported_capability_diagnostics(
+        state,
+        "model_fallback",
+        [state.fallback_loc],
+        "model fallback",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-MODEL-FALLBACK",
+    )
 
 
 def _profile_capability_diagnostics(
@@ -137,6 +151,7 @@ def _profile_capability_diagnostics(
                 )
             )
     diagnostics.extend(_explicit_requirement_diagnostics(state))
+    diagnostics.extend(_fallback_capability_diagnostics(state))
     diagnostics.extend(_hooks_capability_diagnostics(state))
     diagnostics.extend(_history_capability_diagnostics(state))
     for member in profile.history_members:
@@ -337,6 +352,14 @@ def _scan_capability_scope(
                 )
             )
             continue
+        if isinstance(stmt, FallbackDirectiveStmt):
+            active = replace(
+                active,
+                fallback_loc=stmt.loc,
+                fallback_enabled=True if any(value.plain_value for value in stmt.values) else None,
+            )
+            diagnostics.extend(_fallback_capability_diagnostics(active))
+            continue
         if isinstance(stmt, SettingsDirectiveStmt):
             continue
         if isinstance(stmt, UseDirectiveStmt):
@@ -367,6 +390,7 @@ def _scan_capability_scope(
                 diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, TemplateBlock):
+            diagnostics.extend(_fallback_capability_diagnostics(active))
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
             diagnostics.extend(
                 _media_capability_diagnostics(
@@ -418,6 +442,7 @@ def _scan_capability_scope(
             diagnostics.extend(_media_capability_diagnostics(active, stmt.segments, media_names))
             continue
         if isinstance(stmt, RawInvokeStmt):
+            diagnostics.extend(_fallback_capability_diagnostics(active))
             diagnostics.extend(_raw_invoke_capability_diagnostics(active, stmt, type_defs))
             diagnostics.extend(_media_capability_diagnostics(active, stmt.segments, media_names))
             continue

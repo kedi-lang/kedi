@@ -156,8 +156,10 @@ class LangChainRunMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         from langchain_core.messages import HumanMessage
 
+        from kedi.agent_adapter.adapters.langchain.fallback import prepare_model_history
         from kedi.agent_adapter.subagents.control import current_live_input
 
+        request = prepare_model_history(request)
         state = _RUN.get()
         if state is not None:
             state.limits.check_before_request(state.native_usage)

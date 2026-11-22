@@ -7,6 +7,15 @@ to explicitly passing `None`.
 
 ## Profile Parameters
 
+`AgentProfile.fallback_models: tuple[str, ...] | None` is the shared ordered
+fallback field. `None` inherits, a tuple replaces the list, and `()` explicitly
+clears it. Model IDs must be nonempty strings. A model override does not clear
+an independently configured fallback list. Pydantic AI and LangChain adapter
+constructors accept `fallback_models=` as a sequence of IDs or framework-native
+models; the shared profile field carries IDs only. This is not a shared keyword
+of the Python entry points below. See
+[Ordered Fallback Models](../agentic-engineering/models-and-reasoning.md#ordered-fallback-models).
+
 `AgentProfile.history_processing` accepts `HistoryProcessingSettings` from `kedi.agent_profile`.
 Its `processor` is a sync/async native history callback or `None` to explicitly
 disable an inherited callback. The default profile value, `None`, means inherit.

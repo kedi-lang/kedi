@@ -11,6 +11,7 @@ from kedi.lang.ast import (
     AgentDirectiveStmt,
     EffortDirectiveStmt,
     EvalSuite,
+    FallbackDirectiveStmt,
     ModelDirectiveStmt,
     ProcDefStmt,
     ProcedureDef,
@@ -132,6 +133,17 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
                 lsp.DocumentSymbol(
                     name=f"> model: {value}",
                     detail="agent model override",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
+        elif isinstance(stmt, FallbackDirectiveStmt) and stmt.loc is not None:
+            children.append(
+                lsp.DocumentSymbol(
+                    name="> fallback:",
+                    detail="ordered model alternatives",
                     kind=lsp.SymbolKind.Event,
                     range=_span_to_range(stmt.loc),
                     selection_range=_span_to_range(stmt.loc),
@@ -278,6 +290,18 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
                 children=[],
             )
         )
+    for member in profile.fallback_members:
+        if member.loc is not None:
+            children.append(
+                lsp.DocumentSymbol(
+                    name="> fallback:",
+                    detail="ordered model alternatives",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(member.loc),
+                    selection_range=_span_to_range(member.loc),
+                    children=[],
+                )
+            )
     for member in profile.effort_members:
         if member.loc is None:
             continue

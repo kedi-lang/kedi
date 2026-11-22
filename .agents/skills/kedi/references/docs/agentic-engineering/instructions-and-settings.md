@@ -93,8 +93,11 @@ contracts; provider caching still depends on the model and transport.
     parallel_tool_calls: false
 ```
 
-Plain values parse as booleans, `null`/`none`, integers, floats, Python literals
-when valid, or otherwise strings.
+Each setting has a value contract: booleans use lowercase `true`/`false`, numeric
+fields accept numeric values, and option fields use their documented choices.
+There is no generic `null`/`none` reset literal. Omitted settings retain their
+default or inherited value; `tool_choice: none` is a documented string option,
+not Python `None`. Containers and computed values require backticks.
 
 Use backticks for explicit Python objects:
 
@@ -141,6 +144,22 @@ and model provider.
 
 Do not copy a provider-specific setting into every profile. Keep it in the
 profile that owns that backend.
+
+Pydantic AI and LangChain also support `request_retries` (a non-negative integer,
+default `2`) for transient HTTP 408, 429, and 5xx model-request failures. It is a
+Kedi policy, not a provider model parameter:
+
+```kedi
+> settings:
+    request_retries: 1
+```
+
+Retries preserve history and completed tool results, remain inside the same
+budget and deadline, and are independent of output/tool corrections. With
+[fallback models](models-and-reasoning.md#ordered-fallback-models), each candidate
+gets this bounded retry policy. `0` disables same-model retries, not explicit
+fallback. Provider SDK retries are separate and must be disabled for strict
+request budgets; Kedi does not mutate user SDK clients to do so.
 
 ## Harness Settings
 

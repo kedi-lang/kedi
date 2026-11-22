@@ -19,6 +19,7 @@ from kedi.lang.ast import (
     BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
+    FallbackDirectiveStmt,
     GroupStmt,
     IfStmt,
     LoopStmt,
@@ -223,6 +224,10 @@ class _Analyzer:
                     item.plain_value, item.backtick_code, origin=origin, label="model"
                 ),
             )
+        if isinstance(item, FallbackDirectiveStmt) or kind == "fallback":
+            values = tuple(value.plain_value or f"`{value.backtick_code}`" for value in item.values)
+            state = self._configuration(state, "fallback_models", str(values), origin)
+            return _with_requirement(state, "model_fallback", origin)
         if isinstance(item, RequiresDirectiveStmt) or kind == "requires":
             for name in item.requirements:
                 state = _with_requirement(state, name, origin)

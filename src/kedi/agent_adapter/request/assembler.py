@@ -81,6 +81,7 @@ def conversation_lane_identity(
         "shortname": getattr(adapter, "shortname", type(adapter).__name__),
         "default_model": model,
         "model": getattr(profile, "model", None),
+        "fallback_models": getattr(profile, "fallback_models", None),
         "effort": getattr(profile, "effort", None),
         "settings": dict(getattr(profile, "settings", {})),
         "mcp": [_mcp_definition_payload(server) for server in getattr(profile, "mcp_servers", ())],

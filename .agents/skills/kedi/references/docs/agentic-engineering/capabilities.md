@@ -280,8 +280,8 @@ caller-owned settings to a capability.
 | `requires` | Declare adapter requirements, not permissions |
 | `defer` | Choose immediate contribution or native on-demand loading |
 
-Host `model`, `effort`, `settings`, `agent`, `adapter`, `output`, `history`,
-budgets, skills discovery, CodeMode policy, and artifacts are rejected at the
+Host `model`, `fallback`, `effort`, `settings`, `agent`, `adapter`, `output`,
+`history`, budgets, skills discovery, CodeMode policy, and artifacts are rejected at the
 capability root. `user_prompt_submit` hooks and `tool_reason` remain agent-wide.
 
 Use the calling agent's artifact `exclude_tools` for exact-name exceptions.

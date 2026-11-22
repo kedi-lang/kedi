@@ -18,6 +18,7 @@ from kedi.lang.ast import (
     ArtifactsField,
     CodeModeDirectiveStmt,
     EffortDirectiveStmt,
+    FallbackDirectiveStmt,
     HistoryDirectiveStmt,
     HooksDirectiveStmt,
     InputSegment,
@@ -32,6 +33,7 @@ from kedi.lang.ast import (
     ProfileCodeModeEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
+    ProfileFallbackEntry,
     ProfileHistoryEntry,
     ProfileHooksEntry,
     ProfileMcpEntry,
@@ -114,6 +116,16 @@ def _tool_declaration_markdown(tool: ToolDeclaration) -> str:
 def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
     value = _model_value_preview(stmt)
     return f"`> model:` {value}\n\nUses this model for subsequent agent calls in the current scope."
+
+
+def _fallback_directive_markdown(stmt: FallbackDirectiveStmt | ProfileFallbackEntry) -> str:
+    values = ", ".join(_model_value_preview(value) for value in stmt.values)
+    return (
+        f"`> fallback:` {values}\n\n"
+        "Ordered alternatives for transient model-request failures in this scope. "
+        "Uses the effective primary model and shares its request budget and deadline. "
+        "Supported by Pydantic and LangChain. Completed tools are not replayed."
+    )
 
 
 def _agent_directive_markdown(stmt: AgentDirectiveStmt) -> str:

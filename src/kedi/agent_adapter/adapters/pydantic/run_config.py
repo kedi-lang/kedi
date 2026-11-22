@@ -184,7 +184,30 @@ def _run_kwargs(
     capabilities = run_kwargs.get("capabilities")
     from kedi.agent_adapter.request_retry import request_retry_limit
 
+    from .fallback import RequestFallbackCapability
     from .request_retry import RequestRetryCapability
+
+    if budget is not None:
+        from .budget import ModelAdmissionCapability
+
+        capabilities = _with_capability(
+            capabilities, ModelAdmissionCapability, ModelAdmissionCapability
+        )
+
+    alternatives = self.active_profile.fallback_models
+    if alternatives is None:
+        alternatives = self.fallback_models
+    if alternatives:
+        capabilities = _with_capability(
+            capabilities,
+            RequestFallbackCapability,
+            lambda: RequestFallbackCapability(
+                [
+                    self._resolve_model(model) if isinstance(model, str) else model
+                    for model in alternatives
+                ]
+            ),
+        )
 
     capabilities = _with_capability(
         capabilities,

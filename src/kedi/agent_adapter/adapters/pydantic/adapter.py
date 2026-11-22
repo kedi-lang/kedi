@@ -144,6 +144,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     kind: AgentAdapterKind = "agent-framework"
     shortname = "pydantic"
     supports_native_subagent_resume = True
+    fallback_models: tuple[Model | str, ...] = ()
     approval_resolution: PydanticApprovalResolution
     subagent_approval_resolution: PydanticApprovalResolution | None
     capabilities = AdapterCapabilities(
@@ -154,6 +155,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_mcp=True,
         supports_profile_override=True,
         supports_model_override=True,
+        supports_model_fallback=True,
         supports_effort=True,
         supports_settings=True,
         supports_codemode=True,
@@ -203,6 +205,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         model: str | Model | None = None,
         *,
         model_settings: dict[str, Any] | None = None,
+        fallback_models: Sequence[Model | str] | None = None,
         approval_resolution: PydanticApprovalResolution = "kedi",
         subagent_approval_resolution: PydanticApprovalResolution | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
@@ -235,6 +238,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         from kedi.agent_adapter.request_retry import request_retry_limit
 
         self.request_retries = request_retry_limit({}, request_retries)
+        from .fallback import fallback_models as normalize_fallback_models
+
+        self.fallback_models = normalize_fallback_models(fallback_models)
         self.media_limit = media_limit_bytes({}, default=media_limit)
         self._tool_reasons_var: ContextVar[dict[str, str | None]] = ContextVar(
             f"kedi_pydantic_tool_reasons_{id(self)}", default={}

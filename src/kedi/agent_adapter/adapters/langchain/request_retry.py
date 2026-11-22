@@ -8,6 +8,10 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 
+from kedi.agent_adapter.adapters.langchain.fallback import (
+    response_started,
+    retain_fallback_continuation_reset,
+)
 from kedi.agent_adapter.request_retry import wait_for_request_retry
 
 
@@ -23,6 +27,7 @@ _REQUEST_RETRY: ContextVar[_RequestRetryState | None] = ContextVar(
 
 def retain_retry_continuation_reset(reset: bool) -> bool:
     """Keep a consumed history reset until this logical request finishes."""
+    reset = retain_fallback_continuation_reset(reset)
     state = _REQUEST_RETRY.get()
     if state is None:
         return reset
@@ -42,6 +47,8 @@ class RequestRetryMiddleware(AgentMiddleware):
                 try:
                     return await handler(request)
                 except Exception as error:
+                    if response_started():
+                        raise
                     if not await wait_for_request_retry(
                         error, attempt=attempt, retries=self.retries
                     ):

@@ -35,6 +35,7 @@ class AgentProfile:
 
     name: str | None = None
     model: str | None = None
+    fallback_models: tuple[str, ...] | None = None
     adapter_kind: AgentAdapterKind | None = None
     adapter_shortname: str | None = None
     agent_command: AgentCommand | None = None
@@ -69,6 +70,18 @@ class AgentProfile:
     run_budget: RunBudget | None = None
 
     def __post_init__(self) -> None:
+        if self.fallback_models is not None:
+            if isinstance(self.fallback_models, (str, bytes)) or not isinstance(
+                self.fallback_models, (list, tuple)
+            ):
+                raise TypeError("fallback_models must be a sequence of model IDs")
+            if any(
+                not isinstance(model, str) or not model.strip() for model in self.fallback_models
+            ):
+                raise ValueError("fallback_models must contain non-empty model IDs")
+            object.__setattr__(
+                self, "fallback_models", tuple(model.strip() for model in self.fallback_models)
+            )
         tool_reason_enabled(self.settings)
         object.__setattr__(self, "skills", skills_settings(self.skills))
         object.__setattr__(self, "codemode", normalize_codemode_settings(self.codemode))
@@ -116,6 +129,8 @@ class AgentProfile:
             updates["a2a_connection"] = other.a2a_connection
         if other.model is not None:
             updates["model"] = other.model
+        if other.fallback_models is not None:
+            updates["fallback_models"] = other.fallback_models
         if other.effort is not None:
             updates["effort"] = other.effort
         if other.system is not None:
@@ -290,6 +305,7 @@ class AgentProfile:
             or bool(self.capabilities)
             or self.compaction is not None
             or self.history_processing is not None
+            or self.fallback_models is not None
             or self.needs_model_override(adapter_default)
         )
 

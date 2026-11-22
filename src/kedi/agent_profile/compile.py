@@ -15,6 +15,7 @@ from .definitions import (
     ProfileDeferMember,
     ProfileDefinition,
     ProfileEffortMember,
+    ProfileFallbackMember,
     ProfileHistoryMember,
     ProfileHooksMember,
     ProfileMaxAgentsMember,
@@ -102,6 +103,8 @@ def _compile_profile_members(
         members.append(_adapter_entry_to_member(entry))
     for entry in stmt.model_members:
         members.append(_model_entry_to_member(entry))
+    for entry in stmt.fallback_members:
+        members.append(ProfileFallbackMember(values=tuple(entry.values), loc=entry.loc))
     for entry in stmt.effort_members:
         members.append(_effort_entry_to_member(entry))
     for entry in stmt.approval_members:
@@ -358,6 +361,7 @@ def capture_procedure_profiles(
         BudgetDirectiveStmt,
         CodeModeDirectiveStmt,
         EffortDirectiveStmt,
+        FallbackDirectiveStmt,
         HistoryDirectiveStmt,
         HooksDirectiveStmt,
         McpDirectiveStmt,
@@ -379,6 +383,7 @@ def capture_procedure_profiles(
         eval_budget_directive,
         eval_codemode_directive,
         eval_effort_directive,
+        eval_fallback_directive,
         eval_history_directive,
         eval_hooks_directive,
         eval_mcp_directive,
@@ -421,6 +426,7 @@ def capture_procedure_profiles(
         AgentDirectiveStmt: eval_agent_directive,
         AdapterDirectiveStmt: eval_adapter_directive,
         ModelDirectiveStmt: eval_model_directive,
+        FallbackDirectiveStmt: eval_fallback_directive,
         EffortDirectiveStmt: eval_effort_directive,
         ApprovalDirectiveStmt: eval_approval_directive,
         HooksDirectiveStmt: lambda rt, stmt, env: eval_hooks_directive(
