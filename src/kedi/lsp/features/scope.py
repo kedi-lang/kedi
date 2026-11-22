@@ -158,23 +158,33 @@ def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
     """Best-effort span for each parameter declaration in the header.
 
     We don't carry parameter spans in the AST (the walker captures the
-    procedure-level Span only), so we reconstruct them by searching
-    the procedure's first physical line. Cheap and good enough for
-    cursor hit-testing on a single line.
+    procedure-level Span only), so we reconstruct them by parsing the
+    procedure's first physical line. The header is split into top-level
+    comma segments — bracket depth and backticked inline-Python defaults
+    are tracked — and each segment's leading identifier is its parameter.
+    A plain substring search is wrong here: a default may contain another
+    parameter's name (``@p(x=`y`, y=`1`)``), and the search would land
+    inside the default instead of on the declaration.
     """
     source = current_source()
     if proc.loc is None or not proc.params or source is None:
         return []
     header_bytes = source.source.encode("utf-8")[proc.loc.start_byte :]
     header = header_bytes.split(b"\n", 1)[0].decode("utf-8")
-    cursor = header.find("(") + 1
+    open_paren = header.find("(")
+    if open_paren < 0:
+        return []
+    segments = _split_header_param_segments(header, open_paren + 1)
     declarations: List[Tuple[str, Span]] = []
-    for name in proc.params:
-        match = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", header[cursor:])
-        if match is None:
+    for name, (segment_start, segment_end) in zip(proc.params, segments, strict=False):
+        segment = header[segment_start:segment_end]
+        stripped = segment.lstrip()
+        leading = len(segment) - len(stripped)
+        match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", stripped)
+        if match is None or match.group(0) != name:
             continue
-        start_char = cursor + match.start()
-        end_char = cursor + match.end()
+        start_char = segment_start + leading
+        end_char = start_char + len(name)
         start_offset = len(header[:start_char].encode("utf-8"))
         end_offset = len(header[:end_char].encode("utf-8"))
         declarations.append(
@@ -192,8 +202,45 @@ def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
                 ),
             )
         )
-        cursor = end_char
     return declarations
+
+
+def _split_header_param_segments(header: str, start: int) -> List[Tuple[int, int]]:
+    """Top-level comma segments of a procedure header's parameter list.
+
+    Returns ``(start, end)`` character offsets into ``header``. Commas
+    inside brackets or inside backticked inline-Python defaults do not
+    split; the list ends at the closing parenthesis.
+    """
+    segments: List[Tuple[int, int]] = []
+    segment_start = start
+    depth = 0
+    in_backtick = False
+    index = start
+    while index < len(header):
+        char = header[index]
+        if in_backtick:
+            if char == "\\":
+                index += 2
+                continue
+            if char == "`":
+                in_backtick = False
+        elif char == "`":
+            in_backtick = True
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                segments.append((segment_start, index))
+                return segments
+            depth -= 1
+        elif char == "," and depth == 0:
+            segments.append((segment_start, index))
+            segment_start = index + 1
+        index += 1
+    if segment_start < len(header):
+        segments.append((segment_start, len(header)))
+    return segments
 
 
 def _param_decl_span(proc: ProcedureDef, name: str) -> Optional[Span]:
@@ -369,9 +416,16 @@ def _resolve_value_declaration(
         declaration = _declaration_in_scope_path(proc.body, name, reference_byte, proc)
         if declaration is not None:
             return declaration
-        parameter_span = _param_decl_span(proc, name) if name in proc.params else None
-        if parameter_span is not None:
-            return _ValueDeclaration("parameter", name, parameter_span, proc)
+        # A reference on the procedure's header line lives in a parameter
+        # default (or type annotation), which the compiler evaluates in the
+        # parent environment at definition time — the procedure's own
+        # parameters are not in scope there. Only ancestors and top-level
+        # bindings may resolve such a reference; otherwise rename would
+        # rewrite a default that reads an outer binding.
+        if proc.loc is None or reference_span.start_line > proc.loc.start_line:
+            parameter_span = _param_decl_span(proc, name) if name in proc.params else None
+            if parameter_span is not None:
+                return _ValueDeclaration("parameter", name, parameter_span, proc)
 
         for ancestor in reversed(ancestor_procs):
             declaration = _declaration_in_scope_path(
