@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import dotenv
+from .utils import load_project_dotenv
 
 
 def main(*args: Any, **kwargs: Any) -> Any:
-    dotenv.load_dotenv()
+    load_project_dotenv()
 
     from .cli import main as cli_main
 

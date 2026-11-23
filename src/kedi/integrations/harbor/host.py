@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Literal, Sequence, cast
 
 import click
-import dotenv
 
 from ...effort import EFFORT_VALUES
+from ...utils import load_project_dotenv
 from .records import (
     DEFAULT_HARBOR_RETRY_EXCLUSIONS,
     HarborRunPolicy,
@@ -688,7 +688,7 @@ def _resolve_kedi_otel_distribution(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    dotenv.load_dotenv()
+    load_project_dotenv()
     cli.main(args=list(argv) if argv is not None else None, prog_name="kedi-terminal-bench")
     return 0
 

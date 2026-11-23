@@ -3481,7 +3481,7 @@ def test_host_main_forwards_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
         dotenv_calls += 1
 
     monkeypatch.setattr(host.cli, "main", fake_main)
-    monkeypatch.setattr(host.dotenv, "load_dotenv", fake_load_dotenv)
+    monkeypatch.setattr(host, "load_project_dotenv", fake_load_dotenv)
     assert host.main(["--help"]) == 0
     assert calls == [(["--help"], "kedi-terminal-bench")]
     assert dotenv_calls == 1
