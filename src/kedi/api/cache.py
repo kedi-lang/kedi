@@ -151,9 +151,7 @@ def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
     """
     if callable(value):
         return f"callable:{_object_identity(value)}"
-    if value is None or isinstance(
-        value, (bool, int, float, complex, str, bytes, range, slice)
-    ):
+    if value is None or isinstance(value, (bool, int, float, complex, str, bytes, range, slice)):
         return repr(value)
     if isinstance(value, bytearray):
         return repr(bytes(value))
@@ -186,14 +184,8 @@ def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
             scrubbed = _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
         except Exception:  # noqa: BLE001 - a broken __repr__ must not break caching
             scrubbed = "<unrepresentable>"
-        return (
-            f"{type(value).__module__}.{type(value).__qualname__}"
-            f":{scrubbed}:{state}"
-        )
-    return (
-        f"object:{type(value).__module__}.{type(value).__qualname__}"
-        f":{_object_identity(value)}"
-    )
+        return f"{type(value).__module__}.{type(value).__qualname__}:{scrubbed}:{state}"
+    return f"object:{type(value).__module__}.{type(value).__qualname__}:{_object_identity(value)}"
 
 
 def _object_state_repr(value: Any, seen: frozenset[int]) -> str | None:

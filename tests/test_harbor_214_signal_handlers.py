@@ -6,6 +6,7 @@ termination lock - it only records the request and the run loop drains it.
 terminal.close() - teardown belongs in run_trial's finally block, with the
 previous handlers restored before resource cleanup.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,7 +14,6 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,12 +63,15 @@ def test_supervisor_signal_handler_returns_while_termination_lock_held(
                 "assert sup._signal_pending == signal.SIGTERM",
                 "sup._termination_lock.release()",
                 "print('handler-returned')",
-                ""
+                "",
             ]
         ),
         encoding="utf-8",
     )
-    paths = [tmp_path / name for name in ("state.json", "control.json", "stdout.bin", "stderr.bin", "combined.bin")]
+    paths = [
+        tmp_path / name
+        for name in ("state.json", "control.json", "stdout.bin", "stderr.bin", "combined.bin")
+    ]
     proc = subprocess.run(
         [
             sys.executable,

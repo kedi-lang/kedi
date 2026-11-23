@@ -8,6 +8,7 @@ first session's record, so the first session's lookups were then reported
 as belonging to the other session. Records are now keyed by
 (session_id, ref_id).
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -117,9 +118,7 @@ def test_managers_sharing_a_root_keep_their_ref_ids(tmp_path: Path) -> None:
     """End to end through ArtifactManager: two sessions over one root both
     allocate ref_id artifact_1 and each reads back its own content."""
     root = tmp_path / "artifacts"
-    policy = ArtifactPolicy.patch(
-        {"enabled": True, "threshold": 1, "store": "file", "path": root}
-    )
+    policy = ArtifactPolicy.patch({"enabled": True, "threshold": 1, "store": "file", "path": root})
     first = ArtifactManager(session_id="session-a")
     handle_a = first.artifactize("content-a", policy=policy)
     second = ArtifactManager(session_id="session-b")

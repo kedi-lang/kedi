@@ -7,6 +7,7 @@ the project the user launched from. ``load_project_dotenv`` searches from
 the current working directory instead, so each project loads its own
 ``.env``; existing environment variables still win.
 """
+
 from __future__ import annotations
 
 import os
@@ -63,9 +64,7 @@ def test_load_project_dotenv_loads_cwd_env(tmp_path: Path, monkeypatch) -> None:
     )
 
 
-def test_load_project_dotenv_loads_distinct_projects(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_load_project_dotenv_loads_distinct_projects(tmp_path: Path, monkeypatch) -> None:
     assert (
         _load_in_project(
             tmp_path,
@@ -103,9 +102,7 @@ def test_load_project_dotenv_finds_parent_env_from_subdirectory(
         os.environ.pop("KEDI_214_PROJECT_VAR", None)
 
 
-def test_load_project_dotenv_keeps_existing_environment(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_load_project_dotenv_keeps_existing_environment(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / ".env").write_text("KEDI_214_PROJECT_VAR=from-dotenv\n", encoding="utf-8")
@@ -115,9 +112,7 @@ def test_load_project_dotenv_keeps_existing_environment(
     assert os.environ["KEDI_214_PROJECT_VAR"] == "from-environment"
 
 
-def test_load_project_dotenv_returns_false_without_env_file(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_load_project_dotenv_returns_false_without_env_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     assert load_project_dotenv() is False
 
@@ -128,9 +123,7 @@ def test_importing_kedi_settings_loads_project_dotenv(tmp_path: Path) -> None:
     to cwd, masking the bug) must see the project's .env at import time."""
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".env").write_text(
-        "KEDI_214_PROJECT_VAR=from-project-dotenv\n", encoding="utf-8"
-    )
+    (project / ".env").write_text("KEDI_214_PROJECT_VAR=from-project-dotenv\n", encoding="utf-8")
     probe = project / "run_probe.py"
     probe.write_text(_PROBE, encoding="utf-8")
     proc = subprocess.run(

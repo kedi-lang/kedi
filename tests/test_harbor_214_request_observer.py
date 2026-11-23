@@ -6,6 +6,7 @@ of the old content. The cache was also unbounded. Both are fixed: revision
 tokens now carry the immutable value (or a bytes snapshot for bytearray),
 and the cache evicts oldest entries past a bound.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

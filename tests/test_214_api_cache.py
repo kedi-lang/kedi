@@ -7,6 +7,7 @@ opaque objects now key by a process-local identity token, and both caches
 are bounded with oldest-first eviction. In-flight dedup and clear-cache
 generations must keep working.
 """
+
 from __future__ import annotations
 
 import threading
@@ -14,6 +15,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -170,12 +172,8 @@ def test_stable_repr_shares_keys_for_same_state_despite_address() -> None:
         def __repr__(self) -> str:  # noqa: D105
             return f"<AddressReprValue label={self.label!r} at {hex(id(self))}>"
 
-    assert _stable_repr(AddressReprValue("same")) == _stable_repr(
-        AddressReprValue("same")
-    )
-    assert _stable_repr(AddressReprValue("same")) != _stable_repr(
-        AddressReprValue("other")
-    )
+    assert _stable_repr(AddressReprValue("same")) == _stable_repr(AddressReprValue("same"))
+    assert _stable_repr(AddressReprValue("same")) != _stable_repr(AddressReprValue("other"))
 
 
 def test_stable_repr_handles_slots_and_reference_cycles() -> None:

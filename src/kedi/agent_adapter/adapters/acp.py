@@ -614,9 +614,7 @@ class ACPAdapter(HookRegistrationMixin):
                 del self._clients[key]
                 client = None
             if client is None:
-                client = ACPClient(
-                    command, env=env, cwd=cwd, request_timeout=self._request_timeout
-                )
+                client = ACPClient(command, env=env, cwd=cwd, request_timeout=self._request_timeout)
                 self._clients[key] = client
         return client, cwd, float(timeout)
 
