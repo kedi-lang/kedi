@@ -90,7 +90,7 @@ def test_stable_repr_covers_enums_dates_decimals_and_paths() -> None:
     assert _stable_repr(date(2026, 1, 1)) != _stable_repr(datetime(2026, 1, 1))
     assert _stable_repr(Decimal("1.5")) == _stable_repr(Decimal("1.5"))
     assert _stable_repr(Path("/tmp/x")) == _stable_repr(Path("/tmp/x"))
-    assert _stable_repr(bytearray(b"ab")) == _stable_repr(b"ab")
+    assert _stable_repr(bytearray(b"ab")) != _stable_repr(b"ab")
     assert _stable_repr(bytearray(b"ab")) != _stable_repr(b"ac")
 
 

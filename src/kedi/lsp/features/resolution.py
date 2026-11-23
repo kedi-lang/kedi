@@ -134,7 +134,7 @@ def _resolve_symbol_at(
         )
 
     profile_defs = _merged_profile_defs(prog, imported_surface)
-    for profile_name, profile_def in profile_defs.items():
+    for profile_name, profile_def in prog.profile_defs.items():
         name_span = (
             _directive_name_span(prog, profile_def.loc, profile_name) if profile_def.loc else None
         )

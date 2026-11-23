@@ -236,7 +236,7 @@ def test_signature_help_skips_decoy_procedure_without_call_at_cursor(
     from kedi.lang.parser import parse_program
 
     src = "@other(x):\n  = <x>\n\n= <other(1)>\n"
-    prog = parse_program(src)
+    prog = parse_program(src, source_path=str(tmp_path / "x.kedi"))
     pos = position_of(src, "other", occurrence=2)
     decoy = ProcedureDef(
         name="decoy",

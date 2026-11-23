@@ -15,6 +15,7 @@ from enum import Enum
 from itertools import count
 from pathlib import Path
 from threading import Lock, RLock, get_ident
+from types import MemberDescriptorType
 from typing import (
     Any,
     Callable,
@@ -35,6 +36,7 @@ _MAX_STATE_REPR_CHARS = 512
 
 
 _PARSE_CACHE: dict[tuple[str, str | None, str], Any] = {}
+_PARSE_CACHE_LOCK = RLock()
 
 _MAX_PARSE_CACHE_ENTRIES = 1024
 _MAX_RESPONSE_CACHE_ENTRIES = 1024
@@ -61,6 +63,7 @@ _IDENTITIES: dict[int, tuple[Callable[[], object | None], int]] = {}
 def _object_identity(value: object) -> int:
     """Assign process-local tokens without confusing a recycled Python object address."""
     address = id(value)
+    evicted = None
     with _IDENTITY_LOCK:
         previous = _IDENTITIES.get(address)
         if previous is not None and previous[0]() is value:
@@ -76,11 +79,15 @@ def _object_identity(value: object) -> int:
         try:
             reference = weakref.ref(value, forget)
         except TypeError:
-            # Slot-only callables cannot be weak-referenced. Retain them until clear_cache.
+            # Some objects cannot be weak-referenced; retain them only until eviction/clear.
             _IDENTITIES[address] = (lambda: value, serial)
         else:
             _IDENTITIES[address] = (reference, serial)
-        return serial
+        if len(_IDENTITIES) > _MAX_RESPONSE_CACHE_ENTRIES:
+            evicted = _IDENTITIES.pop(next(iter(_IDENTITIES)))
+    # Releasing a retained object may run its destructor; do that outside the lock.
+    del evicted
+    return serial
 
 
 @dataclass(frozen=True)
@@ -108,29 +115,36 @@ def _parse_cached(
 ) -> tuple[Any, str]:
     digest = _source_hash(source)
     key = (kind, source_path, digest)
-    program = _PARSE_CACHE.get(key)
-    if program is None:
-        program = parse_program(source, source_path=source_path)
-        _PARSE_CACHE[key] = program
-        while len(_PARSE_CACHE) > _MAX_PARSE_CACHE_ENTRIES:
-            _PARSE_CACHE.pop(next(iter(_PARSE_CACHE)))
+    with _PARSE_CACHE_LOCK:
+        program = _PARSE_CACHE.get(key)
+        if program is None:
+            program = parse_program(source, source_path=source_path)
+            _PARSE_CACHE[key] = program
+            while len(_PARSE_CACHE) > _MAX_PARSE_CACHE_ENTRIES:
+                _PARSE_CACHE.pop(next(iter(_PARSE_CACHE)))
     return program, digest
 
 
 def cache_info() -> CacheInfo:
+    with _PARSE_CACHE_LOCK:
+        parse_entries = len(_PARSE_CACHE)
     with _RESPONSE_CACHE_LOCK:
         response_entries = len(_RESPONSE_CACHE)
-    return CacheInfo(parse_entries=len(_PARSE_CACHE), response_entries=response_entries)
+    return CacheInfo(parse_entries=parse_entries, response_entries=response_entries)
 
 
 def clear_cache() -> None:
     global _RESPONSE_CACHE_GENERATION
-    _PARSE_CACHE.clear()
+    with _PARSE_CACHE_LOCK:
+        _PARSE_CACHE.clear()
     with _RESPONSE_CACHE_LOCK:
+        discarded_results = list(_RESPONSE_CACHE.values())
         _RESPONSE_CACHE.clear()
         _RESPONSE_CACHE_GENERATION += 1
     with _IDENTITY_LOCK:
+        discarded_identities = list(_IDENTITIES.values())
         _IDENTITIES.clear()
+    del discarded_results, discarded_identities
 
 
 def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
@@ -151,10 +165,10 @@ def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
     """
     if callable(value):
         return f"callable:{_object_identity(value)}"
-    if value is None or isinstance(value, (bool, int, float, complex, str, bytes, range, slice)):
+    if value is None or type(value) in (bool, int, float, complex, str, bytes, range, slice):
         return repr(value)
-    if isinstance(value, bytearray):
-        return repr(bytes(value))
+    if type(value) is bytearray:
+        return repr(value)
     seen = _seen or frozenset()
     if isinstance(value, Enum):
         return (
@@ -197,20 +211,16 @@ def _object_state_repr(value: Any, seen: frozenset[int]) -> str | None:
         state = None
     if isinstance(state, dict):
         entries.update(state)
-    slots = getattr(type(value), "__slots__", ())
-    if isinstance(slots, str):
-        slots = (slots,)
-    try:
-        slot_names = tuple(slots)
-    except TypeError:
-        slot_names = ()
-    for name in slot_names:
-        if not isinstance(name, str):
-            continue
-        try:
-            entries[name] = getattr(value, name)
-        except AttributeError:
-            continue
+    # Read actual slot descriptors, including inherited/private/shadowed slots,
+    # instead of inferring storage from mutable __slots__ metadata.
+    for owner in type(value).__mro__:
+        for name, descriptor in vars(owner).items():
+            if not isinstance(descriptor, MemberDescriptorType):
+                continue
+            try:
+                entries[f"{owner.__qualname__}.{name}"] = descriptor.__get__(value)
+            except AttributeError:
+                continue
     if not entries:
         return None
     rendered = ", ".join(
@@ -424,13 +434,15 @@ def _finish_response_flight(
         stored_result = _isolate_cached(result)
     else:
         stored_result = _CACHE_MISS
+    evicted: list[Any] = []
     with _RESPONSE_CACHE_LOCK:
         if error is None and flight.generation == _RESPONSE_CACHE_GENERATION:
             _RESPONSE_CACHE[cache_key] = stored_result
             while len(_RESPONSE_CACHE) > _MAX_RESPONSE_CACHE_ENTRIES:
-                _RESPONSE_CACHE.pop(next(iter(_RESPONSE_CACHE)))
+                evicted.append(_RESPONSE_CACHE.pop(next(iter(_RESPONSE_CACHE))))
         if _RESPONSE_IN_FLIGHT.get(cache_key) is flight:
             _RESPONSE_IN_FLIGHT.pop(cache_key)
+    del evicted
     if error is None:
         flight.future.set_result(stored_result)
     else:

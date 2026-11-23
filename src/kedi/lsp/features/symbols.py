@@ -395,6 +395,9 @@ def _export_name_spans(
         if export.loc is None or name not in export.names:
             continue
         for line_number in range(export.loc.start_line + 1, export.loc.end_line + 1):
+            line = _program_line_text(prog, line_number, export.loc.source_path)
+            if line is None or line.split("#", 1)[0].strip() != name:
+                continue
             span = _name_token_span_on_line(
                 prog,
                 line_number=line_number,
