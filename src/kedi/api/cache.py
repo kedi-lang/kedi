@@ -160,8 +160,9 @@ def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
     other's cached response. State-free objects (no instance state at
     all) fall back to a process-local identity token. Containers recurse
     element-wise instead of repr()ing the whole container, so a nested
-    opaque object cannot collide either. ``_seen`` guards reference
-    cycles, which repr() tolerates but naive recursion does not.
+    opaque object cannot collide either. Container subclasses also include
+    their instance state. ``_seen`` guards reference cycles, which repr()
+    tolerates but naive recursion does not.
     """
     if callable(value):
         return f"callable:{_object_identity(value)}"
@@ -185,13 +186,19 @@ def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
             (_stable_repr(key, _seen=seen), _stable_repr(item, _seen=seen))
             for key, item in value.items()
         )
-        return f"{_type_name(value)}({items!r})"
-    if isinstance(value, (list, tuple)):
+        rendered = f"{_type_name(value)}({items!r})"
+    elif isinstance(value, (list, tuple)):
         items = ", ".join(_stable_repr(item, _seen=seen) for item in value)
-        return f"{_type_name(value)}({items})"
-    if isinstance(value, (set, frozenset)):
+        rendered = f"{_type_name(value)}({items})"
+    elif isinstance(value, (set, frozenset)):
         items = ", ".join(sorted(_stable_repr(item, _seen=seen) for item in value))
-        return f"{_type_name(value)}({items})"
+        rendered = f"{_type_name(value)}({items})"
+    else:
+        rendered = None
+    if rendered is not None:
+        if type(value) in (dict, list, tuple, set, frozenset):
+            return rendered
+        return f"{rendered}:state={_object_state_repr(value, seen)}"
     state = _object_state_repr(value, seen)
     if state is not None:
         try:

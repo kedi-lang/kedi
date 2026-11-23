@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import reduce
 from operator import or_
 from types import GenericAlias, UnionType
-from typing import Annotated, Any, TypeAlias, Union, cast, get_args, get_origin
+from typing import Annotated, Any, ForwardRef, TypeAlias, Union, cast, get_args, get_origin
 
 from pydantic import Field, TypeAdapter
 from pydantic.fields import FieldInfo
@@ -62,7 +62,7 @@ def _description(metadata: list[Any]) -> str | None:
 
 
 def is_resolved_kedi_type(value: object) -> bool:
-    if isinstance(value, (type, GenericAlias, UnionType)):
+    if isinstance(value, (type, GenericAlias, UnionType, ForwardRef)):
         return True
     return hasattr(value, "__origin__") or str(type(value)).startswith("<class 'typing.")
 

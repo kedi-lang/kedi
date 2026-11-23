@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from typing import Any
 
+import pytest
+
+from kedi import query
 from kedi.api import cache
 
 
@@ -20,6 +24,68 @@ def test_scalar_subclass_state_contributes_to_response_cache_keys():
     first.label, second.label = "first", "second"
     assert cache._stable_repr(first) != cache._stable_repr(second)
     assert cache._stable_repr(first) != cache._stable_repr(3)
+
+
+@pytest.mark.parametrize("container_type", [list, tuple, dict, set, frozenset])
+def test_container_subclass_attributes_contribute_to_response_cache_keys(container_type):
+    tagged = type("Tagged", (container_type,), {})
+    first, second = tagged([("item", 1)]), tagged([("item", 1)])
+    first.label, second.label = "first", "second"
+    assert cache._stable_repr(first) != cache._stable_repr(second)
+    second.label = first.label
+    assert cache._stable_repr(first) == cache._stable_repr(second)
+
+
+@pytest.mark.parametrize("container_type", [list, dict, set, frozenset])
+def test_container_subclass_slots_contribute_to_response_cache_keys(container_type):
+    tagged = type("Tagged", (container_type,), {"__slots__": ("label",)})
+    first, second = tagged([("item", 1)]), tagged([("item", 1)])
+    first.label, second.label = "first", "second"
+    assert cache._stable_repr(first) != cache._stable_repr(second)
+    second.label = first.label
+    assert cache._stable_repr(first) == cache._stable_repr(second)
+
+
+@pytest.mark.parametrize("container_type", [list, tuple, dict, set, frozenset])
+def test_container_subclass_payload_is_preserved_with_a_constant_repr(container_type):
+    tagged = type("Tagged", (container_type,), {"__repr__": lambda self: "Tagged()"})
+    first, second = tagged([("item", 1)]), tagged([("item", 2)])
+    first.label = second.label = "same"
+    assert repr(first) == repr(second)
+    assert cache._stable_repr(first) != cache._stable_repr(second)
+
+
+def test_container_subclass_recursive_state_has_a_stable_cache_key():
+    class RecursiveList(list):
+        pass
+
+    first, second = RecursiveList(), RecursiveList()
+    first.owner, second.owner = first, second
+    assert cache._stable_repr(first) == cache._stable_repr(first)
+    assert cache._stable_repr(first) != cache._stable_repr(second)
+
+
+@pytest.mark.parametrize("container_type", [list, tuple, dict, set, frozenset])
+def test_cached_query_reads_current_container_subclass_attributes(container_type):
+    tagged = type("Tagged", (container_type,), {})
+    first, second = tagged([("item", 1)]), tagged([("item", 1)])
+    first.label, second.label = "first", "second"
+
+    @query(cache=True)
+    def label(value: Any) -> str:
+        """kedi
+        = `value.label`
+        """
+
+    cache.clear_cache()
+    try:
+        assert label(first) == "first"
+        assert label(second) == "second"
+        first.label = "updated"
+        assert label(first) == "updated"
+        assert label(second) == "second"
+    finally:
+        cache.clear_cache()
 
 
 def test_inherited_and_private_slots_contribute_to_response_cache_keys():

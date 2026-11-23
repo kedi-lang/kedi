@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ForwardRef, cast
 
 import pytest
 from lsprotocol import types as lsp
@@ -31,6 +31,9 @@ from tests.lsp_helpers import position_of
 
 
 def test_resolved_type_helpers_cover_typing_aliases() -> None:
+    reference = ForwardRef("Node")
+    assert is_resolved_kedi_type(reference)
+    assert as_resolved_kedi_type(reference) is reference
     assert is_resolved_kedi_type(str)
     assert is_resolved_kedi_type(list[str])
     assert not is_resolved_kedi_type(1)
