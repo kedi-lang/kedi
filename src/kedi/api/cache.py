@@ -9,12 +9,17 @@ import weakref
 from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
+from enum import Enum
 from itertools import count
+from pathlib import Path
 from threading import Lock, RLock, get_ident
 from typing import (
     Any,
     Callable,
 )
+from uuid import UUID
 
 from kedi.agent_adapter import AgentAdapterKind
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
@@ -26,9 +31,13 @@ from kedi.api.state import AdapterLike
 from kedi.lang import parse_program
 
 _MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+_MAX_STATE_REPR_CHARS = 512
 
 
 _PARSE_CACHE: dict[tuple[str, str | None, str], Any] = {}
+
+_MAX_PARSE_CACHE_ENTRIES = 1024
+_MAX_RESPONSE_CACHE_ENTRIES = 1024
 
 
 _RESPONSE_CACHE: dict[str, Any] = {}
@@ -103,6 +112,8 @@ def _parse_cached(
     if program is None:
         program = parse_program(source, source_path=source_path)
         _PARSE_CACHE[key] = program
+        while len(_PARSE_CACHE) > _MAX_PARSE_CACHE_ENTRIES:
+            _PARSE_CACHE.pop(next(iter(_PARSE_CACHE)))
     return program, digest
 
 
@@ -122,10 +133,109 @@ def clear_cache() -> None:
         _IDENTITIES.clear()
 
 
-def _stable_repr(value: Any) -> str:
+def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
+    """A cache-key fragment that distinguishes distinct objects.
+
+    Plain values (scalars, dates, decimals, enums, paths, containers of
+    plain values) key by value, so equal arguments share cache entries.
+    Any other object keys by its address-scrubbed repr plus a fingerprint
+    of its instance state (``__dict__``/``__slots__``). The repr alone is
+    not enough: two distinct objects whose reprs differ only by address
+    - plain ``object()`` instances, or instances of a class with a
+    constant ``__repr__`` - used to produce the same key and return each
+    other's cached response. State-free objects (no instance state at
+    all) fall back to a process-local identity token. Containers recurse
+    element-wise instead of repr()ing the whole container, so a nested
+    opaque object cannot collide either. ``_seen`` guards reference
+    cycles, which repr() tolerates but naive recursion does not.
+    """
     if callable(value):
         return f"callable:{_object_identity(value)}"
-    return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
+    if value is None or isinstance(
+        value, (bool, int, float, complex, str, bytes, range, slice)
+    ):
+        return repr(value)
+    if isinstance(value, bytearray):
+        return repr(bytes(value))
+    seen = _seen or frozenset()
+    if isinstance(value, Enum):
+        return (
+            f"{type(value).__module__}.{type(value).__qualname__}"
+            f".{value.name}={_stable_repr(value.value, _seen=seen)}"
+        )
+    if isinstance(value, (datetime, date, time, Decimal, UUID, Path)):
+        return repr(value)
+    if id(value) in seen:
+        return f"cycle:{_object_identity(value)}"
+    seen = seen | {id(value)}
+    if isinstance(value, dict):
+        items = sorted(
+            (_stable_repr(key, _seen=seen), _stable_repr(item, _seen=seen))
+            for key, item in value.items()
+        )
+        return f"{_type_name(value)}({items!r})"
+    if isinstance(value, (list, tuple)):
+        items = ", ".join(_stable_repr(item, _seen=seen) for item in value)
+        return f"{_type_name(value)}({items})"
+    if isinstance(value, (set, frozenset)):
+        items = ", ".join(sorted(_stable_repr(item, _seen=seen) for item in value))
+        return f"{_type_name(value)}({items})"
+    state = _object_state_repr(value, seen)
+    if state is not None:
+        try:
+            scrubbed = _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
+        except Exception:  # noqa: BLE001 - a broken __repr__ must not break caching
+            scrubbed = "<unrepresentable>"
+        return (
+            f"{type(value).__module__}.{type(value).__qualname__}"
+            f":{scrubbed}:{state}"
+        )
+    return (
+        f"object:{type(value).__module__}.{type(value).__qualname__}"
+        f":{_object_identity(value)}"
+    )
+
+
+def _object_state_repr(value: Any, seen: frozenset[int]) -> str | None:
+    """Fingerprint an object's instance state, or None if it has none."""
+    entries: dict[str, Any] = {}
+    try:
+        state = vars(value)
+    except TypeError:
+        state = None
+    if isinstance(state, dict):
+        entries.update(state)
+    slots = getattr(type(value), "__slots__", ())
+    if isinstance(slots, str):
+        slots = (slots,)
+    try:
+        slot_names = tuple(slots)
+    except TypeError:
+        slot_names = ()
+    for name in slot_names:
+        if not isinstance(name, str):
+            continue
+        try:
+            entries[name] = getattr(value, name)
+        except AttributeError:
+            continue
+    if not entries:
+        return None
+    rendered = ", ".join(
+        f"{name}={_stable_repr(item, _seen=seen)}"
+        for name, item in sorted(entries.items(), key=lambda pair: str(pair[0]))
+    )
+    if len(rendered) > _MAX_STATE_REPR_CHARS:
+        return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    return rendered
+
+
+def _type_name(value: Any) -> str:
+    """Exact builtin name, or the qualified name for a container subclass."""
+    value_type = type(value)
+    if value_type in (dict, list, tuple, set, frozenset):
+        return value_type.__name__
+    return f"{value_type.__module__}.{value_type.__qualname__}"
 
 
 def _isolate_cached(value: Any) -> Any:
@@ -325,6 +435,8 @@ def _finish_response_flight(
     with _RESPONSE_CACHE_LOCK:
         if error is None and flight.generation == _RESPONSE_CACHE_GENERATION:
             _RESPONSE_CACHE[cache_key] = stored_result
+            while len(_RESPONSE_CACHE) > _MAX_RESPONSE_CACHE_ENTRIES:
+                _RESPONSE_CACHE.pop(next(iter(_RESPONSE_CACHE)))
         if _RESPONSE_IN_FLIGHT.get(cache_key) is flight:
             _RESPONSE_IN_FLIGHT.pop(cache_key)
     if error is None:
