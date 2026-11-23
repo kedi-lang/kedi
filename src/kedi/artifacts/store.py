@@ -95,6 +95,23 @@ def _owned_record(
     return record
 
 
+def _owned_session_record(
+    records: dict[tuple[str, str], ArtifactRecord],
+    session_id: str,
+    ref_id: str,
+) -> ArtifactRecord:
+    """Look up a record in a session-qualified store.
+
+    The key already carries the session, so a ref_id restored under another
+    session can never overwrite or shadow this session's record - the two
+    entries are distinct keys instead of one colliding ``ref_id`` entry.
+    """
+    try:
+        return records[(session_id, ref_id)]
+    except KeyError as exc:
+        raise ArtifactNotFoundError(f"artifact {ref_id!r} was not found") from exc
+
+
 def __getattr__(name: str) -> Any:
     if name == "InMemoryArtifactStore":
         from .memory_store import InMemoryArtifactStore

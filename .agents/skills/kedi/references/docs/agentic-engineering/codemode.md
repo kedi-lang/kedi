@@ -42,11 +42,20 @@ defaults to `true` when omitted:
     max_concurrent_calls: 8
     max_tool_result_bytes: 256000
     max_total_tool_result_bytes: 1000000
+    max_memory_bytes: 268435456
+    max_feed_seconds: 60
     request_timeout: 60
 ```
 
 `> codemode:` is Kedi-owned and is never forwarded as provider model
 configuration. `> settings:` does not accept a `codemode` field.
+
+Every sandbox session has a 256 MiB memory ceiling and a 60-second execution
+ceiling per cell by default. `max_memory_bytes` and `max_feed_seconds` configure
+those limits; `request_timeout` independently bounds the sandbox request.
+Hitting a sandbox resource limit returns a script error; resetting the session
+starts with fresh state. Catching a host-side budget, Kedi execution, or result
+delivery error inside generated code cannot suppress that fatal error.
 
 The equivalent Python API is available on every supported adapter:
 
@@ -59,7 +68,8 @@ adapter = PydanticAdapter("openai:gpt-6-luna", codemode=True)
 Use `CodeModeSettings` when Python should preload known tools:
 
 ```python
-from kedi.agent_adapter import CodeModeSettings, PydanticAdapter
+from kedi import CodeModeSettings
+from kedi.agent_adapter import PydanticAdapter
 
 adapter = PydanticAdapter(
     "openai:gpt-6-luna",
@@ -115,7 +125,7 @@ that result; enabling CodeMode does not itself execute the tool.
 
 ### `search_tools`
 
-```python
+```text
 search_tools(
     *,
     query: str | None = None,
@@ -132,7 +142,7 @@ A changed tool catalog makes old cursors stale.
 
 ### `get_tool_schema`
 
-```python
+```text
 get_tool_schema(*, tool_names: list[str])
 ```
 
@@ -150,7 +160,7 @@ to the same callable name are rejected when the catalog is built.
 
 ### `execute_code`
 
-```python
+```text
 execute_code(*, code: str, restart: bool = False)
 ```
 

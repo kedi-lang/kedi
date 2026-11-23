@@ -9,12 +9,18 @@ import weakref
 from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
+from enum import Enum
 from itertools import count
+from pathlib import Path
 from threading import Lock, RLock, get_ident
+from types import MemberDescriptorType
 from typing import (
     Any,
     Callable,
 )
+from uuid import UUID
 
 from kedi.agent_adapter import AgentAdapterKind
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
@@ -26,9 +32,14 @@ from kedi.api.state import AdapterLike
 from kedi.lang import parse_program
 
 _MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+_MAX_STATE_REPR_CHARS = 512
 
 
 _PARSE_CACHE: dict[tuple[str, str | None, str], Any] = {}
+_PARSE_CACHE_LOCK = RLock()
+
+_MAX_PARSE_CACHE_ENTRIES = 1024
+_MAX_RESPONSE_CACHE_ENTRIES = 1024
 
 
 _RESPONSE_CACHE: dict[str, Any] = {}
@@ -52,6 +63,7 @@ _IDENTITIES: dict[int, tuple[Callable[[], object | None], int]] = {}
 def _object_identity(value: object) -> int:
     """Assign process-local tokens without confusing a recycled Python object address."""
     address = id(value)
+    evicted = None
     with _IDENTITY_LOCK:
         previous = _IDENTITIES.get(address)
         if previous is not None and previous[0]() is value:
@@ -67,11 +79,15 @@ def _object_identity(value: object) -> int:
         try:
             reference = weakref.ref(value, forget)
         except TypeError:
-            # Slot-only callables cannot be weak-referenced. Retain them until clear_cache.
+            # Some objects cannot be weak-referenced; retain them only until eviction/clear.
             _IDENTITIES[address] = (lambda: value, serial)
         else:
             _IDENTITIES[address] = (reference, serial)
-        return serial
+        if len(_IDENTITIES) > _MAX_RESPONSE_CACHE_ENTRIES:
+            evicted = _IDENTITIES.pop(next(iter(_IDENTITIES)))
+    # Releasing a retained object may run its destructor; do that outside the lock.
+    del evicted
+    return serial
 
 
 @dataclass(frozen=True)
@@ -99,33 +115,136 @@ def _parse_cached(
 ) -> tuple[Any, str]:
     digest = _source_hash(source)
     key = (kind, source_path, digest)
-    program = _PARSE_CACHE.get(key)
-    if program is None:
-        program = parse_program(source, source_path=source_path)
-        _PARSE_CACHE[key] = program
+    with _PARSE_CACHE_LOCK:
+        program = _PARSE_CACHE.get(key)
+        if program is None:
+            program = parse_program(source, source_path=source_path)
+            _PARSE_CACHE[key] = program
+            while len(_PARSE_CACHE) > _MAX_PARSE_CACHE_ENTRIES:
+                _PARSE_CACHE.pop(next(iter(_PARSE_CACHE)))
     return program, digest
 
 
 def cache_info() -> CacheInfo:
+    with _PARSE_CACHE_LOCK:
+        parse_entries = len(_PARSE_CACHE)
     with _RESPONSE_CACHE_LOCK:
         response_entries = len(_RESPONSE_CACHE)
-    return CacheInfo(parse_entries=len(_PARSE_CACHE), response_entries=response_entries)
+    return CacheInfo(parse_entries=parse_entries, response_entries=response_entries)
 
 
 def clear_cache() -> None:
     global _RESPONSE_CACHE_GENERATION
-    _PARSE_CACHE.clear()
+    with _PARSE_CACHE_LOCK:
+        _PARSE_CACHE.clear()
     with _RESPONSE_CACHE_LOCK:
+        discarded_results = list(_RESPONSE_CACHE.values())
         _RESPONSE_CACHE.clear()
         _RESPONSE_CACHE_GENERATION += 1
     with _IDENTITY_LOCK:
+        discarded_identities = list(_IDENTITIES.values())
         _IDENTITIES.clear()
+    del discarded_results, discarded_identities
 
 
-def _stable_repr(value: Any) -> str:
+def _stable_repr(value: Any, *, _seen: frozenset[int] | None = None) -> str:
+    """A cache-key fragment that distinguishes distinct objects.
+
+    Plain values (scalars, dates, decimals, enums, paths, containers of
+    plain values) key by value, so equal arguments share cache entries.
+    Any other object keys by its address-scrubbed repr plus a fingerprint
+    of its instance state (``__dict__``/``__slots__``). The repr alone is
+    not enough: two distinct objects whose reprs differ only by address
+    - plain ``object()`` instances, or instances of a class with a
+    constant ``__repr__`` - used to produce the same key and return each
+    other's cached response. State-free objects (no instance state at
+    all) fall back to a process-local identity token. Containers recurse
+    element-wise instead of repr()ing the whole container, so a nested
+    opaque object cannot collide either. Container subclasses also include
+    their instance state. ``_seen`` guards reference cycles, which repr()
+    tolerates but naive recursion does not.
+    """
     if callable(value):
         return f"callable:{_object_identity(value)}"
-    return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
+    if value is None or type(value) in (bool, int, float, complex, str, bytes, range, slice):
+        return repr(value)
+    if type(value) is bytearray:
+        return repr(value)
+    seen = _seen or frozenset()
+    if isinstance(value, Enum):
+        return (
+            f"{type(value).__module__}.{type(value).__qualname__}"
+            f".{value.name}={_stable_repr(value.value, _seen=seen)}"
+        )
+    if isinstance(value, (datetime, date, time, Decimal, UUID, Path)):
+        return repr(value)
+    if id(value) in seen:
+        return f"cycle:{_object_identity(value)}"
+    seen = seen | {id(value)}
+    if isinstance(value, dict):
+        items = sorted(
+            (_stable_repr(key, _seen=seen), _stable_repr(item, _seen=seen))
+            for key, item in value.items()
+        )
+        rendered = f"{_type_name(value)}({items!r})"
+    elif isinstance(value, (list, tuple)):
+        items = ", ".join(_stable_repr(item, _seen=seen) for item in value)
+        rendered = f"{_type_name(value)}({items})"
+    elif isinstance(value, (set, frozenset)):
+        items = ", ".join(sorted(_stable_repr(item, _seen=seen) for item in value))
+        rendered = f"{_type_name(value)}({items})"
+    else:
+        rendered = None
+    if rendered is not None:
+        if type(value) in (dict, list, tuple, set, frozenset):
+            return rendered
+        return f"{rendered}:state={_object_state_repr(value, seen)}"
+    state = _object_state_repr(value, seen)
+    if state is not None:
+        try:
+            scrubbed = _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
+        except Exception:  # noqa: BLE001 - a broken __repr__ must not break caching
+            scrubbed = "<unrepresentable>"
+        return f"{type(value).__module__}.{type(value).__qualname__}:{scrubbed}:{state}"
+    return f"object:{type(value).__module__}.{type(value).__qualname__}:{_object_identity(value)}"
+
+
+def _object_state_repr(value: Any, seen: frozenset[int]) -> str | None:
+    """Fingerprint an object's instance state, or None if it has none."""
+    entries: dict[str, Any] = {}
+    try:
+        state = vars(value)
+    except TypeError:
+        state = None
+    if isinstance(state, dict):
+        entries.update(state)
+    # Read actual slot descriptors, including inherited/private/shadowed slots,
+    # instead of inferring storage from mutable __slots__ metadata.
+    for owner in type(value).__mro__:
+        for name, descriptor in vars(owner).items():
+            if not isinstance(descriptor, MemberDescriptorType):
+                continue
+            try:
+                entries[f"{owner.__qualname__}.{name}"] = descriptor.__get__(value)
+            except AttributeError:
+                continue
+    if not entries:
+        return None
+    rendered = ", ".join(
+        f"{name}={_stable_repr(item, _seen=seen)}"
+        for name, item in sorted(entries.items(), key=lambda pair: str(pair[0]))
+    )
+    if len(rendered) > _MAX_STATE_REPR_CHARS:
+        return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    return rendered
+
+
+def _type_name(value: Any) -> str:
+    """Exact builtin name, or the qualified name for a container subclass."""
+    value_type = type(value)
+    if value_type in (dict, list, tuple, set, frozenset):
+        return value_type.__name__
+    return f"{value_type.__module__}.{value_type.__qualname__}"
 
 
 def _isolate_cached(value: Any) -> Any:
@@ -322,11 +441,15 @@ def _finish_response_flight(
         stored_result = _isolate_cached(result)
     else:
         stored_result = _CACHE_MISS
+    evicted: list[Any] = []
     with _RESPONSE_CACHE_LOCK:
         if error is None and flight.generation == _RESPONSE_CACHE_GENERATION:
             _RESPONSE_CACHE[cache_key] = stored_result
+            while len(_RESPONSE_CACHE) > _MAX_RESPONSE_CACHE_ENTRIES:
+                evicted.append(_RESPONSE_CACHE.pop(next(iter(_RESPONSE_CACHE))))
         if _RESPONSE_IN_FLIGHT.get(cache_key) is flight:
             _RESPONSE_IN_FLIGHT.pop(cache_key)
+    del evicted
     if error is None:
         flight.future.set_result(stored_result)
     else:

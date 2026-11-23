@@ -12,10 +12,11 @@
 
 `KEDI_ADAPTER` and `KEDI_AGENT` are mutually exclusive. Python `configure()`,
 decorator arguments, source directives, and CLI options can provide more local
-selection. `KEDI_PARALLEL` accepts `0/1`, `true/false`, `on/off`, or a positive
-worker count; invalid values fail rather than silently selecting a mode.
-Unset or empty enables concurrency with eight workers. Use `KEDI_PARALLEL=0`
-for sequential execution; no variable is needed to enable concurrency.
+selection. `KEDI_PARALLEL` accepts `0/1`, `true/false`, `yes/no`, `on/off`, or
+a positive worker count; negative counts and other values fail rather than
+silently selecting a mode. Unset or empty enables concurrency with eight
+workers. Use `KEDI_PARALLEL=0` for sequential execution; no variable is needed
+to enable concurrency.
 
 ## Code Generation
 
@@ -50,7 +51,12 @@ it enabled in normal production logs.
 | Variable | Contract |
 | --- | --- |
 | `KEDI_HOME` | Absolute Kedi state root; relative paths are rejected |
-| `KEDI_REGISTRY_MOCK_ROOT` | Local mock registry root until the public registry exists |
+| `KEDI_REGISTRY_URL` | Registry base URL; default `https://registry.kedi-lang.org` |
+| `KEDI_REGISTRY_MOCK_ROOT` | Local mock registry root for registry-contract testing |
+
+The public registry lives at `https://registry.kedi-lang.org` by default.
+Set `KEDI_REGISTRY_URL` to use another HTTPS registry or a local HTTP server
+(see [Installation and Registries](../modules-and-packaging/installation-and-registries.md)).
 
 Installed packages live beneath `$KEDI_HOME/registry` or the platform default
 Kedi home. Git package operations set `GIT_TERMINAL_PROMPT=0` so unattended
@@ -63,6 +69,7 @@ installs fail instead of waiting for credentials.
 | `KEDI_WORKSPACE_POLICY` | Unset/empty or `strict` enforces workspace containment; `none` disables that containment, not all secret/deletion rules |
 | `KEDI_HISTORY` | REPL input history file, default `~/.kedi_history` |
 | `KEDI_CODEX_AUTH_FILE` | Explicit Codex Responses auth file; see [Codex models](../agent-adapters/codex-models.md) |
+| `NO_COLOR` | Nonempty value disables REPL input highlighting and error colors (same as `--no-color`) |
 
 See [Filesystem](../modules-and-packaging/filesystem.md) before changing workspace
 policy. It does not sandbox embedded Python or external agents.
@@ -89,6 +96,7 @@ resets active runtimes. These files and their contents must not be committed.
 | `KEDI_A2A_USERNAME` | Basic-auth username; default `kedi` |
 | `KEDI_A2A_SECRET` | Direct server credential fallback |
 | `KEDI_A2A_MODEL` | Model override for the exported server profile |
+| `KEDI_A2A_STATE_DIR` | Directory that keeps A2A tasks and sessions across server restarts (`--state-dir`) |
 
 Prefer a named variable through `--secret-env` or a mounted file through
 `--secret-file` over `KEDI_A2A_SECRET`. Client profiles reference their own
@@ -114,10 +122,14 @@ documents process spawning.
 
 ## `.env` Loading and Security
 
-The Python API's default configuration loads `.env` through its environment
-setup. Explicit arguments and scoped configuration take precedence. Do not
-depend on `.env` loading inside a separately spawned harness unless that process
-also loads or receives the values.
+Importing `kedi` does not read a `.env` file, and the default configuration
+does not either. `kedi.configure()` and the `kedi` CLI load the `.env` found
+by searching from the working directory upward; variables already set in the
+environment keep their values. When you embed Kedi without calling
+`configure()`, call `dotenv.load_dotenv()` yourself, as
+[Installation](../getting-started/installation.md) says. Do not depend on
+`.env` loading inside a separately spawned harness unless that process also
+loads or receives the values.
 
 Never put secrets in `.kedi` source, optimizer datasets, debug exports, or
 committed environment files. `MarkdownDebugExporter` does not redact values.

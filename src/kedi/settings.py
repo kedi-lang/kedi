@@ -1,9 +1,10 @@
-import dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Literal
 
-dotenv.load_dotenv()
+from .utils import load_project_dotenv
+
+load_project_dotenv()
 
 # The adapter choices offered by the CLI (``--adapter``) and accepted by
 # ``kedi.configure()``: the framework adapters (pydantic, langchain) plus the

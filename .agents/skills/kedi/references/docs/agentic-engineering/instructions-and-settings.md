@@ -187,6 +187,73 @@ built-in file behavior. Non-interactive Claude defaults to
 narrow it. Codex defaults to `workspace-write` unless settings narrow or replace
 its sandbox.
 
+## Settings Inventory
+
+The parser accepts exactly the keys below in `> settings:` (see
+`MODEL_SETTING_KEYS` in `src/kedi/agent_profile/settings.py`; the parser
+rejects any other name with `K-SETTING-KEY`). "Accepted by" names the
+adapters whose boundary forwards the key; a key can still be filtered out
+for a given provider or model. Value contracts come from the shared
+directive-value registry (`src/kedi/directive_values.py`) where one exists.
+
+| Key | Value contract | Accepted by |
+| --- | --- | --- |
+| `allowed_tools` | Backtick Python list or mapping | Claude |
+| `api_key` | Text value | LangChain |
+| `approval_policy` | No DSL value rule; validated by the selected adapter | Codex |
+| `base_url` | Text value | LangChain |
+| `callbacks` | Backtick Python object | LangChain |
+| `config` | Backtick Python list or mapping | Codex |
+| `configurable_fields` | No DSL value rule; validated by the selected adapter | LangChain |
+| `configurable_prefix` | No DSL value rule; validated by the selected adapter | LangChain |
+| `context_limit` | Model context window in tokens for Kedi's request ceiling | Kedi runtime |
+| `cwd` | Path string | Claude, Codex, ACP |
+| `decision_boolean_threshold` | Numeric value | Pydantic AI, LangChain |
+| `decision_tool_call_threshold` | Numeric value | Pydantic AI, LangChain |
+| `disable_streaming` | Disable streaming globally or during tool calls: `true`/`false` or `tool_calling` | LangChain |
+| `disallowed_tools` | Backtick Python list or mapping | Claude |
+| `env` | Backtick Python list or mapping | Claude, ACP |
+| `extra_body` | Backtick Python list or mapping | Pydantic AI, LangChain |
+| `extra_headers` | Backtick Python list or mapping | Pydantic AI, LangChain |
+| `fallback_model` | Text value | Claude |
+| `frequency_penalty` | Numeric value | Pydantic AI, LangChain |
+| `logit_bias` | Backtick Python list or mapping | Pydantic AI, LangChain |
+| `max_budget_usd` | No DSL value rule; validated by the selected adapter | Claude |
+| `max_retries` | Nonnegative integer | LangChain |
+| `max_tokens` | Integer value | Pydantic AI, LangChain |
+| `max_turns` | Integer value | Claude |
+| `media_limit` | Largest media value sent to the model (byte size, e.g. `100kb`) | Kedi runtime |
+| `metadata` | Backtick Python list or mapping | LangChain |
+| `model_kwargs` | Backtick Python list or mapping | LangChain |
+| `model_provider` | Text value | Codex |
+| `organization` | Text value | LangChain |
+| `parallel_tool_calls` | Boolean: `true`/`false` | Pydantic AI, LangChain |
+| `permission_mode` | Text value | Claude |
+| `personality` | Text value | Codex |
+| `presence_penalty` | Numeric value | Pydantic AI, LangChain |
+| `rate_limiter` | Backtick Python object | LangChain |
+| `reasoning` | No DSL value rule; validated by the selected adapter | LangChain |
+| `reasoning_effort` | Text value | LangChain |
+| `request_retries` | Additional attempts for transient model request errors | Kedi runtime |
+| `response_cache` | Boolean: `true`/`false` | Pydantic AI, LangChain |
+| `response_cache_ttl` | Positive integer | Pydantic AI, LangChain |
+| `sandbox` | Filesystem sandbox policy: `read-only`, `workspace-write`, `danger-full-access` | Codex |
+| `seed` | Integer value | Pydantic AI, LangChain |
+| `service_tier` | Provider service tier: `auto`, `default`, `flex`, `priority` | Pydantic AI, Codex |
+| `stop` | No DSL value rule; validated by the selected adapter | LangChain |
+| `stop_sequences` | Backtick Python list or mapping | Pydantic AI, LangChain |
+| `stream_usage` | Boolean: `true`/`false` | LangChain |
+| `streaming` | Boolean: `true`/`false` | LangChain |
+| `summary` | Text value | Codex |
+| `tags` | Backtick Python list or mapping | LangChain |
+| `temperature` | Numeric value | Pydantic AI, LangChain |
+| `thinking` | Thinking budget: `true`/`false` or `minimal`, `low`, `medium`, `high`, `xhigh` | Pydantic AI |
+| `timeout` | No DSL value rule; validated by the selected adapter | Pydantic AI, LangChain, Codex, ACP |
+| `tool_choice` | Tool selection policy: `none`, `auto`, `required` | Pydantic AI, LangChain |
+| `tool_reason` | Activation: `enabled`/`disabled`, or a backtick expression returning `bool` | Kedi runtime |
+| `tools` | Backtick Python list or mapping | Claude |
+| `top_p` | Numeric value | Pydantic AI, LangChain |
+
 ## Unknown and Inapplicable Settings
 
 Unknown setting names are parser/LSP errors. A known union-level key can still

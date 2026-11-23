@@ -199,10 +199,17 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "max_tool_result_bytes",
                 "max_total_tool_result_bytes",
                 "max_print_bytes",
+                "max_memory_bytes",
             )
         },
         "request_timeout": ValueRule(
             "Positive timeout in seconds", kind="number", minimum=0, exclusive_minimum=True
+        ),
+        "max_feed_seconds": ValueRule(
+            "Sandbox execution time per cell in seconds",
+            kind="number",
+            minimum=0,
+            exclusive_minimum=True,
         ),
     },
     "artifacts": {
@@ -246,7 +253,6 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "organization",
                 "fallback_model",
                 "model_provider",
-                "model_type",
                 "reasoning_effort",
                 "personality",
                 "summary",
@@ -261,13 +267,11 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "response_cache",
                 "streaming",
                 "stream_usage",
-                "cache",
-                "use_developer_role",
             )
         },
         "max_tokens": INTEGER,
         "response_cache_ttl": POSITIVE_INT,
-        **{name: NONNEGATIVE_INT for name in ("max_retries", "num_retries")},
+        "max_retries": NONNEGATIVE_INT,
         **{
             name: NUMBER
             for name in (
@@ -294,8 +298,6 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
                 "allowed_tools",
                 "disallowed_tools",
                 "tools",
-                "launch_kwargs",
-                "train_kwargs",
             )
         },
     },

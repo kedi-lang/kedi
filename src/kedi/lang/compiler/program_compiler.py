@@ -191,6 +191,7 @@ class ProgramCompiler:
             loop_iteration_limit=loop_iteration_limit,
             run_budget=run_budget,
         )
+        self.rt._owns_module_runtimes = module_runtimes is None
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
         self.proc_compiler = ProcedureCompiler(self.rt)

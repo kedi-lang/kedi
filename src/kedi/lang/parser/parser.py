@@ -1,4 +1,4 @@
-"""Tree-sitter parser singleton for Kedi.
+"""Thread-local tree-sitter parsers for Kedi.
 
 Loads the compiled ``tree_sitter_kedi`` shared library once per process
 and exposes a single ``parse(source)`` function that returns a
@@ -8,7 +8,7 @@ that tree.
 
 from __future__ import annotations
 
-from threading import Lock
+from threading import Lock, local
 from typing import Optional
 
 import tree_sitter_kedi
@@ -16,26 +16,25 @@ from tree_sitter import Language, Parser, Tree
 
 _lock = Lock()
 _language: Optional[Language] = None
-_parser: Optional[Parser] = None
+_parsers = local()
 
 
 def _get_parser() -> Parser:
-    """Return the process-wide ``Parser`` instance, creating it lazily."""
-    global _language, _parser
-    if _parser is not None:
-        return _parser
-    with _lock:
-        if _parser is None:
-            _language = Language(tree_sitter_kedi.language())
-            _parser = Parser(_language)
-    assert _parser is not None
-    return _parser
+    """Return this thread's parser without sharing mutable native parser state."""
+    parser = getattr(_parsers, "parser", None)
+    if parser is None:
+        parser = Parser(get_language())
+        _parsers.parser = parser
+    return parser
 
 
 def get_language() -> Language:
     """Return the process-wide Kedi ``Language`` (needed for Query)."""
-    _get_parser()
-    assert _language is not None
+    global _language
+    if _language is None:
+        with _lock:
+            if _language is None:
+                _language = Language(tree_sitter_kedi.language())
     return _language
 
 

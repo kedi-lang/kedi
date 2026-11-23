@@ -112,6 +112,19 @@ def test_none_is_a_string_tool_option_and_containers_require_python():
     assert profile.settings == {"tool_choice": "none", "stop_sequences": ["END"]}
 
 
+def test_settings_value_rules_match_parser_inventory():
+    """Every FIELD_RULES settings key must be accepted by the parser.
+
+    The parser validates `> settings:` names against MODEL_SETTING_KEYS, so a
+    value rule for any other key is dead: it can only mislead editor value
+    completions, never validate a real program.
+    """
+    from kedi.agent_profile.settings import MODEL_SETTING_KEYS
+    from kedi.directive_values import FIELD_RULES
+
+    assert set(FIELD_RULES["settings"]) <= set(MODEL_SETTING_KEYS)
+
+
 @pytest.mark.parametrize("value", [True, False])
 def test_query_activation_uses_bool_expression_without_changing_python_policy(value):
     statement = parse_program("> artifacts:\n  query_artifacts: `flag`\n").ordered_toplevel[0]

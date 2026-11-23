@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .package_manifest import validate_package_name
 
@@ -28,6 +28,12 @@ _AUDIT_STATUSES = frozenset({"active", "superseded", "yanked", "revoked"})
 
 class RegistryAPIError(RuntimeError):
     """A registry response could not be fetched or trusted."""
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _require_same_origin(req.full_url, newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 @dataclass(frozen=True)
@@ -109,7 +115,9 @@ class HTTPRegistryAPIClient:
             headers={"Accept": "application/json", "User-Agent": "kedi-package-registry/1"},
         )
         try:
-            with urlopen(request, timeout=REGISTRY_REQUEST_TIMEOUT_SECONDS) as response:
+            with build_opener(_SameOriginRedirectHandler()).open(
+                request, timeout=REGISTRY_REQUEST_TIMEOUT_SECONDS
+            ) as response:
                 _require_same_origin(self.base_url, response.geturl())
                 declared_size = response.headers.get("Content-Length")
                 if declared_size is not None and int(declared_size) > MAX_REGISTRY_RESPONSE_BYTES:

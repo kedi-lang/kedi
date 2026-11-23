@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -129,11 +130,14 @@ class KediRuntime:
         self._python_origin_counter = 0
         self._python_origins: Dict[str, KediPythonOrigin] = {}
         self._python_origin_keys: Dict[tuple[Any, ...], str] = {}
+        # Physical cache ownership is not restored from executable snapshots.
+        self._python_source_files: set[str] = set()
         self._program: Any | None = None
         # The module's import name as the root program sees it; it scopes group identities.
         self.module_name = "main"
         # Every module of the program by name, shared by the runtimes of one compilation.
         self._module_runtimes: dict[str, KediRuntime] = {}
+        self._owns_module_runtimes = True
         self._source_map: Any | None = None
         self._source_text: str | None = None
         self._root_type_env_stack: list[dict[str, Any]] = []
@@ -249,12 +253,25 @@ class KediRuntime:
     async def aclose(self) -> None:
         """Cancel owned child runs and close runtime-owned session resources."""
 
+        from kedi.agent_adapter.execution import _run_cleanups
+
         await self._lifecycle.aclose()
-        await self._subagent_coordinator.aclose()
-        if self._implicit_conversation_state is not None:
-            self._implicit_conversation_state.close()
-        if self.conversation_state is None:
-            self.artifacts.close()
+        runtimes = tuple(
+            dict.fromkeys(
+                (self, *self._module_runtimes.values()) if self._owns_module_runtimes else (self,)
+            )
+        )
+        cleanups: list[Callable[[], Awaitable[None] | None]] = [
+            runtime._lifecycle.aclose for runtime in runtimes if runtime is not self
+        ]
+        for runtime in runtimes:
+            cleanups.append(runtime._subagent_coordinator.aclose)
+            if runtime._implicit_conversation_state is not None:
+                cleanups.append(runtime._implicit_conversation_state.close)
+            if runtime.conversation_state is None:
+                cleanups.append(runtime.artifacts.close)
+            cleanups.append(lambda runtime=runtime: _tracing.clear_python_origins(runtime))
+        await _run_cleanups(cleanups)
 
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:

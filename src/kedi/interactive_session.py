@@ -192,6 +192,7 @@ class InteractiveSession:
             engine=engine,
             conversation_state=conversation_state,
             close_conversation_state=close_conversation_state,
+            trusted=trusted,
         )
 
     def _import_source_path(self, source_name: str) -> Path:

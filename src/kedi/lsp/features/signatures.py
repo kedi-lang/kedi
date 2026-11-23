@@ -4,14 +4,29 @@ from typing import List, Optional
 
 from lsprotocol import types as lsp
 
-from kedi.lang.ast import CallSegment, OutputSegment, ProcedureDef, Span
+from kedi.lang.ast import (
+    CallSegment,
+    OutputSegment,
+    ProcedureDef,
+    Program,
+    ProgramWithValidation,
+    Span,
+)
 from kedi.lang.call_arg_access import iter_call_arg_nested
 from kedi.lang.parser import KediParseError
+from kedi.lsp.ast_spans import name_token_span
 from kedi.lsp.coordinates import position_inside as _position_inside
 from kedi.lsp.coordinates import span_to_range as _span_to_range
-from kedi.lsp.coordinates import with_source_coordinates
+from kedi.lsp.coordinates import utf16_length, with_source_coordinates
 from kedi.lsp.features.directive_help import _format_proc_param
-from kedi.lsp.features.scope import _all_procedures, _segments_of
+from kedi.lsp.features.resolution import _resolve_symbol_at
+from kedi.lsp.features.scope import (
+    _all_procedures,
+    _control_body_statements,
+    _iter_control_statements,
+    _procedure_for_declaration,
+    _segments_of,
+)
 from kedi.lsp.module_surface import imported_surface_for_program
 from kedi.lsp.parsing import parse_program
 
@@ -25,20 +40,18 @@ def compute_signature_help(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
-    imported_surface = imported_surface_for_program(prog)
-    proc_by_name = {p.name: p for p in _all_procedures(prog)}
-    proc_by_name.update(imported_surface.procedures)
-
-    # Find the innermost call_segment containing the cursor.
+    # Find the innermost call_segment containing the cursor. Control-flow
+    # bodies are child scopes, so walk them too: a call inside `> if:` is
+    # still a call the user is typing.
     target_call: Optional[CallSegment] = None
     for proc in _all_procedures(prog):
         if proc.loc is None or not _position_inside(pos, proc.loc):
             continue
-        for stmt in proc.body:
+        for stmt in _iter_control_statements(proc.body):
             call = _innermost_call_at(stmt, pos)
             if call is not None:
                 target_call = call
-    for stmt in prog.toplevel_body:
+    for stmt in _iter_control_statements(prog.toplevel_body):
         call = _innermost_call_at(stmt, pos)
         if call is not None:
             target_call = call
@@ -49,23 +62,25 @@ def compute_signature_help(
 
     if target_call is None:
         return None
-    target = proc_by_name.get(target_call.name)
+    target = _call_target(prog, target_call)
     if target is None or target.loc is None:
         return None
 
-    # Build signature label and parameter ranges.
+    # Build signature label and parameter ranges. LSP label offsets are
+    # UTF-16 code units, not Python characters: a non-BMP character in a
+    # parameter default (one Python character, two UTF-16 units) must not
+    # shift every later parameter's range.
     params_label_parts: List[str] = []
     param_infos: List[lsp.ParameterInformation] = []
-    cursor_byte_offset = 0  # within the label string
     label_prefix = f"@{target.name}("
-    cursor_byte_offset = len(label_prefix)
+    cursor_offset = utf16_length(label_prefix)
     for i, pname in enumerate(target.params):
         piece = _format_proc_param(target, pname)
         params_label_parts.append(piece)
-        start = cursor_byte_offset
-        end = cursor_byte_offset + len(piece)
+        start = cursor_offset
+        end = cursor_offset + utf16_length(piece)
         param_infos.append(lsp.ParameterInformation(label=(start, end)))
-        cursor_byte_offset = end + 2  # ", "
+        cursor_offset = end + 2  # ", "
     label = f"{label_prefix}{', '.join(params_label_parts)})"
     if target.return_type_annotation:
         label += f" -> {target.return_type_annotation}"
@@ -82,6 +97,20 @@ def compute_signature_help(
         active_signature=0,
         active_parameter=active_param,
     )
+
+
+def _call_target(
+    prog: Program | ProgramWithValidation, call: CallSegment
+) -> Optional[ProcedureDef]:
+    if call.loc is None:
+        return None
+    position = _span_to_range(name_token_span(call.loc, call.name, prefix_len=1)).start
+    symbol = _resolve_symbol_at(prog, position)
+    if symbol is None or symbol.kind != "procedure":
+        return None
+    return _procedure_for_declaration(
+        prog, symbol.declaration_span
+    ) or imported_surface_for_program(prog).procedures.get(call.name)
 
 
 def _innermost_call_at(stmt, pos: lsp.Position) -> Optional[CallSegment]:
@@ -136,15 +165,16 @@ def compute_inlay_hints(
     except KediParseError:
         return []
     out: List[lsp.InlayHint] = []
-    proc_by_name = {p.name: p for p in _all_procedures(prog)}
 
     def visit_stmt(stmt, enclosing_proc: Optional[ProcedureDef]) -> None:
         for seg in _segments_of(stmt):
             visit_segment(seg, enclosing_proc)
+        for child in _control_body_statements(stmt):
+            visit_stmt(child, enclosing_proc)
 
     def visit_segment(seg, enclosing_proc: Optional[ProcedureDef]) -> None:
         if isinstance(seg, CallSegment):
-            target = proc_by_name.get(seg.name)
+            target = _call_target(prog, seg)
             if target is not None and seg.args and target.params:
                 for i, arg in enumerate(seg.args):
                     if i >= len(target.params):

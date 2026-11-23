@@ -159,9 +159,9 @@ registered tool raises `KediExecutionError`.
 
 ## `.env` and Environment Selection
 
-`configure()` calls `dotenv.load_dotenv()` before resolving default backend
-selection. Existing process environment values are not overwritten by the
-default dotenv behavior.
+`configure()` loads the `.env` found by searching from the working directory
+upward before resolving default backend selection. Existing process
+environment values are not overwritten.
 
 When no explicit selection is passed:
 

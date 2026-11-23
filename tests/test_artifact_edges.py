@@ -758,7 +758,7 @@ def test_file_and_memory_projection_reject_invalid_codec_or_json_path(tmp_path: 
     payload_path = store._payload_path("session", "art_test")
     payload_path.write_bytes(b"value")
     record.payload = payload_path
-    store._records[record.ref_id] = record
+    store._records[(record.session_id, record.ref_id)] = record
     with pytest.raises(ArtifactSerializationError, match="no file-backed text projection"):
         store.read_projection(
             "session",

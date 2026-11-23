@@ -57,6 +57,8 @@ from kedi.lsp.features.scope import (
 )
 from kedi.lsp.features.symbols import (
     SymbolRef,
+    _directive_name_span,
+    _export_name_spans,
     _is_identifier,
     _location_for_span,
     _profile_use_entry_spans,
@@ -135,6 +137,7 @@ def _find_all_references(
         if prog.toplevel_return is not None:
             for seg in _segments_of(prog.toplevel_return):
                 _collect_call_refs(seg, sym.name, procedure_candidates)
+        procedure_candidates.extend(_export_name_spans(prog, sym.name))
         out.extend(
             candidate
             for candidate in procedure_candidates
@@ -159,6 +162,7 @@ def _find_all_references(
                     _collect_type_refs_in_expr(v, sym.name, type_candidates)
             for stmt in p.body:
                 _collect_type_refs_in_stmt(stmt, sym.name, type_candidates)
+        type_candidates.extend(_export_name_spans(prog, sym.name))
         out.extend(
             candidate
             for candidate in type_candidates
@@ -188,6 +192,7 @@ def _find_all_references(
                 if isinstance(stmt, TaskStmt) and stmt.subagent == sym.name:
                     if stmt.subagent_loc is not None:
                         out.append(stmt.subagent_loc)
+        out.extend(_export_name_spans(prog, sym.name))
     elif sym.kind in {
         "parameter",
         "param_decl",
@@ -204,6 +209,7 @@ def _find_all_references(
                 _collect_input_refs(segment, sym.name, value_candidates)
         for procedure in _all_procedures(prog):
             _collect_value_reference_candidates(procedure.body, sym.name, value_candidates)
+        value_candidates.extend(_export_name_spans(prog, sym.name))
         out.extend(
             candidate
             for candidate in value_candidates
@@ -275,6 +281,8 @@ def _declaration_identifier_span(
         return name_token_span(sym.declaration_span, sym.name, prefix_len=1)
     if sym.kind == "type_field":
         return name_token_span(sym.declaration_span, sym.name, prefix_len=0)
+    if sym.kind == "agent_profile":
+        return _directive_name_span(prog, sym.declaration_span, sym.name) or sym.cursor_span
     return sym.declaration_span
 
 
@@ -285,10 +293,10 @@ def _reference_resolves_to(
 ) -> bool:
     if current_source() is None:
         return True
-    resolved = _resolve_symbol_at(
-        prog,
-        lsp.Position(line=candidate.start_line - 1, character=candidate.start_col - 1),
-    )
+    # ``Span.start_col`` is a UTF-8 byte column (tree-sitter convention), not
+    # an LSP UTF-16 character column: resolve through the byte-offset range
+    # so references preceded by non-ASCII or non-BMP text still resolve.
+    resolved = _resolve_symbol_at(prog, _span_to_range(candidate).start)
     if resolved is None:  # pragma: no cover - collectors only emit resolvable syntax spans
         return False
     procedure_kinds = {"procedure", "agent_tool"}
@@ -446,36 +454,21 @@ def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Sp
         _collect_type_refs_in_expr(expr.right, name, out)
 
 
-@with_source_coordinates(1)
-def compute_prepare_rename(
-    source: str, source_path: Optional[str], pos: lsp.Position
-) -> Optional[lsp.Range]:
-    """Return the precise identifier range for the editor's rename popup.
-
-    Only renameable kinds are returned; everything else is ``None``
-    (which tells the editor "can't rename here").
-    """
-    try:
-        prog = parse_program(source, source_path=source_path)
-    except KediParseError:
-        return None
-    sym = _resolve_symbol_at(prog, pos)
-    if sym is None:
-        return None
+def _is_renameable_symbol(sym: SymbolRef, source_path: str | None) -> bool:
     if (
         sym.kind == "type"
         and sym.declaration_span is None
         and _known_lsp_type_origin(sym.name) is not None
     ):
-        return None
+        return False
     if (
         source_path is not None
         and sym.declaration_span is not None
         and sym.declaration_span.source_path is not None
         and Path(sym.declaration_span.source_path).resolve() != Path(source_path).resolve()
     ):
-        return None
-    if sym.kind not in (
+        return False
+    return sym.kind in (
         "procedure",
         "agent_tool",
         "type",
@@ -487,7 +480,21 @@ def compute_prepare_rename(
         "output_decl",
         "module_value",
         "imported_value",
-    ):
+        "agent_profile",
+    )
+
+
+@with_source_coordinates(1)
+def compute_prepare_rename(
+    source: str, source_path: Optional[str], pos: lsp.Position
+) -> Optional[lsp.Range]:
+    """Return a precise identifier range only for locally renameable symbols."""
+    try:
+        prog = parse_program(source, source_path=source_path)
+    except KediParseError:
+        return None
+    sym = _resolve_symbol_at(prog, pos)
+    if sym is None or not _is_renameable_symbol(sym, source_path):
         return None
     return _span_to_range(sym.cursor_span)
 
@@ -505,20 +512,7 @@ def compute_rename(
     except KediParseError:
         return None
     sym = _resolve_symbol_at(prog, pos)
-    if sym is None:
-        return None
-    if (
-        sym.kind == "type"
-        and sym.declaration_span is None
-        and _known_lsp_type_origin(sym.name) is not None
-    ):
-        return None
-    if (
-        source_path is not None
-        and sym.declaration_span is not None
-        and sym.declaration_span.source_path is not None
-        and Path(sym.declaration_span.source_path).resolve() != Path(source_path).resolve()
-    ):
+    if sym is None or not _is_renameable_symbol(sym, source_path):
         return None
     # Reject non-identifier new names.
     if not _is_identifier(new_name):

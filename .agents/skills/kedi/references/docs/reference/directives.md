@@ -13,6 +13,9 @@
 | `> fallback:` | Supply an indented list of alternatives; ``> fallback: `[]` `` clears an inherited chain |
 | `> requires: capability` | Require one adapter capability before model I/O |
 | `> requires:` | Require an indented list of adapter capabilities |
+| `> budget:` | Set run ceilings: `request_limit` and `tool_attempt_limit` |
+| `> capability: name:` | Define an additive instruction/tool bundle |
+| `> defer:` | Inside a capability, opt into native on-demand activation |
 | `> effort: level` | Set `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `> instructions: text` | Replace active instructions; block form joins lines |
 | `> settings:` | Merge adapter settings by key |
@@ -51,11 +54,21 @@ not a reset literal. See
 [Ordered Fallback Models](../agentic-engineering/models-and-reasoning.md#ordered-fallback-models)
 for retry, admission, streaming, and history boundaries.
 
-`> artifacts:` fields are `enabled`, `query_artifacts`, `store`, `path`, `threshold`, `ttl`,
+`> artifacts:` fields are `enabled`, `query_artifacts`, `exclude_tools`, `store`, `path`, `threshold`, `ttl`,
 `idle_ttl`, `preview_chars`, `read_max_chars`, `session_quota`,
 `max_artifacts`, and `cleanup_interval`. The policy is lexical and enabled by
-default. Artifact querying is separately disabled by default and accepts
+default. `exclude_tools` lists exact tool names whose results skip artifact
+admission; the list is a backtick Python expression, and a plain list is a
+parse error. Artifact querying is separately disabled by default and accepts
 `query_artifacts: enabled|disabled`. See [Tool Artifacts](../runtime/tool-artifacts.md).
+
+`> skills:` fields are `enabled`, `cwd`, `max_skills`, `include_registry`,
+`include_all`, and `exclude_paths`. The expanded form requires
+`enabled: true` to turn discovery on; without it, discovery stays disabled.
+`max_skills` is a positive integer (default `20`, maximum `100`),
+`include_registry` defaults to `true`, `include_all` defaults to `false`,
+and `exclude_paths` is a backtick Python list of paths. See
+[Skills](../agentic-engineering/skills.md).
 
 The expanded `> history:` form contains only subsettings. It requires
 `enabled: true|false` and accepts `compaction_mode: native|disabled` plus an
@@ -74,32 +87,51 @@ retention and provenance. Compaction is history lifecycle
 policy, not a model setting. See
 [Caching and Conversation History](../runtime/caching.md).
 
+`> budget:` accepts `request_limit` and `tool_attempt_limit`. Each field is
+optional, but at least one is required; values are nonnegative integers and
+`0` prohibits new operations of that kind. See
+[Run Budgets](../runtime/run-budgets.md).
+
+`> capability: name:` defines an additive instruction/tool bundle, distinct
+from the override-oriented `> profile:`. Apply it through `> use:`. Allowed
+capability members are `instructions`, `use`, `mcp`, `subagent`, `approval`,
+`hooks`, `requires`, and `defer`. `> defer: true` (or a Python expression
+producing a boolean) opts a capability into native on-demand activation
+instead of eager composition; it defaults to `false`. See
+[Capabilities](../agentic-engineering/capabilities.md).
+
 `> codemode:` accepts `enabled`, `preload_tools`, `default_search_limit`,
 `max_search_limit`, `max_hydrated_tools`, `max_discovery_result_bytes`,
 `max_code_chars`, `max_nested_calls`, `max_concurrent_calls`,
-`max_tool_result_bytes`, `max_total_tool_result_bytes`, `max_print_bytes`, and
+`max_tool_result_bytes`, `max_total_tool_result_bytes`, `max_print_bytes`,
+`max_memory_bytes`, `max_feed_seconds`, and
 `request_timeout`. `preload_tools` may be one exact exposed name or an indented
 list; preloading resolves schemas without executing tools. See
 [CodeMode](../agentic-engineering/codemode.md#preload-known-tools).
 
-`> hooks:` fields are `user_prompt_submit`, `pre_tool_use`, `post_tool_use`,
-and `post_tool_use_failure`. Each value is a Python callable or a sequence of
-callables. See [Agent Lifecycle Hooks](../agentic-engineering/hooks.md).
+`> hooks:` fields are `enabled`, `user_prompt_submit`, `pre_tool_use`, `post_tool_use`,
+`post_tool_use_failure`, and `post_tool_result_failure`. Each value is a Python callable or a sequence of
+callables. The expanded form accepts `enabled: true|false` alongside the event
+handlers. See [Agent Lifecycle Hooks](../agentic-engineering/hooks.md).
 
 `> mcp:` fields:
 
 ```kedi
 > mcp:
-    name: project_docs
     transport: stdio
     command: uv
     args: `["run", "docs-server"]`
     env: `{"LOG_LEVEL": "warning"}`
-    cwd: .
 ```
 
-Network transports use `url` instead of `command`/`args`. Valid normalized
+Network transports use `url` instead of `command`/`args`, and accept
+`headers` as a backtick mapping of HTTP header names to values. Valid normalized
 transports are documented in [MCP Servers](../agentic-engineering/mcp.md).
+
+> Note: `name:` and `cwd:` are not `> mcp:` fields — a server has no
+> name in the profile (servers are identified by the hash of their
+> specification, not by a name). Both lines parse as free-form text but
+> are ignored when the server specification is built.
 
 ## Procedure Tool Metadata
 

@@ -110,25 +110,22 @@ def test_procedure_type_render_uses_param_and_return_metadata() -> None:
     assert procedure_return_type_to_python(proc) == "list[str]"
 
 
-def test_tree_sitter_parser_handles_parser_initialized_inside_lock(
+def test_tree_sitter_language_handles_initialization_inside_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_parser = parser_module._parser
-    fake_parser = object()
+    original_language = parser_module.get_language()
 
     class RaceLock:
         def __enter__(self) -> None:
-            cast(Any, parser_module)._parser = fake_parser
+            cast(Any, parser_module)._language = original_language
 
         def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None
 
-    monkeypatch.setattr(parser_module, "_parser", None)
+    monkeypatch.setattr(parser_module, "_language", None)
     monkeypatch.setattr(parser_module, "_lock", RaceLock())
 
-    assert parser_module._get_parser() is fake_parser
-
-    monkeypatch.setattr(parser_module, "_parser", original_parser)
+    assert parser_module.get_language() is original_language
 
 
 def test_utils_parse_args_and_attrdict() -> None:
@@ -253,7 +250,7 @@ def test_type_init_metadata_deep_copies_default_values() -> None:
     assert second == ["a"]
 
 
-def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import kedi.cli
     import kedi.settings
 
@@ -265,11 +262,17 @@ def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> No
     assert exc_info.value.code == 7
 
     main_module = importlib.import_module("kedi.__main__")
-    dotenv_calls: list[bool] = []
-    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda: dotenv_calls.append(True))
+    # Item 7: main() loads the .env from the current working directory
+    # tree via load_project_dotenv(), so the test must provide one - with
+    # no .env file there is nothing to load and load_dotenv is (correctly)
+    # never called. The recorded path pins the cwd discovery.
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    dotenv_calls: list[str] = []
+    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda path: dotenv_calls.append(path))
 
     assert main_module.main() == 7
-    assert dotenv_calls == [True]
+    assert dotenv_calls == [str(tmp_path / ".env")]
 
     settings_module = importlib.reload(kedi.settings)
     assert settings_module.settings.adapter == "pydantic"

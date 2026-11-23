@@ -30,6 +30,13 @@ part of the base adapter protocol rather than an optional capability.
 | Background subagents | yes | yes |
 | Live subagent input | yes | yes |
 | Subagent interruption | yes | yes |
+| Artifacts | yes | yes |
+| Native artifacts | yes | yes |
+| Stateful history | yes | yes |
+| History replay | yes | yes |
+| Native compaction | yes | yes |
+| Request budget | yes | yes |
+| Tool attempt budget | yes | yes |
 | Semantic stream events | yes | yes |
 | Native history processing | yes | yes |
 | Media input | yes | yes |
@@ -55,6 +62,13 @@ part of the base adapter protocol rather than an optional capability.
 | Background subagents | yes | yes | no | yes |
 | Live subagent input | yes | yes | no | no |
 | Subagent interruption | yes | yes | no | no |
+| Artifacts | yes | yes | no | no |
+| Native artifacts | no | no | no | no |
+| Stateful history | yes | yes | no | yes |
+| History replay | no | no | no | no |
+| Native compaction | yes | yes | no | no |
+| Request budget | no | no | no | no |
+| Tool attempt budget | no | no | no | no |
 | Semantic stream events | yes | yes | yes | yes |
 | Native history processing | no | no | no | no |
 | Media input | no | no | no | no |
@@ -97,6 +111,7 @@ not only the adapter.
 | `mcp` | One or more `> mcp:` servers |
 | `profile_override` | Lexical/profile state changes |
 | `model_override` | Explicit `> model:` |
+| `model_fallback` | `> fallback:` ordered alternatives |
 | `effort` | Explicit `> effort:` |
 | `settings` | Nonempty `> settings:` |
 | `codemode` | `> codemode: enabled` progressive tool discovery and bounded execution |
@@ -104,6 +119,17 @@ not only the adapter.
 | `native_approval_handler` | Dynamic handler projected natively |
 | `subagents` | `> subagent:` |
 | `background_subagents` | Background lifecycle tools |
+| `live_subagent_input` | `> send` to a running child |
+| `subagent_interrupt` | `> interrupt` of a running child |
+| `artifacts` | `> artifacts:` enabled |
+| `native_artifacts` | Native artifact admission for adapter-owned tools |
+| `stateful_history` | History kept across requests by the adapter |
+| `history_replay` | Replaying stored history into a new run |
+| `history_processing` | `> history:` `processor` or `processor_condition` |
+| `native_compaction` | Adapter-native history compaction |
+| `request_budget` | `> budget:` `request_limit` |
+| `tool_attempt_budget` | `> budget:` `tool_attempt_limit` |
+| `media_input` | Media values attached to a prompt |
 | `stream_events` | Completed semantic commentary/final messages and run lifecycle events |
 | `hooks` | Agent lifecycle interception; support is declared separately for each event |
 
@@ -117,7 +143,7 @@ search, schema hydration, and bounded code execution. Pydantic AI, LangChain,
 Claude Agent SDK, and Codex App Server implement the Kedi-owned surface; Kedi
 does not infer it from ordinary tool registration.
 
-Hook support is event-specific. ACP exposes only `user_prompt_submit`.
+Hook support is event-specific. ACP and A2A expose only `user_prompt_submit`.
 Pydantic AI, LangChain, Claude, Codex, and WebGPU expose
 the event matrix documented in
 [Agent Lifecycle Hooks](../agentic-engineering/hooks.md). A generic `yes` in the

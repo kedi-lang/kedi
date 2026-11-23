@@ -110,7 +110,7 @@ def test_registry_http_errors_keep_their_meaning(monkeypatch, code):
     def fail(*args, **kwargs):
         raise HTTPError("https://example.test", code, "failure", {}, None)
 
-    monkeypatch.setattr(api, "urlopen", fail)
+    monkeypatch.setattr(api, "build_opener", lambda *args: Mock(open=fail))
     with pytest.raises(ModuleNotFoundError if code == 404 else api.RegistryAPIError):
         api.HTTPRegistryAPIClient().package_record("demo")
 
@@ -166,7 +166,9 @@ def test_registry_rejects_invalid_http_responses(monkeypatch, body, headers, url
     response = io.BytesIO(body)
     response.headers = headers
     response.geturl = lambda: url
-    monkeypatch.setattr(api, "urlopen", lambda *args, **kwargs: response)
+    monkeypatch.setattr(
+        api, "build_opener", lambda *args: Mock(open=lambda *args, **kwargs: response)
+    )
     with pytest.raises(api.RegistryAPIError, match=message):
         api.HTTPRegistryAPIClient("http://127.0.0.1:8767").audit_records()
 

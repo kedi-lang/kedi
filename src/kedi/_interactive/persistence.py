@@ -452,6 +452,7 @@ def decode_profile(
     *,
     decoder: SessionValueDecoder,
     kedi_models: Mapping[str, type[BaseModel]],
+    trusted: bool = False,
 ) -> AgentProfile:
     output_type_data = encoded.get("output_type")
     output_type: Any | None = None
@@ -502,8 +503,8 @@ def decode_profile(
         tools=tuple(encoded.get("tools", ())),
         mcp_servers=tuple(_decode_mcp_server(item) for item in encoded.get("mcp_servers", ())),
         approval=approval,
-        hooks=_decode_hooks(encoded.get("hooks")),
-        _hook_enforcement=_decode_hooks(encoded.get("hook_enforcement")),
+        hooks=_decode_hooks(encoded.get("hooks"), trusted=trusted),
+        _hook_enforcement=_decode_hooks(encoded.get("hook_enforcement"), trusted=trusted),
         skills=_decode_skills(encoded.get("skills")),
         subagents=tuple(encoded.get("subagents", ())),
         max_agents=encoded.get("max_agents"),
@@ -606,7 +607,7 @@ def _encode_hooks(value: HookSettings | None, *, path: str) -> dict[str, Any] | 
     return encoded
 
 
-def _decode_hooks(value: Any) -> HookSettings | None:
+def _decode_hooks(value: Any, *, trusted: bool = False) -> HookSettings | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
@@ -627,6 +628,10 @@ def _decode_hooks(value: Any) -> HookSettings | None:
             continue
         if not isinstance(handlers, list):
             raise SessionLoadError(f"profile.hooks.{event} must be a list or null")
+        if handlers and trusted is not True:
+            raise SessionLoadError(
+                f"profile.hooks.{event}: restoring callable hooks requires trusted=True"
+            )
         decoded[event] = tuple(
             _decode_importable_callable(
                 descriptor,

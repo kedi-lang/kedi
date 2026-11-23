@@ -20,7 +20,10 @@ This document covers debugging the Kedi GEPA (Generative Prompt Optimization wit
 
 ### Multi-Line Template Spans
 
-Optimize spans may contain multiple template lines (for example, a header line and a line with output declarations). Output overrides and optimized prompts must be applied to **every** template line in the span, not only the first.
+Optimize spans may contain multiple template lines (for example, a header line and a line with output declarations). The two mechanisms treat those lines differently, and the difference matters when debugging:
+
+- The **optimized prompt prefix is applied once per span, to the first template line only** (`span.template_lines[0].optimized_prompt_prefix`). Continuation lines keep their seed text; they do not each receive a copy of the optimized prompt. `span_to_instruction` prepends the first line's prefix when the span's effective instruction is built.
+- The **output override is applied to every template line in the span** (`_apply_output_override` sets `optimized_output_override` on each line), so every line short-circuits to the DSPy-predicted outputs during metric evaluation.
 
 ---
 
@@ -53,7 +56,7 @@ Optimize spans may contain multiple template lines (for example, a header line a
 │    b. Extract outputs from DSPy Prediction                      │
 │    c. Inject outputs into ALL span template lines               │
 │    d. Extract current instructions from module                  │
-│    e. Apply instructions to span template lines                 │
+│    e. Apply instructions to the span's FIRST template line only │
 │    f. Call Kedi metric function                                 │
 │    g. Kedi metric calls procedure (uses overridden outputs)     │
 │    h. Return (score, feedback) to GEPA                          │
@@ -63,7 +66,7 @@ Optimize spans may contain multiple template lines (for example, a header line a
 ┌─────────────────────────────────────────────────────────────────┐
 │ 4. Post-Optimization                                            │
 │    - Extract optimized prompt from best module                  │
-│    - Inject prompt into ALL span template lines                  │
+│    - Inject prompt into the span's FIRST template line only     │
 │    - Calculate final training score                             │
 │    - Save optimized prompts                                     │
 └─────────────────────────────────────────────────────────────────┘
@@ -86,20 +89,24 @@ Optimize spans may contain multiple template lines (for example, a header line a
 - `optimize_procedure()`: Main entry point for optimization
 - `_save_prompts_immediately()`: Saves optimized prompts to disk
 
-**Critical Code Section** (lines 253-262):
+Per-span optimization runs in `GEPASession`
+(`src/kedi/optimization/gepa_session.py`), which extracts the optimized
+prompt after `optimizer.compile(...)` and stores it once per span:
+
 ```python
-# Extract optimized prompt for this span
-print(f"\n🔍 Extracting optimized prompt...")
-extracted = self.prompt_extractor.extract_prompts(optimized_module, [span])
-optimized_prompt = extracted.get(span.name)
-if optimized_prompt:
-    optimized_prompts[span.name] = optimized_prompt
-    if span.template_lines:
-        # Set optimized prompt on ALL template lines in the span
-        # This is necessary because a span can have multiple template lines
-        for line in span.template_lines:
-            line.optimized_prompt_prefix = optimized_prompt
+extracted = self._prompt_extractor.extract_prompts(optimized_module, [span])
+raw_prompt = extracted.get(span.name)
+# ...
+optimized_prompt = normalize_optimized_prompt_prefix(span, raw_prompt)
+optimized_prompts[span.name] = optimized_prompt
+if span.template_lines:
+    span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
 ```
+
+Only the first template line receives the prefix. `GEPAOptimizer` also
+snapshots that first line's prefix before optimization and restores it
+afterwards, so a failed run leaves the span unchanged. The output override,
+by contrast, is set on every template line (see section 2).
 
 ---
 
@@ -117,34 +124,34 @@ if optimized_prompt:
 - `wrap_metric()`: Creates a DSPy-compatible metric from a Kedi metric
 - `_extract_prediction_outputs()`: Extracts output values from DSPy predictions
 - `_apply_output_override()`: Injects outputs into ALL template lines
+- `_apply_prompt_prefix()`: Injects instructions into the FIRST template line only
 - `_restore_output_override()`: Restores original state after metric evaluation
 
-**Critical Code Section** (lines 102-123):
+The metric callback (`gepa_metric` inside `wrap_metric`) applies the two
+mechanisms asymmetrically, under a lock so concurrent DSPy evaluator threads
+cannot leak one callback's mutations into another:
+
 ```python
-try:
-    # Extract outputs from DSPy prediction and inject them into the span
-    # This ensures the Kedi procedure uses the DSPy-generated outputs
-    # Only apply output override if we have a span (not just output_fields for backward compat)
-    if span and prediction_obj:
-        output_override = self._extract_prediction_outputs(prediction_obj, span, output_fields)
-        if output_override:
-            output_override_handle = self._apply_output_override(span, output_override)
-    
-    if module_ref:
-        optimized_prompt = self._extract_current_instructions(module_ref)
-        prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
-    
-    score, feedback = kedi_metric(input_val, expected_output)
-    score_float = float(score)
-    feedback_text = self._stringify_feedback(feedback)
-    payload = ScoreWithFeedback(score=score_float, feedback=feedback_text or "")
-    self._store_cached_feedback(prediction_obj, score_float, feedback_text)
-    self._store_cached_feedback(pred, score_float, feedback_text)
-    return payload
-finally:
-    self._restore_prompt_prefix(prompt_handle)
-    self._restore_output_override(output_override_handle)
+if span and prediction_obj:
+    output_override = self._extract_prediction_outputs(prediction_obj, span)
+    if output_override:
+        output_override_handle = self._apply_output_override(span, output_override)
+
+if module_ref:
+    optimized_prompt = self._extract_current_instructions(module_ref)
+    prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
+
+score, feedback = kedi_metric(input_val, expected_output)
+# ... build ScoreWithFeedback, cache it ...
+# finally:
+#     self._restore_prompt_prefix(prompt_handle)
+#     self._restore_output_override(output_override_handle)
 ```
+
+`_apply_output_override` loops over every line in `span.template_lines`;
+`_apply_prompt_prefix` sets `optimized_prompt_prefix` on
+`span.template_lines[0]` only. Do not expect the optimized prompt on
+continuation lines when inspecting span state.
 
 ---
 
@@ -157,79 +164,77 @@ finally:
 
 **Key Method**: `compile_template_line()`
 
-**Critical Code Section** (lines 45-67):
+The compiled function (`_fn`) checks the line's own fields at call time:
+
 ```python
 def _fn(**kwargs: Any) -> Any:
     # If an override is provided, short-circuit LLM invocation and inject values.
     if stmt.optimized_output_override is not None:
-        env = self.rt._current_env.get()
-        if env is None:
-            raise RuntimeError("Template override requires active runtime environment")
-        for key, value in stmt.optimized_output_override.items():
-            env[key] = value
-            kwargs[key] = value
-        return stmt.optimized_output_override
+        # Validate each overridden value against its output contract,
+        # declare it in the runtime environment, and return the override
+        # without calling the model.
+        ...
 
-    # If there's an optimized prompt prefix, prepend it to the segments
-    # This allows GEPA to output plain text while preserving type annotations
+    # If there's an optimized prompt prefix, prepend it to the segments.
+    # This allows GEPA to output plain text while preserving type annotations.
     segments_to_use = stmt.segments
     if stmt.optimized_prompt_prefix:
         from ..ast import TextSegment
-        # Prepend optimized text, then original seed prompt with types
-        # Use two newlines for better separation between optimized and seed prompts
+
         optimized_text = TextSegment(text=stmt.optimized_prompt_prefix + "\n\n")
         segments_to_use = [optimized_text] + stmt.segments
-    
+
     expr, _ = prepare_segments(self.rt, segments_to_use, kwargs)
     return self.rt.m(expr)
 ```
+
+Because the prefix lives only on the span's first template line, only that
+line's compiled function prepends it. The override check runs on every line,
+which is why the override must be set on all of them. A template block
+(`compile_template_block`) merges its lines into one line before compiling,
+so block-level execution is a single model call.
 
 ---
 
 ## Debugging Strategies
 
-### 1. Enable Debug Logging for Output Override
+### 1. Enable the Built-in Optimized-Prompt Debug Flag
 
-**Location**: `src/kedi/optimization/services/gepa_metric_wrapper.py`
-
-Add this code after line 107 (in `_apply_output_override`):
-
-```python
-def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
-    """Apply output override to ALL template lines in the span."""
-    if not span or not outputs:
-        return None
-    if not hasattr(span, 'template_lines') or not span.template_lines:
-        return None
-    
-    # Store original values for all lines and set override on all of them
-    originals = []
-    for line in span.template_lines:
-        originals.append((line, line.optimized_output_override))
-        line.optimized_output_override = outputs
-    
-    # DEBUG: Verify the override is set
-    import os
-    if os.getenv("KEDI_DEBUG_GEPA"):
-        print(f"    [OUTPUT OVERRIDE] Set on {len(span.template_lines)} line(s): {outputs}")
-        for i, line in enumerate(span.template_lines):
-            print(f"      Line {i} (id={id(line)}): {line.optimized_output_override}")
-    
-    return originals
-```
+There is no `KEDI_DEBUG_GEPA` flag in the shipped code. The built-in flag
+is `KEDI_DEBUG_OPTIMIZED`, read by the CLI entrypoint
+(`src/kedi/app.py`, `run_program_cli`) and passed to
+`load_program_with_optimized_prompts`
+(`src/kedi/optimization/services/program_loader.py`). It reports optimized
+prompt loading and injection, not per-line override tracing.
 
 **Usage**:
 ```bash
-export KEDI_DEBUG_GEPA=1
+export KEDI_DEBUG_OPTIMIZED=1
 kedi examples/your_program.kedi --optimize --optimizer gepa
 ```
 
-**Expected Output**:
+**Expected Output** (stderr, when a `.optimized.json` file exists):
 ```
-[OUTPUT OVERRIDE] Set on 2 line(s): {'v': 25, 'w': 25.0, 'tags': '25'}
-  Line 0 (id=4727861136): {'v': 25, 'w': 25.0, 'tags': '25'}
-  Line 1 (id=4729265424): {'v': 25, 'w': 25.0, 'tags': '25'}
+[DEBUG] Checking for optimized prompts: True
+[DEBUG] Optimized path: <path to the .optimized.json file>
+[DEBUG] BEFORE injection - <proc>::<span>: <first 80 chars of the seed instruction>...
+[DEBUG] AFTER injection - <proc>::<span>: <first 80 chars of the injected instruction>...
 ```
+
+During optimization itself, `GEPASession` reports extraction through the
+normal reporter, for example `🔍 Extracting optimized prompt...`,
+`Previous seed length: N chars`, `Optimized prefix length: N chars`, and
+`Effective prompt length: N chars`. If no prompt is found it reports
+`❌ No optimized prompt found`. Do not leave the flag enabled in normal
+production logs: the output may reveal prompt content.
+
+To trace the output override itself, add temporary prints to
+`_apply_output_override` in
+`src/kedi/optimization/services/gepa_metric_wrapper.py` (which sets
+`optimized_output_override` on every line in `span.template_lines`) and
+remove them afterwards. There is no built-in flag for that trace; a line
+whose override stays `None` while others are set means the override was not
+applied to all template lines.
 
 ---
 
@@ -237,30 +242,21 @@ kedi examples/your_program.kedi --optimize --optimizer gepa
 
 **Location**: `src/kedi/lang/compiler/statement_compiler.py`
 
-Add this code at line 46 (beginning of `_fn`):
+Temporarily add a print at the start of `_fn` inside
+`compile_template_line` (and remove it afterwards — there is no built-in
+flag for this trace):
 
 ```python
 def _fn(**kwargs: Any) -> Any:
-    # DEBUG: Log override check
-    import os
-    if os.getenv("KEDI_DEBUG_GEPA"):
-        print(f"    [TEMPLATE EXEC] Line {id(stmt)}, override={stmt.optimized_output_override}")
-    
-    # If an override is provided, short-circuit LLM invocation and inject values.
-    if stmt.optimized_output_override is not None:
-        import os
-        if os.getenv("KEDI_DEBUG_GEPA"):
-            print(f"    [TEMPLATE EXEC] Using override: {stmt.optimized_output_override}")
-        env = self.rt._current_env.get()
-        # ... rest of the code
+    # DEBUG (temporary): log the override check for this line.
+    print(f"    [TEMPLATE EXEC] Line {id(stmt)}, override={stmt.optimized_output_override}")
+    # ... rest of the function
 ```
 
-**Expected Output**:
+**Expected Output** (with a two-line span whose outputs were overridden):
 ```
 [TEMPLATE EXEC] Line 4727861136, override={'v': 25, 'w': 25.0, 'tags': '25'}
-[TEMPLATE EXEC] Using override: {'v': 25, 'w': 25.0, 'tags': '25'}
 [TEMPLATE EXEC] Line 4729265424, override={'v': 25, 'w': 25.0, 'tags': '25'}
-[TEMPLATE EXEC] Using override: {'v': 25, 'w': 25.0, 'tags': '25'}
 ```
 
 **Red Flag**: If you see:
@@ -324,76 +320,28 @@ dspy.settings.configure(lm=debug_lm)
 
 **Location**: `src/kedi/optimization/services/gepa_metric_wrapper.py`
 
-Add comprehensive logging to the metric wrapper:
+The metric callback is `gepa_metric`, created by `GEPAMetricWrapper.wrap_metric`.
+Its current flow is:
 
-```python
-def gepa_metric(
-    gold: dspy.Example,
-    pred: dspy.Prediction,
-    trace=None,
-    pred_name=None,
-    pred_trace=None,
-    **context: Any,
-):
-    import os
-    debug = os.getenv("KEDI_DEBUG_GEPA")
-    
-    try:
-        # Extract inputs and outputs
-        input_val = self._extract_input(gold, proc_params)
-        expected_output = getattr(gold, "_expected", None)
-        
-        if debug:
-            print(f"\n[GEPA METRIC] Evaluating:")
-            print(f"  Input: {input_val}")
-            print(f"  Expected: {expected_output}")
-        
-        # Get prediction object
-        example_obj = gold
-        prediction_obj = pred
-        if hasattr(pred, "_completions") and pred._completions:
-            prediction_obj = pred._completions[0]
-        
-        prompt_handle = None
-        output_override_handle = None
-        try:
-            # Extract outputs from DSPy prediction
-            if span and prediction_obj:
-                output_override = self._extract_prediction_outputs(prediction_obj, span, output_fields)
-                if debug:
-                    print(f"  Extracted outputs: {output_override}")
-                if output_override:
-                    output_override_handle = self._apply_output_override(span, output_override)
-                    if debug:
-                        print(f"  Applied output override")
-            
-            # Apply optimized prompt
-            if module_ref:
-                optimized_prompt = self._extract_current_instructions(module_ref)
-                if debug:
-                    print(f"  Optimized prompt length: {len(optimized_prompt) if optimized_prompt else 0}")
-                prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
-            
-            # Call Kedi metric
-            score, feedback = kedi_metric(input_val, expected_output)
-            if debug:
-                print(f"  Score: {score}, Feedback: {feedback}")
-            
-            score_float = float(score)
-            feedback_text = self._stringify_feedback(feedback)
-            payload = ScoreWithFeedback(score=score_float, feedback=feedback_text or "")
-            return payload
-        finally:
-            self._restore_prompt_prefix(prompt_handle)
-            self._restore_output_override(output_override_handle)
-    except Exception as e:
-        if debug:
-            import traceback
-            print(f"[GEPA METRIC ERROR] {traceback.format_exc()}")
-        raise
-```
+1. It takes the module inputs/outputs from the callback `context`
+   (`module_inputs` / `module_outputs`) when present, falling back to the
+   `gold` example and `pred` prediction.
+2. It returns a cached `ScoreWithFeedback` when the same prediction was
+   already scored.
+3. Otherwise, under the wrapper's span lock, it extracts the prediction's
+   outputs and applies the output override to **every** template line, then
+   applies the current optimized instructions as a prompt prefix to the
+   **first** template line only.
+4. It calls the Kedi metric, converts the result to `ScoreWithFeedback`,
+   caches it, and restores the prefix and override in a `finally` block.
+   Any exception becomes a `ScoreWithFeedback` of `0.0` with the traceback
+   as feedback, so one failing metric call does not abort the run.
 
----
+The reporter emits one line per callback, for example
+`[metric callback 3] starting...` followed by
+`[metric callback 3] score=0.800  avg=0.650  best=0.800  (12s)`.
+A callback that never reaches the metric usually means the override or the
+prefix step raised before the call; check the restored span state first.
 
 ### 5. Inspect Span Structure
 
@@ -442,38 +390,29 @@ Template lines: 2
       Segment 3: OutputSegment = <w>
       Segment 4: TextSegment = ', labels='
       Segment 5: OutputSegment = <tags>
-    optimized_prompt_prefix: Generate numeric outputs using RANGE[0.000,50.000].
+    optimized_prompt_prefix: None
     optimized_output_override: {'v': 25, 'w': 25.0, 'tags': '25'}
 ```
+
+Note the asymmetry: the output override is set on both lines, but the
+optimized prompt prefix lives on the first line only. That is the intended
+once-per-span behavior, not a missing application.
 
 ---
 
 ### 6. Track GEPA Iteration Progress
 
-**Location**: `src/kedi/optimization/gepa.py`
+**Location**: `src/kedi/optimization/gepa_session.py`
 
-Add progress tracking after GEPA compilation:
-
-```python
-# After line 247 (after optimizer.compile)
-optimized_module = optimizer.compile(
-    student=dspy_module,
-    trainset=train_examples,
-    valset=val_examples,
-)
-
-# DEBUG: Track GEPA progress
-import os
-if os.getenv("KEDI_DEBUG_GEPA"):
-    print(f"\n[GEPA COMPLETE]")
-    print(f"  Module type: {type(optimized_module)}")
-    print(f"  Has predictor: {hasattr(optimized_module, 'predictor')}")
-    if hasattr(optimized_module, 'predictor'):
-        print(f"  Predictor type: {type(optimized_module.predictor)}")
-        if hasattr(optimized_module.predictor, 'signature'):
-            sig = optimized_module.predictor.signature
-            print(f"  Signature instructions length: {len(sig.instructions) if hasattr(sig, 'instructions') else 'N/A'}")
-```
+`GEPASession` drives one span at a time: it calls `optimizer.compile(...)`
+for the span's DSPy module, extracts the optimized prompt, and reports
+progress through the reporter. There is no separate completion hook to add;
+watch the reporter's per-span output instead, for example the
+`🔍 Extracting optimized prompt...` line followed by the seed, optimized
+prefix, and effective prompt lengths, and the per-callback
+`[metric callback N] score=... avg=... best=...` lines from the metric
+wrapper. A span that reports `❌ No optimized prompt found` keeps its seed
+prompt and scores `0.0` for that span.
 
 ---
 
@@ -487,11 +426,11 @@ if os.getenv("KEDI_DEBUG_GEPA"):
 - Final training score matches initial score
 
 **Diagnosis**:
-1. Enable debug logging: `export KEDI_DEBUG_GEPA=1`
+1. Enable the built-in debug flag: `export KEDI_DEBUG_OPTIMIZED=1`
 2. Check if output override is applied to ALL template lines
 3. Verify that template line execution uses the override
 
-**Solution**: Verify output override and optimized prompt are applied to every template line in the span.
+**Solution**: Verify the output override is applied to every template line in the span, and that the optimized prompt prefix is set on the span's first template line (once per span, not once per line).
 
 ---
 
@@ -509,25 +448,33 @@ if not span.template_lines:
     print(f"Span object: {span}")
 ```
 
-**Solution**: Verify that the Kedi parser correctly populates `template_lines` for optimize spans. Check `program_parser.py` lines 409-420.
+**Solution**: Verify that the Kedi parser correctly populates `template_lines` for optimize spans. The span is built in `src/kedi/lang/parser/validation_conversion.py` (`_walk_optimize_span`); the old `program_parser.py` module no longer exists.
 
 ---
 
-### Issue 3: Multiple Template Lines Not Recognized
+### Issue 3: Only the First Line Carries the Optimized Prompt
 
 **Symptoms**:
-- Only first line gets optimized prompt
-- Second line still uses original prompt
+- Only the first template line has an `optimized_prompt_prefix`
+- Later lines still carry only their original seed text
 
 **Diagnosis**:
 ```python
 # Check span structure
 print(f"Span '{span.name}' has {len(span.template_lines)} template lines")
 for i, line in enumerate(span.template_lines):
-    print(f"  Line {i}: {len(line.segments)} segments")
+    print(f"  Line {i}: prefix={line.optimized_prompt_prefix!r}")
 ```
 
-**Solution**: Confirm `gepa.py` sets `optimized_prompt_prefix` on every entry in `span.template_lines`.
+**Explanation**: This is the intended once-per-span behavior, not a missing
+application. The optimized prompt is stored on `span.template_lines[0]` only
+(see `GEPASession` in `src/kedi/optimization/gepa_session.py`), and
+`span_to_instruction` (`src/kedi/optimization/utils.py`) prepends that one
+prefix to the newline-joined text of all template lines when the span's
+effective instruction is built. Continuation lines are still part of the
+optimized instruction; they simply do not each carry a copy of the prefix.
+The output override, by contrast, must be present on every line — if a later
+line's `optimized_output_override` is `None`, that is a real defect.
 
 ---
 
@@ -539,17 +486,18 @@ for i, line in enumerate(span.template_lines):
 
 **Diagnosis**:
 ```python
-# In _extract_prediction_outputs
+# In _extract_prediction_outputs (span, prediction) -> dict | None
+from kedi.optimization.utils import extract_output_fields
 print(f"Prediction type: {type(prediction)}")
 print(f"Prediction attributes: {dir(prediction)}")
-print(f"Expected fields: {[name for name, _ in output_fields]}")
-for field_name, _ in output_fields:
+print(f"Expected fields: {[name for name, _ in extract_output_fields(span)]}")
+for field_name, _ in extract_output_fields(span):
     has_field = hasattr(prediction, field_name)
     value = getattr(prediction, field_name, None) if has_field else None
     print(f"  Field '{field_name}': has={has_field}, value={value}")
 ```
 
-**Solution**: Ensure DSPy module signature matches span output fields. Check `dspy_module_builder.py` lines 70-81.
+**Solution**: Ensure DSPy module signature matches span output fields. The signature is built by `DSPyModuleBuilder.build_module` in `src/kedi/optimization/services/dspy_module_builder.py`, from the span's input and output fields — not from the procedure parameters.
 
 ---
 
@@ -567,7 +515,7 @@ print(f"Span inputs: {extract_input_fields(span)}")
 print(f"Example keys: {list(gold.items())}")
 ```
 
-**Solution**: Verify that `DSPyExampleFormatter` correctly extracts span-level inputs. Check `dspy_example_formatter.py`.
+**Solution**: Verify that `DSPyExampleFormatter` correctly extracts span-level inputs. See `src/kedi/optimization/services/dspy_example_formatter.py`.
 
 ---
 
@@ -672,6 +620,10 @@ def test_gepa_optimization(monkeypatch):
    - Verify only span inputs forwarded
    - Multi-span independent optimization
 
+6. **Multi-Span Tests** (`test_gepa_kedi_mocks_multi_span.py`):
+   - Multiple spans optimized in one procedure
+   - Per-span prompt and score isolation
+
 ---
 
 ## Performance Considerations
@@ -729,14 +681,15 @@ class SpanCache:
 
 ### 3. Differential Prompt Updates
 
-Only update changed template lines instead of all lines:
+Skip the update when the prompt is unchanged; otherwise replace the span's
+single stored prefix (the first template line only):
 
 ```python
 def apply_prompt_diff(span, old_prompt, new_prompt):
     if old_prompt == new_prompt:
         return  # No change
-    for line in span.template_lines:
-        line.optimized_prompt_prefix = new_prompt
+    if span.template_lines:
+        span.template_lines[0].optimized_prompt_prefix = new_prompt
 ```
 
 ### 4. Structured Logging
@@ -779,7 +732,7 @@ When debugging GEPA optimization issues, check these in order:
 
 - [ ] **Prompt Application**
   - [ ] Optimized prompt extracted from module
-  - [ ] Prompt applied to ALL template lines (not just first)
+  - [ ] Prompt applied to the span's FIRST template line only (once per span)
   - [ ] Prompt is not empty or unchanged
   - [ ] Prompt contains expected optimization markers (e.g., RANGE tokens)
 
@@ -808,12 +761,13 @@ When debugging GEPA optimization issues, check these in order:
 
 For issues or questions about GEPA optimization:
 1. Check this documentation first
-2. Enable debug logging (`KEDI_DEBUG_GEPA=1`)
+2. Enable debug logging (`KEDI_DEBUG_OPTIMIZED=1`)
 3. Review test cases in `tests/test_gepa_kedi_mocks_*.py`
 4. Examine DSPy GEPA logs for iteration details
 
 **Key Files to Review**:
 - `src/kedi/optimization/gepa.py` - Main optimizer
+- `src/kedi/optimization/gepa_session.py` - Per-span optimization and prompt extraction
 - `src/kedi/optimization/services/gepa_metric_wrapper.py` - Metric bridge
 - `src/kedi/lang/compiler/statement_compiler.py` - Template execution
 - `tests/dspy_mocks.py` - Mock infrastructure for testing

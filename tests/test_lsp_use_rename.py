@@ -6,8 +6,33 @@ import pytest
 from lsprotocol import types as lsp
 
 from kedi.lang import compile_program, parse_program
-from kedi.lsp.features.navigation import compute_references, compute_rename
+from kedi.lsp.features.navigation import compute_prepare_rename, compute_references, compute_rename
 from tests.mock_adapter import MockAdapter
+
+
+@pytest.mark.parametrize("directive", ["profile", "capability"])
+def test_profile_rename_preserves_the_body(directive):
+    source = f"> {directive}: reviewer:\n  > instructions: Be careful.\n\n> use: reviewer\n"
+    uri = "file:///tmp/rename.kedi"
+    position = lsp.Position(0, source.splitlines()[0].index("reviewer") + 1)
+    prepared = compute_prepare_rename(source, "/tmp/rename.kedi", position)
+    assert prepared is not None
+    edit = compute_rename(source, uri, "/tmp/rename.kedi", position, "checked")
+    assert edit is not None and edit.changes is not None
+    assert len(edit.changes[uri]) == 2
+    for change in edit.changes[uri]:
+        assert change.range.start.line == change.range.end.line
+        assert change.range.end.character - change.range.start.character == len("reviewer")
+
+
+def test_rename_rejects_nonrenameable_directive_names():
+    source = "> import: filesystem\n"
+    position = lsp.Position(0, 12)
+    assert compute_prepare_rename(source, "/tmp/rename.kedi", position) is None
+    assert (
+        compute_rename(source, "file:///tmp/rename.kedi", "/tmp/rename.kedi", position, "other")
+        is None
+    )
 
 
 @pytest.mark.parametrize("alias", ["public_lookup", "lookup"])

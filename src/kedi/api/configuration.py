@@ -8,8 +8,6 @@ from typing import (
     cast,
 )
 
-import dotenv
-
 from kedi.agent_adapter import (
     AdapterCapability,
     AgentAdapter,
@@ -49,6 +47,7 @@ from kedi.api.state import (
 from kedi.artifacts import ArtifactPolicyInput, normalize_artifact_policy
 from kedi.effort import EffortValue
 from kedi.errors import KediExecutionError
+from kedi.utils import load_project_dotenv
 
 
 def _execution_engine(config: _APIConfig) -> Any:
@@ -204,7 +203,7 @@ def _build_config(
     loop_iteration_limit: int | None = None,
 ) -> _APIConfig:
     if load_env:
-        dotenv.load_dotenv()
+        load_project_dotenv()
 
     base_parallel = None if base is None else base.parallel
     base_max_workers = 8 if base is None else base.max_workers

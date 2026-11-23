@@ -73,10 +73,38 @@ from starting; refused admission adds no provider attempt or token usage.
 
 ## Model Settings
 
-Supported settings are `max_tokens`, `temperature`, `top_p`, `timeout`,
-`parallel_tool_calls`, `tool_choice`, `seed`, `presence_penalty`,
-`frequency_penalty`, `logit_bias`, `stop_sequences`, `extra_headers`,
-`thinking`, `service_tier`, and `extra_body`.
+The full list of supported `> settings:` keys comes from Kedi's
+`agent_profile.settings`:
+
+<!-- BEGIN GENERATED MODEL SETTINGS -->
+
+| Setting | Meaning |
+| --- | --- |
+| `context_limit` | Model context window in tokens for Kedi's request ceiling; default 200,000. |
+| `decision_boolean_threshold` | Probability above which a boolean decision counts as true. |
+| `decision_tool_call_threshold` | Probability above which a hand-off tool is selected. |
+| `extra_body` | Extra fields merged into the provider request body. |
+| `extra_headers` | Extra HTTP headers sent with provider requests. |
+| `frequency_penalty` | Penalty scaled by how often a token already appeared. |
+| `logit_bias` | Per-token logit adjustments. |
+| `max_tokens` | Maximum tokens in the model response. |
+| `media_limit` | Largest media value, in bytes, a request may attach; default 20 MB cap. |
+| `parallel_tool_calls` | Whether the model may call several tools in one turn. |
+| `presence_penalty` | Penalty for repeating tokens already present. |
+| `request_retries` | Retries for transient provider request failures; does not replay tools or entire runs. |
+| `response_cache` | Enable provider response caching for identical requests. |
+| `response_cache_ttl` | Cache time-to-live in seconds for cached responses. |
+| `seed` | Seed for deterministic sampling where the provider supports it. |
+| `service_tier` | Provider service tier (`auto`, `default`, `flex`, `priority`). |
+| `stop_sequences` | Sequences that stop generation. |
+| `temperature` | Sampling temperature; higher values are more random. |
+| `thinking` | Thinking budget (`minimal`, `low`, `medium`, `high`, `xhigh`) or boolean. |
+| `timeout` | Request timeout in seconds. |
+| `tool_choice` | Tool selection policy (`none`, `auto`, `required`). |
+| `tool_reason` | Opts into an optional `reason` string on tool calls. |
+| `top_p` | Nucleus sampling cutoff. |
+
+<!-- END GENERATED MODEL SETTINGS -->
 
 ```kedi
 > settings:

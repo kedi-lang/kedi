@@ -33,6 +33,7 @@ _EVENT_FILENAME = "model-requests.jsonl"
 _MAX_EVENT_BYTES = 128 * 1024
 _MAX_EVENTS = 4_096
 _MAX_RECORDED_MESSAGE_DIGESTS = 512
+_MAX_MESSAGE_CACHE_ENTRIES = 512
 _MAX_CHANGED_MESSAGE_DETAILS = 16
 _MAX_TOOL_NAMES = 256
 _PUBLIC_ENDPOINT_HOSTS = frozenset(
@@ -436,6 +437,12 @@ class PydanticRequestEvidenceCapability(AbstractCapability[Any]):
             revision=revision,
             fingerprint=fingerprint,
         )
+        # The cache is keyed by id(message) and holds the message alive, so
+        # ids cannot be recycled while cached - but without a bound it grows
+        # with every distinct message of a long trial. Evict oldest first;
+        # evicted messages are simply re-fingerprinted on next use.
+        while len(self._message_cache) > _MAX_MESSAGE_CACHE_ENTRIES:
+            self._message_cache.pop(next(iter(self._message_cache)))
         return fingerprint
 
     def _record(self, event: Mapping[str, Any]) -> None:
@@ -797,7 +804,15 @@ def _revision_token(value: Any, *, depth: int = 0) -> object:
     if value is None or isinstance(value, (bool, int, float, complex, Enum)):
         return (type(value), value)
     if isinstance(value, (str, bytes)):
-        return (type(value), id(value), len(value))
+        # Immutable values are their own revision token. The previous
+        # (type, id(value), len(value)) form collided when a replaced
+        # same-length string/bytes object reused the freed id: the cache then
+        # returned the fingerprint of the old content.
+        return (type(value), value)
+    if isinstance(value, bytearray):
+        # Mutable: snapshot the bytes, otherwise the token would alias the
+        # live buffer and miss in-place mutation.
+        return (bytearray, bytes(value))
     if isinstance(value, (datetime, date, datetime_time)):
         return (type(value), value)
     if depth >= 20:

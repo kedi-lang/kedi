@@ -38,6 +38,7 @@ class _ProcessSupervisor:
         self._combined_lock = threading.Lock()
         self._termination_lock = threading.Lock()
         self._termination_deadline: float | None = None
+        self._signal_pending: int | None = None
         self._timed_out = False
         self._output_limited = False
         self._requested_signal: int | None = None
@@ -79,6 +80,7 @@ class _ProcessSupervisor:
         input_forwarder.start()
 
         while child.poll() is None:
+            self._drain_pending_signal()
             now = time.monotonic()
             if now >= self.deadline_monotonic:
                 self._timed_out = True
@@ -186,7 +188,19 @@ class _ProcessSupervisor:
             signal.signal(signum, self._handle_signal)
 
     def _handle_signal(self, signum: int, _: FrameType | None) -> None:
+        # Signal handlers run in async-signal context on the main thread: they
+        # must not block. In particular they must not acquire
+        # _termination_lock, which the interrupted main-thread code may
+        # already hold (deadlock). Record the request; the run loop drains it
+        # in normal context via _drain_pending_signal.
         self._requested_signal = signum
+        self._signal_pending = signum
+
+    def _drain_pending_signal(self) -> None:
+        signum = self._signal_pending
+        if signum is None:
+            return
+        self._signal_pending = None
         self._request_termination(signum)
 
     def _request_termination(self, signum: int) -> None:

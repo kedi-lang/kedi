@@ -11,7 +11,7 @@ $ kedi --idle
  /\_/\
 ( o.o )
  > ^ <
-Kedi 0.1.4 on darwin
+Kedi 0.1.5 on darwin
 Type "help" for interactive help, ":show" to inspect a value, ":multiline" for a multiline fragment, ":dump" to save, or ":exit" to leave.
 +++ [base: int] = `40`
 +++ @add_two() -> int:
@@ -133,6 +133,9 @@ continues recording changes to that same path:
 kedi --idle --record
 kedi --idle --load ~/.kedi/sessions/idle-20260826T120000-ab12cd34.kedi-state
 ```
+
+A portable snapshot that restores lifecycle hook handlers imports their Python
+modules, so it loads only with `--trust-snapshot`.
 
 For supported local Python objects, install `kedi[snapshots]` and select
 `--snapshot-format python`:

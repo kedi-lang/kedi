@@ -7,6 +7,7 @@ import inspect
 import linecache
 import sys
 import types
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -195,8 +196,17 @@ def make_type_init(
     module_name = f"_kedi_type_introspection_{typedef.name}_{id(model_class)}"
     module = types.ModuleType(module_name)
     module.__file__ = class_filename
-    module.__dict__[metadata.name] = model_class
+    model_ref = weakref.ref(model_class)
+
+    def resolve_type(name: str) -> type[BaseModel]:
+        model = model_ref()
+        if name != metadata.name or model is None:
+            raise AttributeError(name)
+        return model
+
+    module.__getattr__ = resolve_type
     sys.modules[module_name] = module
+    weakref.finalize(model_class, _release_source, module_name, class_filename, init_filename)
 
     init = init_namespace["__init__"]
     init.__qualname__ = f"{typedef.name}.__init__"
@@ -211,6 +221,12 @@ def make_type_init(
     # point inspect at the first line of our registered display stub.
     setattr(model_class, "__firstlineno__", 1)
     return init
+
+
+def _release_source(module_name: str, *filenames: str) -> None:
+    sys.modules.pop(module_name, None)
+    for filename in filenames:
+        linecache.cache.pop(filename, None)
 
 
 def _cache_source(filename: str, source: str) -> None:
