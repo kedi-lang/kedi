@@ -74,6 +74,11 @@ class ACPClient:
         self._initialized = False
         self._closed = False
 
+    @property
+    def closed(self) -> bool:
+        with self._start_lock:
+            return self._closed
+
     async def run_prompt(
         self,
         *,
@@ -461,6 +466,11 @@ class ACPAdapter(HookRegistrationMixin):
         self._clients: dict[
             tuple[tuple[str, ...], str, tuple[tuple[str, str], ...]], ACPClient
         ] = {}
+        # Guards get/create/close of the cached clients: without it two
+        # concurrent invokes could create two clients for one key (one
+        # leaking), and close() could iterate the dict while another thread
+        # inserts into it.
+        self._clients_lock = RLock()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_acp_profile_stack_{id(self)}",
             default=(),
@@ -564,9 +574,11 @@ class ACPAdapter(HookRegistrationMixin):
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
-        for client in self._clients.values():
+        with self._clients_lock:
+            clients = list(self._clients.values())
+            self._clients.clear()
+        for client in clients:
             client.close()
-        self._clients.clear()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
@@ -593,10 +605,19 @@ class ACPAdapter(HookRegistrationMixin):
                 "or ACPAdapter(command=...)."
             )
         key = (command, cwd, tuple(sorted(env.items())))
-        client = self._clients.get(key)
-        if client is None:
-            client = ACPClient(command, env=env, cwd=cwd, request_timeout=self._request_timeout)
-            self._clients[key] = client
+        with self._clients_lock:
+            client = self._clients.get(key)
+            if client is not None and client.closed:
+                # A cached client can be closed out from under the adapter
+                # (e.g. ACPClient closes itself on an unresponsive cancel);
+                # never hand a closed client to a new invoke.
+                del self._clients[key]
+                client = None
+            if client is None:
+                client = ACPClient(
+                    command, env=env, cwd=cwd, request_timeout=self._request_timeout
+                )
+                self._clients[key] = client
         return client, cwd, float(timeout)
 
     @staticmethod
