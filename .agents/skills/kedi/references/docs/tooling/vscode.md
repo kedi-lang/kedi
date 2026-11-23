@@ -36,8 +36,10 @@ explicit `kedi.lsp.serverCommand` can instead launch a custom server when no
 host interpreter is configured. Workspace virtual environments are not selected
 implicitly. Settings and selected-interpreter changes restart the server.
 
-The managed installer pins `kedi==0.1.5`, `tree-sitter-kedi==0.4.9`, and
-`kedi-debugger==0.1.0`. Existing managed environments gain the debugger on their
+The managed installer pins `kedi==0.1.5`, `tree-sitter-kedi==0.4.7`, and
+`kedi-debugger==0.1.1`. The parser pin follows the published Kedi wheel's
+dependencies, independently of the development grammar. Use a project interpreter
+for unreleased Kedi features. Existing managed environments gain the debugger on their
 next setup check. Host environments still require explicit debugger installation.
 Those releases must be available on the package index before this automatic
 installation can be distributed, and the Kedi wheel must contain the required
