@@ -26,7 +26,13 @@ cache generation: a request already in flight may finish for its current
 callers, but it cannot repopulate the newly cleared cache.
 
 Response caching is opt-in per `query` or `bind` with `cache=True`. Parse
-caching is always source-hash based. Each cache keeps its 256 most recently
-used entries. Concurrent identical response misses
-coalesce; failed calls are never stored. A recursive same-thread request for
-the same cache key raises instead of deadlocking.
+caching is always source-hash based. Each cache retains at most 1,024 entries
+and evicts the oldest inserted entry when full. Concurrent identical response
+misses coalesce; failed calls are never stored. A recursive same-thread request
+for the same cache key raises instead of deadlocking.
+
+Response keys include argument values, container contents, and instance
+attributes or slots, including container-subclass state. Objects without
+readable instance state use process-local identity tokens. Mutable results are
+copied where possible; results that cannot be deep-copied retain their shared
+reference, so callers must not mutate them.
