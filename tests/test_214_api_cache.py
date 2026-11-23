@@ -88,6 +88,74 @@ def test_stable_repr_covers_enums_dates_decimals_and_paths() -> None:
     assert _stable_repr(date(2026, 1, 1)) != _stable_repr(datetime(2026, 1, 1))
     assert _stable_repr(Decimal("1.5")) == _stable_repr(Decimal("1.5"))
     assert _stable_repr(Path("/tmp/x")) == _stable_repr(Path("/tmp/x"))
+    assert _stable_repr(bytearray(b"ab")) == _stable_repr(b"ab")
+    assert _stable_repr(bytearray(b"ab")) != _stable_repr(b"ac")
+
+
+def test_stable_repr_falls_back_when_repr_is_broken() -> None:
+    class BrokenRepr:
+        def __init__(self) -> None:
+            self.label = "kept"
+
+        def __repr__(self) -> str:  # noqa: D105
+            raise RuntimeError("no repr")
+
+    rendered = _stable_repr(BrokenRepr())
+    assert "<unrepresentable>" in rendered
+    assert "label='kept'" in rendered
+
+
+def test_stable_repr_covers_string_slots_unset_slots_and_weird_slots() -> None:
+    class StringSlot:
+        __slots__ = "value"
+
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    assert _stable_repr(StringSlot("x")) == _stable_repr(StringSlot("x"))
+    assert _stable_repr(StringSlot("x")) != _stable_repr(StringSlot("y"))
+
+    class TwoSlots:
+        __slots__ = ("a", "b")
+
+        def __init__(self, a: str) -> None:
+            self.a = a
+
+    assert _stable_repr(TwoSlots("x")) == _stable_repr(TwoSlots("x"))
+
+    class IntSlots:
+        def __init__(self) -> None:
+            self.x = 1
+
+    # A non-iterable __slots__ cannot be declared (class creation rejects
+    # it), so install one after creation to cover the defensive branch.
+    IntSlots.__slots__ = 123  # type: ignore[attr-defined]
+    assert _stable_repr(IntSlots()) == _stable_repr(IntSlots())
+
+    class MixedSlots:
+        __slots__ = ("value",)
+
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    # Likewise, a non-string slot name cannot be declared.
+    MixedSlots.__slots__ = (1, "value")  # type: ignore[attr-defined]
+    assert _stable_repr(MixedSlots("x")) == _stable_repr(MixedSlots("x"))
+
+
+def test_stable_repr_hashes_long_state_and_names_container_subclasses() -> None:
+    class BigState:
+        def __init__(self) -> None:
+            self.payload = "x" * 600
+
+    assert "sha256:" in _stable_repr(BigState())
+
+    class MyList(list):  # type: ignore[type-arg]
+        pass
+
+    rendered = _stable_repr(MyList([1]))
+    assert "MyList" in rendered
+    assert rendered != _stable_repr([1])
 
 
 def test_stable_repr_shares_keys_for_same_state_despite_address() -> None:

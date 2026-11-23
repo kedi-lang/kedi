@@ -17,14 +17,19 @@ from typing import Any
 import pytest
 
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
-from kedi.artifacts.errors import ArtifactSerializationError
+from kedi.artifacts.errors import (
+    ArtifactNotFoundError,
+    ArtifactSerializationError,
+)
 from kedi.artifacts.file_store import FileArtifactStore
 from kedi.artifacts.models import ArtifactRecord, ArtifactRef, ArtifactStatus
 from kedi.artifacts.serialization import serialize_artifact
 
 
 def _record(*, ref_id: str, session_id: str) -> ArtifactRecord:
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # Expiry is relative to now: a fixed past date would make restore mark
+    # the record EXPIRED, which changes prune behavior.
+    now = datetime.now(timezone.utc)
     return ArtifactRecord(
         ref=ArtifactRef[Any](
             ref_id=ref_id,
@@ -82,6 +87,30 @@ def test_file_store_restore_does_not_overwrite_other_session(
     assert store.get_value("session-a", "text_1") == "value-a"
     assert store.get_record("session-a", "text_1").session_id == "session-a"
     assert store.get_record("session-b", "text_1").session_id == "session-b"
+
+
+def test_file_store_missing_record_is_not_found(tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "artifacts")
+    with pytest.raises(ArtifactNotFoundError, match="not found"):
+        store.get_record("session-a", "missing")
+    with pytest.raises(ArtifactNotFoundError, match="not found"):
+        store.get_value("session-a", "missing")
+
+
+def test_file_store_prune_inactive_payload(tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "artifacts")
+    record = _record(ref_id="text_1", session_id="session-a")
+    store.put(record, serialize_artifact("value-a", preview_chars=10))
+    stored = store.get_record("session-a", "text_1")
+    with pytest.raises(ValueError, match="active artifact"):
+        store.prune_inactive_payload("session-a", "text_1")
+    stored.status = ArtifactStatus.RELEASED
+    stored.active_readers = 1
+    with pytest.raises(ValueError, match="active readers"):
+        store.prune_inactive_payload("session-a", "text_1")
+    stored.active_readers = 0
+    store.prune_inactive_payload("session-a", "text_1")
+    assert store._payload_path("session-a", "text_1").read_bytes() == b""
 
 
 def test_managers_sharing_a_root_keep_their_ref_ids(tmp_path: Path) -> None:
