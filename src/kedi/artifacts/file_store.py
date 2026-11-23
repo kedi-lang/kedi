@@ -34,7 +34,7 @@ from kedi.artifacts.streaming import StreamedArtifact
 if TYPE_CHECKING:
     from kedi.artifacts.store import ArtifactStoreWriter
 
-from kedi.artifacts.store import _owned_record
+from kedi.artifacts.store import _owned_session_record
 
 
 class FileArtifactStore:
@@ -46,7 +46,7 @@ class FileArtifactStore:
             raise ArtifactAccessError("artifact store root cannot be a symlink")
         self.root = requested_root.resolve()
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._records: dict[str, ArtifactRecord] = {}
+        self._records: dict[tuple[str, str], ArtifactRecord] = {}
         self._projection_indexes: dict[tuple[str, str], _ProjectionIndex] = {}
         self._restored_sessions: set[str] = set()
         self._active_temporary_paths: set[Path] = set()
@@ -62,7 +62,10 @@ class FileArtifactStore:
                 f"{record.ref.logical_type} cannot be stored in the file artifact store"
             )
         with self._lock:
-            if record.ref_id in self._records:
+            # Records are keyed by (session_id, ref_id): ref IDs are
+            # per-session counters (text_1, text_2, ...), so two sessions
+            # legitimately share a ref_id and must not collide.
+            if (record.session_id, record.ref_id) in self._records:
                 raise ArtifactSerializationError(
                     f"artifact reference {record.ref_id!r} already exists"
                 )
@@ -103,7 +106,7 @@ class FileArtifactStore:
                 index_path.unlink(missing_ok=True)
                 raise
             record.payload = payload_path
-            self._records[record.ref_id] = record
+            self._records[(record.session_id, record.ref_id)] = record
             os.chmod(directory, 0o700)
 
     def begin_write(self, session_id: str, ref_id: str) -> ArtifactStoreWriter:
@@ -115,12 +118,12 @@ class FileArtifactStore:
     def get_record(self, session_id: str, ref_id: str) -> ArtifactRecord:
         with self._lock:
             self._restore_session(session_id)
-            return _owned_record(self._records, session_id, ref_id)
+            return _owned_session_record(self._records, session_id, ref_id)
 
     def get_value(self, session_id: str, ref_id: str) -> Any:
         with self._lock:
             self._restore_session(session_id)
-            record = _owned_record(self._records, session_id, ref_id)
+            record = _owned_session_record(self._records, session_id, ref_id)
             payload_path = self._payload_path(session_id, ref_id)
             payload = payload_path.read_bytes()
             return deserialize_artifact(record.codec, payload)
@@ -136,7 +139,7 @@ class FileArtifactStore:
     ) -> tuple[str, int | None, bool]:
         with self._lock:
             self._restore_session(session_id)
-            record = _owned_record(self._records, session_id, ref_id)
+            record = _owned_session_record(self._records, session_id, ref_id)
             payload_path = self._payload_path(session_id, ref_id)
             if record.codec in {"text", "json"}:
                 index = self._read_projection_index(session_id, ref_id)
@@ -176,7 +179,7 @@ class FileArtifactStore:
             raise ArtifactInputError("artifact JSON path must be an RFC 6901 pointer")
         with self._lock:
             self._restore_session(session_id)
-            record = _owned_record(self._records, session_id, ref_id)
+            record = _owned_session_record(self._records, session_id, ref_id)
             if record.codec != "json":
                 raise ArtifactInputError("JSON paths can only be read from JSON artifacts")
             index = self._read_projection_index(session_id, ref_id)
@@ -213,7 +216,7 @@ class FileArtifactStore:
     def delete_payload(self, session_id: str, ref_id: str) -> None:
         with self._lock:
             self._restore_session(session_id)
-            _owned_record(self._records, session_id, ref_id)
+            _owned_session_record(self._records, session_id, ref_id)
             self._payload_path(session_id, ref_id).unlink(missing_ok=True)
             self._metadata_path(session_id, ref_id).unlink(missing_ok=True)
             self._projection_index_path(session_id, ref_id).unlink(missing_ok=True)
@@ -222,7 +225,7 @@ class FileArtifactStore:
     def prune_inactive_payload(self, session_id: str, ref_id: str) -> None:
         with self._lock:
             self._restore_session(session_id)
-            record = _owned_record(self._records, session_id, ref_id)
+            record = _owned_session_record(self._records, session_id, ref_id)
             if record.status not in {ArtifactStatus.RELEASED, ArtifactStatus.EXPIRED}:
                 raise ValueError("cannot prune an active artifact payload")
             if record.active_readers:
@@ -236,12 +239,12 @@ class FileArtifactStore:
     def discard(self, session_id: str, ref_id: str) -> None:
         with self._lock:
             self._restore_session(session_id)
-            _owned_record(self._records, session_id, ref_id)
+            _owned_session_record(self._records, session_id, ref_id)
             self._payload_path(session_id, ref_id).unlink(missing_ok=True)
             self._metadata_path(session_id, ref_id).unlink(missing_ok=True)
             self._projection_index_path(session_id, ref_id).unlink(missing_ok=True)
             self._projection_indexes.pop((session_id, ref_id), None)
-            self._records.pop(ref_id)
+            self._records.pop((session_id, ref_id))
 
     def close(self) -> None:
         with self._lock:
@@ -322,7 +325,7 @@ class FileArtifactStore:
                 status = ArtifactStatus(metadata.get("status", ArtifactStatus.ACTIVE.value))
                 if remaining <= 0 and status is ArtifactStatus.ACTIVE:
                     status = ArtifactStatus.EXPIRED
-                self._records[ref.ref_id] = ArtifactRecord(
+                self._records[(session_id, ref.ref_id)] = ArtifactRecord(
                     ref=ref,
                     session_id=session_id,
                     codec=str(metadata["codec"]),
@@ -409,7 +412,7 @@ class _FileArtifactWriter:
         published = False
         try:
             with self._store._lock:
-                if record.ref_id in self._store._records:
+                if (record.session_id, record.ref_id) in self._store._records:
                     raise ArtifactSerializationError(
                         f"artifact reference {record.ref_id!r} already exists"
                     )
@@ -428,7 +431,7 @@ class _FileArtifactWriter:
                     mode=0o600,
                 )
                 record.payload = payload_path
-                self._store._records[record.ref_id] = record
+                self._store._records[(record.session_id, record.ref_id)] = record
                 self._finished = True
                 self._store._active_temporary_paths.discard(self._temporary_path)
         except BaseException:
