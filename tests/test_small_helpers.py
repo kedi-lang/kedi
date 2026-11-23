@@ -250,7 +250,7 @@ def test_type_init_metadata_deep_copies_default_values() -> None:
     assert second == ["a"]
 
 
-def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import kedi.cli
     import kedi.settings
 
@@ -262,11 +262,17 @@ def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> No
     assert exc_info.value.code == 7
 
     main_module = importlib.import_module("kedi.__main__")
-    dotenv_calls: list[bool] = []
-    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda: dotenv_calls.append(True))
+    # Item 7: main() loads the .env from the current working directory
+    # tree via load_project_dotenv(), so the test must provide one - with
+    # no .env file there is nothing to load and load_dotenv is (correctly)
+    # never called. The recorded path pins the cwd discovery.
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    dotenv_calls: list[str] = []
+    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda path: dotenv_calls.append(path))
 
     assert main_module.main() == 7
-    assert dotenv_calls == [True]
+    assert dotenv_calls == [str(tmp_path / ".env")]
 
     settings_module = importlib.reload(kedi.settings)
     assert settings_module.settings.adapter == "pydantic"

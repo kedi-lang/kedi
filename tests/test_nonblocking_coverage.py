@@ -176,6 +176,10 @@ def test_retry_after_of_variants() -> None:
         ("", True),
         ("  ", True),
         ("0", False),
+        # "00"/"-0" parse to a zero worker count but are not in
+        # _PARALLEL_FALSE, so they reach the `workers == 0` branch.
+        ("00", False),
+        ("-0", False),
         ("false", False),
         ("FALSE", False),
         ("no", False),

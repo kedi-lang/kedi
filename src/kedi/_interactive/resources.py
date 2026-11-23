@@ -273,6 +273,10 @@ def restore_memory_artifacts(session: Any, resources: dict[str, Any]) -> None:
         # Staging rejected every codec other than text, bytes and JSON.
         record = store.get_record(manager.session_id, ref_id)
         manager._memory_store._records[ref_id] = replace(record, payload=value)
-        store._records.pop(ref_id)
+        # The file store keys its records by (session_id, ref_id) since
+        # #214 item 4.9 (ref IDs are per-session counters, so a bare ref_id
+        # would collide across sessions); pop the session-qualified key.
+        # The in-memory store above still uses bare ref_id keys.
+        store._records.pop((manager.session_id, ref_id))
         manager._ref_stores[ref_id] = manager._memory_store
     del session._snapshot_memory_artifacts
