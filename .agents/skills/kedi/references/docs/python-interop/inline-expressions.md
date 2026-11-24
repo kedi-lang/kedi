@@ -126,8 +126,9 @@ selected_model = "openai:gpt-6-luna"
     stop_sequences: `["END"]`
 ````
 
-Plain settings already parse booleans, numbers, and `null`; use Python only for
-lists, mappings, computed values, or objects.
+Plain settings already parse booleans and numbers; use Python only for lists,
+mappings, computed values, or objects. There is no `null` literal: omit a
+setting to keep its default.
 
 ## Available Names
 
