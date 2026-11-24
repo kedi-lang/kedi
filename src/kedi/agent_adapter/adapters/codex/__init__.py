@@ -78,9 +78,6 @@ if TYPE_CHECKING:
         _parse_structured_result as _parse_structured_result,
     )
     from .adapter import (
-        _tool_with_approval_policies as _tool_with_approval_policies,
-    )
-    from .adapter import (
         _usage_int as _usage_int,
     )
 
@@ -95,7 +92,6 @@ _EXPORTS = {
     "_output_json_schema": ("adapter", "_output_json_schema"),
     "_parse_structured_result": ("adapter", "_parse_structured_result"),
     "_json_object_result": ("adapter", "_json_object_result"),
-    "_tool_with_approval_policies": ("adapter", "_tool_with_approval_policies"),
     "_codex_native_approval_handler": ("adapter", "_codex_native_approval_handler"),
     "_codex_invocation_usage": ("adapter", "_codex_invocation_usage"),
     "_usage_int": ("adapter", "_usage_int"),

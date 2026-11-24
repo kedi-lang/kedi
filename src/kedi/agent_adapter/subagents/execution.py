@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from kedi.agent_adapter.events import bind_agent_run, current_agent_run_identity
 from kedi.agent_adapter.invocation import observe_invocations
+from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.subagents import (
     _NO_TYPED_OUTPUT,
     DelegationResult,
@@ -29,6 +30,7 @@ from kedi.agent_adapter.subagents.control import RunInterrupted, live_input_scop
 from kedi.agent_adapter.subagents.runs import SubagentCancelled, SubagentCompleted, SubagentFailed
 from kedi.agent_adapter.subagents.safety import SubagentSafetyCeiling
 from kedi.agent_adapter.telemetry import current_tool_call_name
+from kedi.agent_adapter.tools.execution import with_approval_policies
 from kedi.errors import KediExecutionError, KediTraceFrame
 from kedi.telemetry import TelemetrySpan, current_span
 from kedi.telemetry import span as telemetry_span
@@ -147,6 +149,17 @@ async def _execute_run(
             self._deps.assert_profile_override_supported(child_profile, child_adapter)
             with live_input_scope(self._controls[run_id]):
                 child_tools = self._deps.resolve_tools(child_profile, child_adapter)
+            if not _uses_native_approvals(child_adapter):
+                # Native-approval adapters apply the ceiling from subagent_scope; for the
+                # others Kedi's tool wrappers are the only approval boundary.
+                child_tools = tuple(
+                    with_approval_policies(
+                        tool,
+                        parent_ceiling.approval_policies,
+                        adapter_shortname=child_adapter.shortname,
+                    )
+                    for tool in child_tools
+                )
             from kedi.run_budget import assert_run_budget_supported, run_budget_scope
 
             with run_budget_scope(child_profile.run_budget):
@@ -342,6 +355,13 @@ async def _run_child(
             task_summary=result["task_summary"],
             final_result=result["final_result"],
         )
+
+
+def _uses_native_approvals(adapter: object) -> bool:
+    capabilities = getattr(adapter, "capabilities", None)
+    return isinstance(capabilities, AdapterCapabilities) and capabilities.supports(
+        "native_approvals"
+    )
 
 
 def _task_with_verified_history(turns: tuple[SubagentTurn, ...], task: str) -> str:
