@@ -54,6 +54,25 @@ crosses a typed boundary; copy it explicitly when ownership must be isolated.
 Scheduled model requests have their own input snapshot behavior. Do not infer
 ordinary Python alias behavior from [Concurrency](../runtime/concurrency.md).
 
+## Procedure and Type Definitions
+
+Value bindings follow the scopes above; procedure and Kedi type definitions do
+not. A definition inside `> if:`, `> loop:`, `> map:`, or another control block
+belongs to the enclosing procedure invocation or, at top level, to the program,
+so it stays visible after the block:
+
+```kedi
+> if: `True`:
+  @double(n: int) -> int:
+    = `n * 2`
+
+= `double(4)`
+```
+
+The result is `8`. Top-level types are registered before the program runs, so
+a top-level type's field types cannot name top-level variables. Declare such a
+type inside a procedure, where field types resolve local aliases.
+
 ## Iteration and Captures
 
 Each iteration gets a fresh binder and local declarations. An outer name with
