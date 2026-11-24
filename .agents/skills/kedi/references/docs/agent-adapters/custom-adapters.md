@@ -81,6 +81,8 @@ class MyAdapter:
 Accept unknown keyword arguments with `**kwargs`. Kedi adds keywords over
 time, and an adapter must not fail on one it does not use.
 
+<a id="text-invocation"></a>
+
 ## What Each Call Receives
 
 | Kedi statement | Entry point | Arguments |
@@ -133,6 +135,8 @@ else:
 Advertise `supports_structured_output=True` only when typed nested fields
 work, not when the adapter merely asks for JSON in a prompt.
 
+<a id="structured-outputs"></a>
+
 ## Return Values
 
 | Call | Return |
@@ -145,6 +149,8 @@ Kedi validates every returned value against the requested type and converts it
 to the local Kedi/Python type, so returning the decoded JSON object is enough.
 A missing output name fails the call. Do not return provider message objects.
 Raw capture stores the returned string.
+
+<a id="tool-registration"></a>
 
 ## Tools
 
