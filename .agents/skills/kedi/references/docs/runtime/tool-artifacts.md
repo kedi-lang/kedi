@@ -213,7 +213,7 @@ See [Failure Semantics](artifact-safety.md).
 ## Adapter Contract
 
 Artifact support and conversation continuation are separate contracts. Consult
-the [adapter extension contract](../agent-adapters/artifact-contract.md) and
+the [adapter extension contract](../adapter-development/artifacts.md) and
 the selected adapter's documentation instead of inferring history support from
 artifact support. Pydantic AI and LangChain both support stateful conversations.
 
