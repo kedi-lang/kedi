@@ -33,6 +33,7 @@ from kedi.agent_adapter.tools.conversion import (
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
+from kedi.agent_adapter.tools.errors import ToolArgumentError
 from kedi.agent_adapter.tools.execution import with_approval
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, block_agent_profile_scope, current_block_agent_profile
@@ -690,7 +691,7 @@ def test_edited_kedi_tool_arguments_are_revalidated_against_custom_types() -> No
         adapter_shortname="test",
     )
 
-    with pytest.raises(TypeError, match="does not match annotated type"):
+    with pytest.raises(ToolArgumentError, match="does not match annotated type"):
         guarded.fn(count={"value": 1})
 
 

@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from kedi.agent_adapter.tools.conversion import kedi_procedure_tool_spec
+from kedi.agent_adapter.tools.errors import ToolArgumentError
 from kedi.agent_adapter.tools.retry import ToolRetryPolicy
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -64,7 +65,7 @@ Transient = TimeoutError
         with pytest.raises(KediExecutionError):
             spec.fn(reference="invalid-record")
         assert calls == ["R-7", "R-7", "direct", "invalid-record"]
-        with pytest.raises(TypeError, match="does not match annotated type"):
+        with pytest.raises(ToolArgumentError, match="does not match annotated type"):
             spec.fn(reference=17)
         assert calls == ["R-7", "R-7", "direct", "invalid-record"]
     finally:

@@ -14,6 +14,8 @@ from kedi.core import KediRuntime
 from kedi.lang.ast import ProcedureDef, TypeRef
 from kedi.lang.compiler.type_system import KediType, coerce_model_value
 
+from .errors import ToolArgumentError
+
 
 def _procedure_tool_argument_validator(
     rt: KediRuntime,
@@ -35,7 +37,7 @@ def _validated_procedure_kwargs(
     kwargs: Mapping[str, Any],
 ) -> dict[str, Any]:
     sig = inspect.signature(fn)
-    bound = sig.bind(**kwargs)
+    bound = _bind_arguments(sig, kwargs)
     bound.apply_defaults()
     local_env = dict(bound.arguments)
     _coerce_tool_arguments(rt, proc, local_env)
@@ -52,7 +54,7 @@ def _python_callable_argument_validator(
         type_hints = {}
 
     def validate(arguments: Mapping[str, Any]) -> dict[str, Any]:
-        bound = signature.bind(**arguments)
+        bound = _bind_arguments(signature, arguments)
         bound.apply_defaults()
         validated: dict[str, Any] = {}
         for name, parameter in signature.parameters.items():
@@ -83,7 +85,7 @@ def _coerce_tool_arguments(
 
     for param_name in proc.params:
         if param_name not in kwargs:
-            raise TypeError(f"Missing parameter: {param_name}")
+            raise ToolArgumentError(f"Missing parameter: {param_name}")
 
         kedi_type = KediType.from_node(
             param_exprs.get(param_name),
@@ -100,4 +102,15 @@ def _coerce_tool_arguments(
             else:
                 kwargs[param_name] = kedi_type.validate(rt, None, provided)
         except ValueError as exc:
-            raise TypeError(f"Parameter '{param_name}' does not match annotated type") from exc
+            raise ToolArgumentError(
+                f"Parameter '{param_name}' does not match annotated type"
+            ) from exc
+
+
+def _bind_arguments(
+    signature: inspect.Signature, arguments: Mapping[str, Any]
+) -> inspect.BoundArguments:
+    try:
+        return signature.bind(**arguments)
+    except TypeError as exc:
+        raise ToolArgumentError(str(exc)) from exc
