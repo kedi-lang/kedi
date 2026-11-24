@@ -21,10 +21,12 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic_ai import format_as_xml
 from pydantic_core import to_jsonable_python
 
-from ...agent_profile import AgentProfile, McpServerSpec, McpTransport
+from ...agent_profile import AgentProfile, McpTransport
 from ...dynamic_models import build_dynamic_model
+from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
 from ..approvals.policy import ToolApprovalDenied
+from ..codemode import materialize_mcp_tool_specs
 from ..hooks import (
     HookDeniedError,
     HookExecutionError,
@@ -39,13 +41,9 @@ from ..hooks import (
 )
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..output_schema import output_model_fields
-from ..telemetry import (
-    mcp_initialization_span,
-    mcp_server_name,
-    mcp_transport_name,
-)
+from ..tools.execution import with_approval
 from ..tools.scope import ToolScope
-from ..tools.specs import ToolSpec
+from ..tools.specs import ToolSpec, tool_approval_policy
 
 
 class BrowserModelBridge(Protocol):
@@ -67,37 +65,30 @@ class WebGPUInstrumentation(Protocol):
 
 @dataclass(frozen=True)
 class _RuntimeTool:
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-    return_schema: dict[str, Any] | None
-    fn: Any
+    spec: ToolSpec
+    origin: ToolOrigin
+
+    @property
+    def name(self) -> str:
+        return self.spec.name
+
+    @property
+    def description(self) -> str:
+        return self.spec.description or ""
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return self.spec.json_schema or {"type": "object", "properties": {}}
+
+    @property
+    def return_schema(self) -> dict[str, Any] | None:
+        return self.spec.return_schema
 
     async def call(self, arguments: dict[str, Any]) -> Any:
-        result = self.fn(**arguments)
+        result = self.spec.fn(**arguments)
         if inspect.isawaitable(result):
             result = await result
         return result
-
-
-@dataclass(frozen=True)
-class _McpRuntimeTool:
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-    return_schema: dict[str, Any] | None
-    client: Any
-
-    async def call(self, arguments: dict[str, Any]) -> Any:
-        result = await self.client.call_tool(self.name, arguments)
-        if result.isError:
-            raise RuntimeError(_mcp_result_text(result))
-        if result.structuredContent is not None:
-            return result.structuredContent
-        return _mcp_result_text(result)
-
-
-BrowserTool = _RuntimeTool | _McpRuntimeTool
 
 
 WEBGPU_SETTING_KEYS = frozenset(
@@ -362,7 +353,7 @@ class WebGPUAdapter(HookRegistrationMixin):
         self,
         stack: AsyncExitStack,
         profile: AgentProfile,
-    ) -> list[BrowserTool]:
+    ) -> list[_RuntimeTool]:
         if self._allowed_mcp_transports is not None:
             disallowed = {
                 spec.transport
@@ -372,18 +363,16 @@ class WebGPUAdapter(HookRegistrationMixin):
             if disallowed:
                 names = ", ".join(sorted(disallowed))
                 raise ValueError(f"WebGPUAdapter does not allow {names} MCP transport")
-        tools: list[BrowserTool] = [
-            _RuntimeTool(
-                name=tool.name,
-                description=tool.description or "",
-                input_schema=tool.json_schema or {"type": "object", "properties": {}},
-                return_schema=tool.return_schema,
-                fn=tool.fn,
-            )
-            for tool in self.scoped_tools
-            if isinstance(tool, ToolSpec)
+        tools = [
+            _RuntimeTool(tool, "kedi") for tool in self.scoped_tools if isinstance(tool, ToolSpec)
         ]
-        tools.extend(await _mcp_tools(stack, profile.mcp_servers, self.shortname))
+        # MCP tools bypass Kedi's tool wrappers, so they get the same approval boundary here.
+        for spec in await materialize_mcp_tool_specs(
+            stack, profile.mcp_servers, adapter_shortname=self.shortname
+        ):
+            policy = tool_approval_policy(spec, profile.approval)
+            spec = with_approval(spec, policy=policy, adapter_shortname=self.shortname)
+            tools.append(_RuntimeTool(spec, "mcp"))
         names = [tool.name for tool in tools]
         if len(names) != len(set(names)):
             raise ValueError("Tool names must be unique within one WebGPU agent run")
@@ -392,7 +381,7 @@ class WebGPUAdapter(HookRegistrationMixin):
     async def _execute_tool_call(
         self,
         response: Mapping[str, Any],
-        tools: Sequence[BrowserTool],
+        tools: Sequence[_RuntimeTool],
     ) -> tuple[str, bool, list[dict[str, Any]]]:
         name = response.get("name")
         arguments = response.get("arguments", {})
@@ -404,23 +393,7 @@ class WebGPUAdapter(HookRegistrationMixin):
         tool = next((candidate for candidate in tools if candidate.name == name), None)
         if tool is None:
             raise ValueError(f"Browser model requested unknown tool: {name!r}")
-        spec = next(
-            (
-                candidate
-                for candidate in self.scoped_tools
-                if isinstance(candidate, ToolSpec) and candidate.name == name
-            ),
-            None,
-        )
-        origin: ToolOrigin = "kedi" if spec is not None else "mcp"
-        if spec is None:
-            spec = ToolSpec(
-                fn=lambda **_kwargs: None,
-                name=name,
-                description=tool.description,
-                json_schema=tool.input_schema,
-                metadata={"source": "mcp"},
-            )
+        spec, origin = tool.spec, tool.origin
         final_arguments = arguments
         try:
             final_arguments = await dispatch_pre_tool_use(
@@ -432,11 +405,11 @@ class WebGPUAdapter(HookRegistrationMixin):
                 native_tool_name=name,
             )
         except (HookDeniedError, ToolApprovalDenied) as exc:
-            content = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            content = {"ok": False, "error": _tool_error(exc)}
         except HookExecutionError:
             raise
         except Exception as exc:  # argument validation is not tool execution
-            content = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            content = {"ok": False, "error": _tool_error(exc)}
         else:
             started = monotonic()
             try:
@@ -463,7 +436,7 @@ class WebGPUAdapter(HookRegistrationMixin):
                 )
                 if not isinstance(exc, Exception):
                     raise
-                content = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                content = {"ok": False, "error": _tool_error(exc)}
             else:
                 await dispatch_post_tool_use(
                     spec,
@@ -501,7 +474,7 @@ class WebGPUAdapter(HookRegistrationMixin):
         )
 
 
-def _tool_contract(tool: BrowserTool) -> dict[str, Any]:
+def _tool_contract(tool: _RuntimeTool) -> dict[str, Any]:
     return {
         "name": tool.name,
         "description": tool.description,
@@ -619,78 +592,16 @@ def _schema_type_name(schema: Mapping[str, Any], root_schema: Mapping[str, Any])
     return str(schema_type or schema.get("title") or "value")
 
 
-def _mentioned_tools(template: str, tools: Sequence[BrowserTool]) -> tuple[str, ...]:
+def _mentioned_tools(template: str, tools: Sequence[_RuntimeTool]) -> tuple[str, ...]:
     return tuple(
         tool.name for tool in tools if re.search(rf"(?<!\w){re.escape(tool.name)}(?!\w)", template)
     )
 
 
-async def _mcp_tools(
-    stack: AsyncExitStack,
-    specs: Sequence[McpServerSpec],
-    adapter_shortname: str = "webgpu",
-) -> list[_McpRuntimeTool]:
-    if not specs:
-        return []
-    from fastmcp import Client
-
-    tools: list[_McpRuntimeTool] = []
-    for index, spec in enumerate(specs):
-        with mcp_initialization_span(
-            adapter_shortname=adapter_shortname,
-            server_name=mcp_server_name(command=spec.command, url=spec.url, index=index),
-            transport=mcp_transport_name(spec.transport),
-        ) as active:
-            client = Client(_fastmcp_config(spec, index))
-            await stack.enter_async_context(client)
-            discovered = await client.list_tools()
-            for tool in discovered:
-                tools.append(
-                    _McpRuntimeTool(
-                        name=tool.name,
-                        description=tool.description or "",
-                        input_schema=tool.inputSchema,
-                        return_schema=tool.outputSchema,
-                        client=client,
-                    )
-                )
-            active.set_attribute("kedi.mcp.tool_count", len(discovered))
-            active.add_event(
-                "mcp tools discovered",
-                {"kedi.mcp.tool_count": len(discovered)},
-            )
-    return tools
-
-
-def _fastmcp_config(spec: McpServerSpec, index: int) -> dict[str, Any]:
-    server: dict[str, Any]
-    if spec.transport == "stdio":
-        server = {
-            "command": spec.command,
-            "args": list(spec.args),
-        }
-        if spec.env is not None:
-            server["env"] = spec.env
-    else:
-        server = {
-            "transport": "sse" if spec.transport == "sse" else "streamable-http",
-            "url": spec.url,
-        }
-        if spec.headers is not None:
-            server["headers"] = spec.headers
-    return {"mcpServers": {f"kedi_webgpu_{index}": server}}
-
-
-def _mcp_result_text(result: Any) -> str:
-    from mcp.types import TextContent
-
-    parts: list[str] = []
-    for item in result.content:
-        if isinstance(item, TextContent):
-            parts.append(item.text)
-        else:
-            parts.append(json.dumps(item.model_dump(mode="json")))
-    return "\n".join(parts)
+def _tool_error(exc: BaseException) -> str:
+    # str() of a KediExecutionError renders a Kedi stack trace; the model needs the message.
+    message = exc.message if isinstance(exc, KediExecutionError) else str(exc)
+    return f"{type(exc).__name__}: {message}"
 
 
 def _output_adapter(

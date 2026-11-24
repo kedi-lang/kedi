@@ -43,11 +43,11 @@ def _tool_spec(client: Any, tool: Any) -> ToolSpec:
     name = tool.name
 
     async def call(**arguments: Any) -> Any:
-        result = await client.call_tool(name, arguments)
-        if result.isError:
+        result = await client.call_tool(name, arguments, raise_on_error=False)
+        if result.is_error:
             raise RuntimeError(_mcp_result_text(result))
-        if result.structuredContent is not None:
-            return result.structuredContent
+        if result.structured_content is not None:
+            return result.structured_content
         return _mcp_result_text(result)
 
     call.__name__ = name
