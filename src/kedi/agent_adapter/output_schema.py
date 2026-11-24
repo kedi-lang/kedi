@@ -53,7 +53,9 @@ def output_model_fields(
 
 
 def output_value(result: Any, name: str, default: Any) -> Any:
-    """Read one output by its Kedi name, following the aliases of ``output_model_fields``."""
+    """Read one output by its Kedi name from a mapping or an ``output_model_fields`` model."""
+    if isinstance(result, Mapping):
+        return result.get(name, default)
     if isinstance(result, BaseModel):
         for field_name, info in type(result).model_fields.items():
             if info.alias == name:
