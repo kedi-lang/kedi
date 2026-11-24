@@ -16,8 +16,10 @@ from ..ast import (
     GroupStmt,
     IfStmt,
     LoopStmt,
+    ProcDefStmt,
     Stmt,
     TemplateBlock,
+    TypeDefStmt,
 )
 from .environment import ScopeFrame, assert_not_cli_args_identifier
 from .evaluation import evaluate_python_inline, render_prompt_parts
@@ -258,6 +260,7 @@ def run_map_continuations(
                 attributes={"state": "scheduled"},
             )
             futures: list[Any] = []
+            serialized = defines_scoped_names(stmt.map_body)
 
             def execute(index: int, frame: ScopeFrame) -> None:
                 add_counter(
@@ -287,6 +290,14 @@ def run_map_continuations(
                     lambda frame=frame, index=index: execute(index, frame),
                 )
                 futures.append(future)
+                if serialized:
+                    # Definitions belong to the enclosing invocation, not each worker.
+                    # Keep their publication ordered, but still drain later iterations
+                    # if an earlier one fails.
+                    try:
+                        rt._engine.wait(future)
+                    except BaseException:  # noqa: BLE001 - surfaced after draining the stage
+                        pass
             wait_started_at = perf_counter()
             try:
                 await_map_futures(futures)
@@ -297,3 +308,27 @@ def run_map_continuations(
                     max(0.0, perf_counter() - wait_started_at),
                     unit="s",
                 )
+
+
+def defines_scoped_names(statements: list[Stmt]) -> bool:
+    """Find declarations that mutate the enclosing procedure/type environment."""
+    for statement in statements:
+        if isinstance(statement, (ProcDefStmt, TypeDefStmt)):
+            return True
+        if isinstance(statement, GroupStmt):
+            body = statement.form.body if statement.form is not None else statement.body
+            if defines_scoped_names(body):
+                return True
+        elif isinstance(statement, IfStmt):
+            if defines_scoped_names(statement.body) or defines_scoped_names(
+                statement.else_body or []
+            ):
+                return True
+        elif isinstance(statement, LoopStmt):
+            if defines_scoped_names(statement.body) or defines_scoped_names(
+                statement.map_body or []
+            ):
+                return True
+        elif isinstance(statement, ConditionalLoopStmt) and defines_scoped_names(statement.body):
+            return True
+    return False

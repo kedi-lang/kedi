@@ -61,6 +61,48 @@ def test_claimed_bytes_remain_charged_until_confirmed_then_capacity_is_reusable(
     assert control.delivered == (receipts[0].message_id,)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_deferred_native_delivery_keeps_claims_until_observation_or_retry(
+    confirmed: bool,
+) -> None:
+    control = LiveInput("worker")
+    control.configure(input=True)
+    receipt = control.admit("Updated evidence", sender_id="parent")
+    enqueued, release = asyncio.Event(), asyncio.Event()
+    batches: list[tuple[AgentInput, ...]] = []
+
+    async def deliver(items: tuple[AgentInput, ...]) -> bool:
+        batches.append(items)
+        enqueued.set()
+        return False
+
+    async def operation() -> str:
+        await release.wait()
+        return "result"
+
+    task = asyncio.create_task(controlled_attempt(control, operation(), deliver=deliver))
+    try:
+        await asyncio.wait_for(enqueued.wait(), 1)
+        assert not control.pending
+        assert control.waiting_input
+        assert not control.delivered
+        assert not control.try_finish(control.revision, lambda: pytest.fail("unobserved input"))
+        if confirmed:
+            control.confirm_contents((batches[0][0].render(),))
+            assert control.delivered == (receipt.message_id,)
+            assert not control.waiting_input
+        release.set()
+        assert await asyncio.wait_for(task, 1) == "result"
+        assert len(batches) == 1
+        if not confirmed:
+            control.begin_attempt()
+            assert control.take_pending() == batches[0]
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 def test_input_events_report_delivery_and_undelivered_close_without_payload_loss() -> None:
     events: list[tuple[str, InputPhase]] = []
 

@@ -6,6 +6,10 @@ Mock-backed integration tests can't exercise real rate limits, so the controller
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import Future
+
 import pytest
 
 from kedi.engine import (
@@ -192,3 +196,95 @@ def test_engine_does_not_retry_terminal_error() -> None:
 def test_engine_success_passes_through() -> None:
     eng = _engine()
     assert eng.schedule([], lambda: 42).result() == 42
+
+
+@pytest.mark.parametrize("error", [ValueError("invalid"), asyncio.CancelledError(), SystemExit(2)])
+def test_terminal_failures_do_not_open_the_backend_breaker(error: BaseException) -> None:
+    engine = JobManagerEngine(max_workers=1, breaker_threshold=1)
+
+    def fail() -> None:
+        raise error
+
+    try:
+        for _ in range(2):
+            with pytest.raises(type(error)):
+                engine.schedule([], fail).result(timeout=2)
+        assert engine.schedule([], lambda: "ready").result(timeout=2) == "ready"
+    finally:
+        engine.shutdown()
+
+
+def test_control_exceptions_are_not_retryable_even_with_an_http_status() -> None:
+    class StopRun(BaseException):
+        status_code = 429
+
+    assert not RetryPolicy().is_retryable(StopRun())
+
+
+def test_first_retry_uses_the_base_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr("kedi.engine.random.uniform", lambda _low, high: high)
+    engine = JobManagerEngine(max_workers=1, base_delay=0.25, _sleep=delays.append)
+    calls = 0
+
+    def job() -> str:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise RateLimitError()
+        return "ready"
+
+    try:
+        assert engine.schedule([], job).result(timeout=2) == "ready"
+        assert delays == [0.25, 0.5]
+    finally:
+        engine.shutdown()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_stolen_work_reuses_the_workers_permit(
+    monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    engine = JobManagerEngine(max_workers=1, initial_concurrency=1)
+    started = threading.Event()
+    queued = threading.Event()
+    children: list[Future[str]] = []
+    acquire = engine.limiter.acquire
+    acquisitions = 0
+
+    def checked_acquire() -> None:
+        nonlocal acquisitions
+        # Fail deterministically instead of leaving a deadlocked worker on regression.
+        assert engine.limiter._inflight == 0, "nested AIMD permit"
+        acquisitions += 1
+        acquire()
+
+    monkeypatch.setattr(engine.limiter, "acquire", checked_acquire)
+
+    def parent() -> str:
+        started.set()
+        assert queued.wait(2)
+        return engine.wait(children[0])
+
+    def child() -> str:
+        if fails:
+            raise ValueError("child failed")
+        return "child result"
+
+    try:
+        result = engine.schedule([], parent)
+        assert started.wait(2)
+        children.append(engine.schedule([], child))
+        queued.set()
+        if fails:
+            with pytest.raises(ValueError, match="child failed"):
+                result.result(timeout=2)
+        else:
+            assert result.result(timeout=2) == "child result"
+        assert acquisitions == 1
+        assert engine.limiter._inflight == 0
+        assert engine.schedule([], lambda: "next").result(timeout=2) == "next"
+        assert acquisitions == 2
+    finally:
+        queued.set()
+        engine.shutdown()

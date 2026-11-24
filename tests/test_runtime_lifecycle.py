@@ -71,3 +71,19 @@ def test_close_rejects_new_invocations_while_joining_admitted_sync_work() -> Non
         await runtime.aclose()
 
     asyncio.run(scenario())
+
+
+def test_root_aclose_closes_every_module_runtime_before_raising() -> None:
+    # #214 2.5: a failing root lifecycle close must not leave imported module runtimes open.
+    root = compile_program(parse_program("= `1`\n"))
+    other = compile_program(parse_program("= `2`\n"))
+    other.module_name = "other"
+    root._module_runtimes["other"] = other
+
+    async def fail() -> None:
+        raise RuntimeError("root close failed")
+
+    root._lifecycle.aclose = fail  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="root close failed"):
+        asyncio.run(root.aclose())
+    assert other.artifacts._closed

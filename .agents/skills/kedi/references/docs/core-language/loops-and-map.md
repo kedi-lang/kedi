@@ -109,6 +109,13 @@ Parallel map continuations may overlap. Source-order side effects and atomic
 read-modify-write operations are not implied: shared aggregates must use
 operations or synchronization appropriate for the active execution engine.
 
+A map body that defines a procedure or Kedi type executes its continuations in
+source order, even with a parallel engine. The same applies to declarations
+inside nested branches, loops, and active forms: these names belong to the
+enclosing invocation and cannot be published concurrently. Define reusable
+procedures and types before the map to retain parallel continuations.
+Failures still drain the remaining iterations before being raised.
+
 Kedi accepts one map stage on an immediately preceding
 binder-based loop. It has no binder and creates no implicit output collection.
 Orphan maps, maps attached to conditional loops, and chained maps are parse

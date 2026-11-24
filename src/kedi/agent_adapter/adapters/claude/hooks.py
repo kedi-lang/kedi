@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from time import monotonic
 from typing import Any, Mapping, Sequence
 
@@ -8,9 +11,10 @@ from kedi.agent_adapter.adapters.claude.tools import (
     _claude_tool_call_input,
     _claude_tool_specs_by_native_name,
 )
-from kedi.agent_adapter.approvals.policy import ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalCancelled, ApprovalPolicy
 from kedi.agent_adapter.hooks import (
     HookDeniedError,
+    HookExecutionError,
     ToolOrigin,
     current_hook_dispatcher,
     dispatch_post_tool_use,
@@ -22,6 +26,60 @@ from kedi.agent_adapter.hooks import (
 from kedi.agent_adapter.tools.execution import resolve_tool_arguments_async
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
+from kedi.run_budget import RunBudgetExceeded
+
+_FATAL_HOOK_ERRORS = (HookExecutionError, ApprovalCancelled, RunBudgetExceeded)
+_fatal_hook_error: ContextVar[list[Exception] | None] = ContextVar(
+    "kedi_claude_fatal_hook_error", default=None
+)
+
+
+@contextmanager
+def fatal_hook_errors() -> Generator[Callable[[], None], None, None]:
+    errors: list[Exception] = []
+    token = _fatal_hook_error.set(errors)
+
+    def check() -> None:
+        if errors:
+            raise errors[0]
+
+    try:
+        try:
+            yield check
+        except Exception:
+            check()
+            raise
+        else:
+            check()
+    finally:
+        _fatal_hook_error.reset(token)
+
+
+def _claude_stop_hook(error: Exception) -> dict[str, Any]:
+    errors = _fatal_hook_error.get()
+    if errors is None:
+        raise error
+    if not errors:
+        errors.append(error)
+    return {
+        "continue_": False,
+        "stopReason": str(errors[0]),
+    }
+
+
+def _fatal_hook_guard(
+    callback: Callable[[Any, str | None, Any], Awaitable[dict[str, Any]]],
+) -> Callable[[Any, str | None, Any], Awaitable[dict[str, Any]]]:
+    async def guarded(data: Any, call_id: str | None, context: Any) -> dict[str, Any]:
+        errors = _fatal_hook_error.get()
+        if errors:
+            return _claude_stop_hook(errors[0])
+        try:
+            return await callback(data, call_id, context)
+        except _FATAL_HOOK_ERRORS as exc:
+            return _claude_stop_hook(exc)
+
+    return guarded
 
 
 def _with_kedi_approval_hook(
@@ -142,6 +200,8 @@ def _claude_pre_tool_use_hook(
                     )
         except HookDeniedError as exc:
             return _claude_hook_deny(str(exc))
+        except _FATAL_HOOK_ERRORS:
+            raise
         except Exception as exc:
             return _claude_hook_deny(f"Kedi rejected tool {tool.name!r}: {exc}")
 
@@ -155,7 +215,7 @@ def _claude_pre_tool_use_hook(
             }
         }
 
-    return decide
+    return _fatal_hook_guard(decide)
 
 
 def _claude_post_tool_use_hook(
@@ -182,7 +242,7 @@ def _claude_post_tool_use_hook(
         )
         return {}
 
-    return observe
+    return _fatal_hook_guard(observe)
 
 
 def _claude_post_tool_use_failure_hook(
@@ -213,7 +273,7 @@ def _claude_post_tool_use_failure_hook(
         )
         return {}
 
-    return observe
+    return _fatal_hook_guard(observe)
 
 
 def _claude_hook_tool(

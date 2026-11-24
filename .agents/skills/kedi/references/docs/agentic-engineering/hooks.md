@@ -196,6 +196,13 @@ module can be restored; lambdas, local functions, closures, bound methods, and
 
 ## Adapter Support
 
+A handler execution failure is terminal, not a recoverable tool error asking
+the model to try again. Approval cancellation and run-budget exhaustion also
+stop the run. This differs from an intentional pre-tool denial, which can be
+returned to the model for recovery. On Claude, fatal hook failures request a
+native SDK stop and are re-raised with their original error when control
+returns to Kedi; they are not reduced to a tool-denial message.
+
 | Adapter | Prompt | Pre tool | Post tool | Tool failure | Result failure | Tool origins |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
 | Pydantic AI | yes | yes | yes | yes | yes | Kedi, MCP, adapter-native |
