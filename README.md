@@ -241,7 +241,7 @@ Media works with the Pydantic AI and LangChain adapters on OpenAI, Anthropic,
 Google Gemini, and AWS Bedrock. Kedi rejects an attachment the provider cannot
 take before calling the model.
 
-[Media input](https://docs.kedi-lang.org/core-language/media-input/)
+[Multimodal input](https://docs.kedi-lang.org/core-language/multimodal-input/)
 
 ## Let Jev Make the Decision
 

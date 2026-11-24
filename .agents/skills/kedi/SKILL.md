@@ -56,6 +56,7 @@ Use explicit annotations for non-string procedure parameters and returns; omitte
 | Task/await, task groups, live input, dynamic workflows, child results | [Orchestration](references/orchestration.md) |
 | Imports, exports, package manifests, filesystem and bundled modules | [Modules](references/modules.md) |
 | Python query/bind, runtime ownership, sessions, executor integration | [Python embedding](references/python.md) |
+| Write a custom agent adapter or harness integration | [Adapter Development](references/docs/adapter-development/index.md) |
 | History, concurrency, artifacts, caching, budgets, diagnostics | [Runtime](references/runtime.md) |
 | Unit tests, evaluation, prompt optimization, code generation | [Validation](references/validation.md) |
 | Working recipes and their exact validation level | [Examples](references/examples.md) |

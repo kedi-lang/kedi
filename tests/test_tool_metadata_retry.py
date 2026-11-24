@@ -20,6 +20,7 @@ from kedi.agent_adapter.tools.conversion import (
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
+from kedi.agent_adapter.tools.errors import ToolArgumentError
 from kedi.agent_adapter.tools.retry import ToolRetryPolicy, tool_retry_policy
 from kedi.agent_profile import HookSettings
 from kedi.errors import KediExecutionError, KediLoopIterationLimitError, KediTypeExecutionError
@@ -266,7 +267,7 @@ def test_native_tool_argument_validation_happens_once_before_retry(
 """
     )
 
-    with pytest.raises(TypeError):
+    with pytest.raises(ToolArgumentError):
         spec.fn()
     assert validations == 1
 
@@ -383,7 +384,7 @@ def test_native_retry_policy_is_frozen_at_definition_before_first_exposure() -> 
 
 def test_untyped_native_tool_arguments_remain_strings_with_prevalidated_execution() -> None:
     _, _, spec = _native_spec("@lookup(value) -> str:\n    = <value>\n")
-    with pytest.raises(TypeError, match="Parameter 'value'"):
+    with pytest.raises(ToolArgumentError, match="Parameter 'value'"):
         spec.fn(value=123)
     assert spec.fn(value="valid") == "valid"
 

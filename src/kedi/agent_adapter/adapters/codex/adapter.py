@@ -47,7 +47,10 @@ from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
-from kedi.agent_adapter.tools.execution import arguments_target_secret_file, with_approval
+from kedi.agent_adapter.tools.execution import (
+    arguments_target_secret_file,
+    with_approval_policies,
+)
 from kedi.agent_adapter.tools.scope import ToolScope
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
@@ -490,7 +493,7 @@ class CodexAdapter(HookRegistrationMixin):
             projected_tools = codemode_bridge.control_tools
         else:
             projected_tools = tuple(
-                _tool_with_approval_policies(tool, policies, self.shortname)
+                with_approval_policies(tool, policies, adapter_shortname=self.shortname)
                 for tool in self.scoped_tools
             )
         system = append_codemode_instructions(
@@ -718,21 +721,6 @@ def _json_object_result(result: CodexTurnResult) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise CodexAppServerProtocolError("Codex subagent structured output must be an object.")
     return value
-
-
-def _tool_with_approval_policies(
-    tool: ToolSpec,
-    policies: Sequence[ApprovalPolicy | None],
-    adapter_shortname: str,
-) -> ToolSpec:
-    guarded = tool
-    for policy in reversed(tuple(policies)):
-        guarded = with_approval(
-            guarded,
-            policy=policy,
-            adapter_shortname=adapter_shortname,
-        )
-    return guarded
 
 
 def _codex_native_approval_handler(

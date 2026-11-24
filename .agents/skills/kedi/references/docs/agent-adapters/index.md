@@ -102,4 +102,4 @@ GEPA still uses DSPy internally and works with the selected runtime adapter.
 **Extending Kedi**
 
 - [Custom Adapters](custom-adapters.md)
-- [Artifact Integration](artifact-contract.md)
+- [Adapter Development](../adapter-development/index.md)

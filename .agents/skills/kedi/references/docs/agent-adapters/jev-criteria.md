@@ -82,7 +82,7 @@ model IDs, settings, and standalone model package APIs are unchanged.
   Jev chooses among them. These are extraction, not arbitrary text generation.
 - Nullable extraction without candidates returns `None` without a provider request.
 - General unconstrained strings, free-form invokes, arbitrary numeric extraction,
-  media input, recursive schemas, and arbitrary arrays are unsupported.
+  multimodal input, recursive schemas, and arbitrary arrays are unsupported.
 - Independent fields share one request. Dependent decisions need separate calls.
 - Unsupported schemas and malformed provider output raise errors; they are not
   silently converted to false, repaired, or sent to another model.

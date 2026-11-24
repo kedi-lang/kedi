@@ -1,4 +1,4 @@
-# Media Input
+# Multimodal Input
 
 Images, audio, video and documents reach a model by reference. A prompt writes
 `<<name>>`: the text gets the name, and the value is attached to the model's

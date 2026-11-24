@@ -65,7 +65,7 @@ See [`filesystem`](filesystem.md) for the full table.
 `media` exports the loaders `image`, `audio`, `video` and `document`, `save`,
 which writes a media value to a file, and the types `Media`, `Image`, `Audio`,
 `Video` and `Document`. See
-[Media Input](../core-language/media-input.md).
+[Multimodal Input](../core-language/multimodal-input.md).
 
 ## `sandbox`
 

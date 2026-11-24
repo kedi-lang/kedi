@@ -103,6 +103,10 @@ def terminal_tool_failure(tool: ToolSpec, exc: Exception) -> TerminalToolFailure
 _DOMAIN_ERRORS = (ValueError, LookupError, OSError)
 
 
+class ToolArgumentError(ValueError):
+    """Tool call arguments that do not fit the tool's signature; the model can correct them."""
+
+
 class RequiredToolCallError(RuntimeError):
     """Raised when an adapter returns before a required tool completes."""
 

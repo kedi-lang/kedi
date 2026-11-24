@@ -12,6 +12,7 @@ from kedi.agent_adapter import (
     kedi_procedure_to_pydantic_tool,
     kedi_program_to_pydantic_tools,
 )
+from kedi.agent_adapter.tools.errors import ToolArgumentError
 from kedi.agent_adapter.tools.validation import _coerce_tool_arguments
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import ProcedureDef
@@ -214,7 +215,7 @@ def test_kedi_tool_argument_coercion_covers_missing_none_model_and_invalid_paths
     _coerce_tool_arguments(rt, ProcedureDef(name="plain", params=["x"]), {"x": "value"})
 
     typed = ProcedureDef(name="typed", params=["x"], param_type_annotations={"x": "int"})
-    with pytest.raises(TypeError, match="Missing parameter: x"):
+    with pytest.raises(ToolArgumentError, match="Missing parameter: x"):
         _coerce_tool_arguments(rt, typed, {})
-    with pytest.raises(TypeError, match="Parameter 'x' does not match annotated type"):
+    with pytest.raises(ToolArgumentError, match="Parameter 'x' does not match annotated type"):
         _coerce_tool_arguments(rt, typed, {"x": "not-an-int"})

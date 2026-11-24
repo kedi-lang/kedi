@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextvars import copy_context
 from dataclasses import replace
 from functools import cache, wraps
@@ -210,6 +210,19 @@ def with_approval(
         return tool.fn(**final_kwargs)
 
     return replace(tool, fn=approved_tool)
+
+
+def with_approval_policies(
+    tool: ToolSpec,
+    policies: Sequence[ApprovalPolicy | None],
+    *,
+    adapter_shortname: str | None,
+) -> ToolSpec:
+    """Require every policy to approve a call, the first policy deciding first."""
+
+    for policy in reversed(tuple(policies)):
+        tool = with_approval(tool, policy=policy, adapter_shortname=adapter_shortname)
+    return tool
 
 
 def _record_artifact_admission_failure(

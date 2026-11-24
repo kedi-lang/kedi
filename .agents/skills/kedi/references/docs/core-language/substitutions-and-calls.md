@@ -188,7 +188,7 @@ Does the change follow spec? Check spec section by section. ...
   `<procedure>_result_2`, ... within the prompt.
 - Each content is attached once; every mention writes `<<...>>` again and gets
   only the ID.
-- Media go as native parts ([Media Input](media-input.md)). Any other value goes
+- Media go as native parts ([Multimodal Input](multimodal-input.md)). Any other value goes
   as its text form, the text `<value>` renders: scalars as `text/plain`, lists,
   tuples and dicts as JSON (`application/json`). Models, `~Type` values and
   dataclasses are accepted too, written as JSON by their own schema; a set of

@@ -154,4 +154,4 @@ generated table means at least one hook event is supported.
 A custom `AgentAdapter` declares `kind`, `shortname`, and
 `AdapterCapabilities`, then implements async/sync structured production and raw
 invocation. Set an unsupported capability to false/`None`; never advertise a
-surface and silently ignore it. See [Custom Adapters](../agent-adapters/custom-adapters.md).
+surface and silently ignore it. See the [Capability Reference](../adapter-development/capabilities.md).
