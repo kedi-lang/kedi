@@ -646,14 +646,18 @@ class LangChainAdapter(HookRegistrationMixin):
             finally:
                 if invocation_observer() is not None and run_state.native_usage.requests:
                     report_invocation(
-                        replace(run_state.usage, requests=run_state.native_usage.requests)
+                        replace(
+                            run_state.usage,
+                            requests=run_state.native_usage.requests,
+                            tool_calls=run_state.native_usage.tool_calls,
+                        )
                     )
             self._capture_conversation_messages(result, run_state=run_state, response_complete=True)
             if invocation_observer() is not None and not run_state.usage.requests:
                 report_invocation(
-                    _langchain_invocation_usage(
-                        result,
-                        input_messages=payload.get("messages"),
+                    replace(
+                        _langchain_invocation_usage(result, input_messages=payload.get("messages")),
+                        tool_calls=run_state.native_usage.tool_calls,
                     )
                 )
             if resolver is not None:
