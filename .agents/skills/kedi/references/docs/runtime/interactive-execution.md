@@ -125,6 +125,13 @@ fragment sources and digests so procedures, types, profiles, tracebacks, and
 source identities can be rebuilt before native values are installed. The
 document integrity hash, format version, and Kedi version are checked on load.
 
+Portable profiles preserve fallback models, run budgets, requirements and their
+source locations, capability instructions, nested capability definitions, and
+history-processing settings. History processors or conditions backed by Python
+callbacks are not portable and are rejected rather than silently removed.
+All five lifecycle hook events, including `post_tool_result_failure`, use the
+same import-addressability and trust checks described below.
+
 Portable mode rejects state that cannot be restored with equivalent semantics:
 
 - arbitrary Python callables, generators, open resources, concurrency

@@ -67,24 +67,44 @@ def send_input(
 
 
 async def stop_descendants(coordinator: SubagentCoordinator, run_id: str) -> None:
+    by_parent: dict[str | None, list[str]] = {}
+    for run in coordinator.runs.snapshot():
+        by_parent.setdefault(run.parent_run_id, []).append(run.run_id)
+    children: list[str] = []
+    pending = list(by_parent.get(run_id, ()))
+    while pending:
+        child_id = pending.pop()
+        children.append(child_id)
+        pending.extend(by_parent.get(child_id, ()))
     with coordinator._task_lock:
-        children = tuple(
-            child_id
-            for child_id in coordinator._tasks
-            if coordinator.runs.get(child_id).parent_run_id == run_id
+        controls = tuple(
+            control
+            for child_id in children
+            if (control := coordinator._controls.get(child_id)) is not None
         )
+    first_error: Exception | None = None
     for child_id in children:
-        coordinator.cancel(child_id)
-    cleanup = asyncio.gather(
-        *(coordinator.wait(child_id) for child_id in children), return_exceptions=True
-    )
+        try:
+            coordinator.cancel(child_id)
+        except Exception as exc:
+            first_error = first_error or exc
+
+    async def cleanup() -> None:
+        await asyncio.gather(
+            *(coordinator.wait(child_id) for child_id in children), return_exceptions=True
+        )
+        results = await asyncio.gather(
+            *(control.wait_quiescent() for control in controls), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
     try:
-        await asyncio.wait_for(cleanup, INTERRUPT_CLEANUP_SECONDS)
+        await asyncio.wait_for(cleanup(), INTERRUPT_CLEANUP_SECONDS)
     except asyncio.TimeoutError as exc:
         raise RuntimeError(
             "Subagent descendants did not stop; the parent task was not restarted"
         ) from exc
-    for child_id in children:
-        control = coordinator._controls.get(child_id)
-        if control is not None:
-            await control.wait_quiescent()
+    if first_error is not None:
+        raise first_error

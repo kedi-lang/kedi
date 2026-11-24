@@ -4,11 +4,14 @@ import asyncio
 import contextvars
 import inspect
 import json
+import os
+import signal
 import subprocess
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
+from io import StringIO
 from pathlib import Path
 from re import Pattern
 from threading import Event, Thread, current_thread
@@ -1377,8 +1380,9 @@ class _FakeProcess:
         running: bool = True,
         wait_timeouts: int = 0,
     ) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
+        self.stdout = None if stdout is None else StringIO("".join(stdout))
+        self.stderr = None if stderr is None else StringIO("".join(stderr))
+        self.pid = 2147483647
         self.stdin: Any = _FakeStdin() if stdin is None else stdin
         self.running = running
         self.terminated = False
@@ -1693,7 +1697,7 @@ def test_codex_late_notifications_do_not_recreate_finished_turns(
     assert client._turns == {}
 
 
-def test_codex_client_waiter_and_stop_process_edges() -> None:
+def test_codex_client_waiter_and_stop_process_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     client = CodexAppServerClient((sys.executable,))
     pending: Future[dict[str, Any]] = Future()
     done: Future[dict[str, Any]] = Future()
@@ -1717,6 +1721,12 @@ def test_codex_client_waiter_and_stop_process_edges() -> None:
     assert client._last_disconnect is None
 
     process = _FakeProcess(wait_timeouts=1)
+    if os.name == "posix":
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda _pid, sig: process.terminate() if sig == signal.SIGTERM else process.kill(),
+        )
     client._process = _as_popen(process)
     client._reader = current_thread()
     client._stderr_reader = None

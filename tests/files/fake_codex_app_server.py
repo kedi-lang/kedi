@@ -2,9 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+if child_pid_path := os.getenv("KEDI_CODEX_FAKE_CHILD_PID"):
+    subprocess.Popen(
+        (
+            sys.executable,
+            "-c",
+            "import os, signal, sys, time; from pathlib import Path; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)",
+            child_pid_path,
+        ),
+        stdin=subprocess.DEVNULL,
+    )
 
 
 def send(message: dict[str, Any]) -> None:

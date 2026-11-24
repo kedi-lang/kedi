@@ -34,9 +34,8 @@ class SequentialDispatchGate:
             try:
                 yield
             finally:
-                async with self._condition:
-                    self._exclusive = False
-                    self._condition.notify_all()
+                self._exclusive = False
+                await self._notify_waiters()
             return
 
         async with self._condition:
@@ -47,7 +46,19 @@ class SequentialDispatchGate:
         try:
             yield
         finally:
+            self._active_parallel -= 1
+            if self._active_parallel == 0:
+                await self._notify_waiters()
+
+    async def _notify_waiters(self) -> None:
+        async def notify() -> None:
             async with self._condition:
-                self._active_parallel -= 1
-                if self._active_parallel == 0:
-                    self._condition.notify_all()
+                self._condition.notify_all()
+
+        # Admission state is released synchronously; notification must survive
+        # cancellation while another task temporarily owns the condition lock.
+        notification = notify()
+        if self._condition.locked():
+            await asyncio.shield(notification)
+        else:
+            await notification

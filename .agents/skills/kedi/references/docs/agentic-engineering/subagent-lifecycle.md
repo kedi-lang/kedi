@@ -28,6 +28,16 @@ the selected direct child and returns `run_id`, `subagent`, `task_summary`, and
 Every ordinary delegation starts a fresh conversation. A failure raises instead
 of returning a success-shaped envelope with fabricated output.
 
+Cancelling a foreground `delegate_task` or `continue_subagent` call requests
+child cancellation and waits for cleanup, up to the cleanup deadline. Repeated
+cancellation does not bypass that wait. A child that cannot be confirmed stopped
+remains unresolved; it is not recorded as successfully cleaned up.
+
+This ownership rule does not apply to an observer of explicitly background
+work: cancelling `wait_subagent` does not cancel the child. Cancelling a
+deduplicated workflow follower also leaves the shared child running for the
+other callers.
+
 ## Background Handle
 
 With `background=True`, a supported adapter starts the child and returns a
@@ -81,6 +91,12 @@ Live tasks belong to a runtime and an event loop. A handle is not a portable
 job URL. Closing the runtime cancels and joins its owned children; it does not
 leave them executing as detached host processes. Finished handles are retained
 only within bounded retention.
+
+An interrupted or failed parent stops its entire descendant subtree, including
+children of a completed intermediate run, without cancelling sibling runs.
+Cleanup attempts every descendant even if one cancellation fails. Ancestor
+records needed to identify active descendants are retained until those
+descendants finish.
 
 Pydantic AI, LangChain, Claude and Codex support background lifecycle tools.
 See the [capability matrix](../reference/capability-matrix.md).

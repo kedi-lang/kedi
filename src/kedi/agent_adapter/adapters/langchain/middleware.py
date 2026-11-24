@@ -13,10 +13,15 @@ from kedi.agent_adapter.adapters.langchain.tools import (
     _langchain_external_tool_spec,
     _langchain_tool_error,
 )
-from kedi.agent_adapter.approvals.policy import ApprovalPolicy, ToolApprovalDenied
+from kedi.agent_adapter.approvals.policy import (
+    ApprovalCancelled,
+    ApprovalPolicy,
+    ToolApprovalDenied,
+)
 from kedi.agent_adapter.approvals.reason import accepts_tool_reason, split_tool_reason
 from kedi.agent_adapter.hooks import (
     HookDeniedError,
+    HookExecutionError,
     ToolOrigin,
     dispatch_post_tool_result_failure,
     dispatch_post_tool_use,
@@ -38,6 +43,8 @@ from kedi.agent_adapter.tools.specs import (
     tool_has_artifact_boundary,
 )
 from kedi.agent_profile import AgentProfile
+from kedi.errors import KediExecutionError
+from kedi.run_budget import RunBudgetExceeded
 
 
 def _langchain_cache_middleware(model: Any, *, enabled: bool) -> list[Any]:
@@ -117,9 +124,13 @@ def _langchain_approval_middleware(
                                 tool_reason_enabled=tool_reason,
                             )
             except (HookDeniedError, ToolApprovalDenied) as exc:
-                return _langchain_tool_error(tool_name, tool_call_id, str(exc))
+                return _langchain_tool_error(tool_name, tool_call_id, exc.message)
+            except (HookExecutionError, ApprovalCancelled, RunBudgetExceeded):
+                raise
             except Exception as exc:
-                return _langchain_tool_error(tool_name, tool_call_id, str(exc))
+                # str() of a KediExecutionError renders a Kedi stack trace; the model needs the message.
+                message = exc.message if isinstance(exc, KediExecutionError) else str(exc)
+                return _langchain_tool_error(tool_name, tool_call_id, message)
 
             final_request = request.override(
                 tool_call={

@@ -4,7 +4,7 @@ from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Generator, Mapping, Sequence, cast
 
-from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook
+from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook, fatal_hook_errors
 from kedi.agent_adapter.adapters.claude.messages import (
     _active_claude_hook_identities,
     _claude_invocation_usage,
@@ -244,10 +244,12 @@ class ClaudeAdapter(HookRegistrationMixin):
             with (
                 delegation_scope(self._subagent_failure_policy),
                 agent_event_run(self.shortname) as resolver,
+                fatal_hook_errors() as check_hooks,
             ):
 
                 def observe_message(message: Message) -> None:
                     nonlocal result, message_index
+                    check_hooks()
                     system_error = _claude_non_retryable_system_error(sdk, message)
                     if system_error is not None:
                         raise RuntimeError(system_error)
@@ -282,6 +284,7 @@ class ClaudeAdapter(HookRegistrationMixin):
 
                     result = await run_query(options, prompt, control, observe_message)
 
+                check_hooks()
                 if result is None:
                     raise RuntimeError("Claude Agent SDK did not return a result message.")
                 if bool(getattr(result, "is_error", False)):

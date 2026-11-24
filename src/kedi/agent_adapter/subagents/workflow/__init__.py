@@ -182,7 +182,7 @@ def dynamic_workflow_tool_spec(
             active_call = in_flight.get(salvage_key)
             if active_call is not None:
                 stats.deduplicated_calls += 1
-                return dict(await active_call)
+                return dict(await asyncio.shield(active_call))
 
             async def execute_child() -> dict[str, Any]:
                 async def invoke(*, task: str, final_schema: dict[str, Any] | None):

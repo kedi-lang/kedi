@@ -255,14 +255,14 @@ class KediRuntime:
 
         from kedi.agent_adapter.execution import _run_cleanups
 
-        await self._lifecycle.aclose()
         runtimes = tuple(
             dict.fromkeys(
                 (self, *self._module_runtimes.values()) if self._owns_module_runtimes else (self,)
             )
         )
+        # The root's lifecycle closes first; a failure there must not leave module runtimes open.
         cleanups: list[Callable[[], Awaitable[None] | None]] = [
-            runtime._lifecycle.aclose for runtime in runtimes if runtime is not self
+            runtime._lifecycle.aclose for runtime in runtimes
         ]
         for runtime in runtimes:
             cleanups.append(runtime._subagent_coordinator.aclose)

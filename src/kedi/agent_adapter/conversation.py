@@ -170,7 +170,11 @@ class ConversationState:
             raise RuntimeError("nested turns on the same conversation are not supported")
         active_ticket = ticket or self.reserve_turn()
         lane = lane_identity or adapter_shortname
-        context = self._begin_turn(active_ticket, adapter_shortname, lane)
+        try:
+            context = self._begin_turn(active_ticket, adapter_shortname, lane)
+        except BaseException:
+            self.cancel_turn(active_ticket)
+            raise
         self._sync_turn_local.active = True
         succeeded = False
         try:
@@ -220,7 +224,14 @@ class ConversationState:
         except asyncio.CancelledError as cancellation:
             self.cancel_turn(active_ticket)
             try:
-                context = await asyncio.shield(begin_task)
+                # A second cancellation must not abandon a turn already
+                # acquired by the worker before its context reached this task.
+                while not begin_task.done():
+                    try:
+                        await asyncio.shield(begin_task)
+                    except asyncio.CancelledError:
+                        continue
+                context = begin_task.result()
             except _ConversationTurnCancelled:
                 pass
             else:

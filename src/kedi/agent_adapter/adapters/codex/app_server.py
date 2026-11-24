@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
 from collections import deque
@@ -462,12 +463,18 @@ class CodexAppServerClient:
         with self._start_lock:
             if self._closed:
                 return
+            self._closed = True
             with self._state_lock:
                 retained_threads = tuple(self._retained_threads)
-            for thread_id in retained_threads:
-                with suppress(CodexAppServerError, TimeoutError):
-                    self.delete_thread(thread_id)
-            self._closed = True
+                self._retained_threads.clear()
+        deadline = time.monotonic() + 2
+        for thread_id in retained_threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            with suppress(CodexAppServerError, TimeoutError):
+                self._request_raw("thread/delete", {"threadId": thread_id}, timeout=remaining)
+        with self._start_lock:
             self._fail_waiters(CodexAppServerDisconnected("Codex App Server client closed."))
             self._stop_process()
             self._dynamic_executor.shutdown(wait=False, cancel_futures=True)
@@ -530,6 +537,8 @@ class CodexAppServerClient:
         if self._is_healthy():
             return
         with self._start_lock:
+            if self._closed:
+                raise CodexAppServerDisconnected("Codex App Server client is closed.")
             if self._is_healthy():
                 return
             self._stop_process()
@@ -561,6 +570,7 @@ class CodexAppServerClient:
                 text=True,
                 bufsize=1,
                 env=process_env,
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise ModuleNotFoundError(
@@ -993,6 +1003,8 @@ class CodexAppServerClient:
     def _mark_disconnected(
         self, process: subprocess.Popen[str], error: CodexAppServerDisconnected
     ) -> None:
+        if process is not self._process:
+            return
         with self._start_lock:
             if process is not self._process:
                 return
@@ -1025,19 +1037,35 @@ class CodexAppServerClient:
         if process.stdin is not None:
             with suppress(OSError):
                 process.stdin.close()
-        if process.poll() is None:
+        process.poll()
+        if os.name == "posix":
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+        elif process.poll() is None:
             with suppress(ProcessLookupError):
                 process.terminate()
+        if process.poll() is None:
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                with suppress(ProcessLookupError):
-                    process.kill()
-                with suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=2)
+                pass
+        # Descendants may keep the pipes open even after the root exits.
+        if os.name == "posix":
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        elif process.poll() is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+        if process.poll() is None:
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=2)
         for thread in (reader, stderr_reader):
             if thread is not None and thread is not current_thread():
                 thread.join(timeout=2)
+        for pipe in (process.stdout, process.stderr):
+            if pipe is not None:
+                with suppress(OSError):
+                    pipe.close()
 
     def _disconnect_error(self, message: str) -> CodexAppServerDisconnected:
         with self._state_lock:

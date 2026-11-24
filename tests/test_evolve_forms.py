@@ -514,3 +514,39 @@ def test_proposals_reach_imported_modules(tmp_path: Path) -> None:
         asyncio.run(runtime.aclose())
 
     assert "Answer q tersely." in model.prompts[0]
+
+
+@pytest.mark.parametrize("in_procedure", [False, True])
+@pytest.mark.parametrize("reads_capture", [False, True])
+def test_loop_map_forms_preserve_captures_only_when_the_continuation_reads_them(
+    in_procedure: bool, reads_capture: bool
+) -> None:
+    body = (
+        "[out: list[str]] = `[]`\n"
+        "> loop [item]: `items`:\n"
+        "  > evolve: draft:\n"
+        "    [plan] << Plan <item>.\n"
+        "> map:\n"
+        f"  `out.append({'plan' if reads_capture else 'item'})`\n"
+        "= `out`\n"
+    )
+    if in_procedure:
+        source = (
+            "@collect(items: list[str]) -> list[str]:\n"
+            + "\n".join("  " + line for line in body.splitlines())
+            + '\n= `collect(["task"])`\n'
+        )
+        group = "collect.draft"
+    else:
+        source = '[items: list[str]] = `["task"]`\n' + body
+        group = "draft"
+
+    dropped = {group: Form("[notes] << Consider <item>.")}
+    if reads_capture:
+        assert "must bind 'plan'" in _rejection(source, dropped)
+    else:
+        result, _, _ = _run(source, dropped)
+        assert result == ["task"]
+
+    result, _, _ = _run(source, {group: Form("[plan] << Plan <item> briefly.")})
+    assert result == (["1. a 2. b"] if reads_capture else ["task"])

@@ -6,6 +6,7 @@ import operator
 import os
 import re
 from concurrent.futures import Future
+from dataclasses import fields
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -29,18 +30,23 @@ from kedi._interactive.state import ExecutedFragment
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.conversation import ConversationState
 from kedi.agent_adapter.hooks import HookHandler
+from kedi.agent_adapter.hooks.models import HOOK_EVENT_NAMES
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import A2AAuthConfig, A2AConnection, AgentProfile, HookSettings
+from kedi.agent_profile.capabilities import AppliedCapability
 from kedi.agent_profile.codemode import CodeModeSettings
 from kedi.agent_profile.compaction import CompactionSettings
+from kedi.agent_profile.history import HistoryProcessingSettings
+from kedi.agent_profile.instructions import CapabilityInstruction
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.agent_profile.skills import SkillsSettings
 from kedi.artifacts import ArtifactPolicy
-from kedi.lang.ast import IfStmt, ProcDefStmt, TypeDefStmt
+from kedi.lang.ast import IfStmt, ProcDefStmt, Span, TypeDefStmt
 from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
 from kedi.lang.compiler.type_system import KediType
 from kedi.promise import KediPromise
+from kedi.run_budget import RunBudget
 from tests.interactive_helpers import inspect_fragment
 
 
@@ -48,6 +54,159 @@ def test_encoder_does_not_confuse_temporary_objects_with_shared_references() -> 
     encoder = SessionValueEncoder(kedi_models={})
     for index in range(100):
         encoder.encode({}, path=f"temporary_{index}")
+
+
+def _profile_round_trip(profile: AgentProfile, *, trusted: bool = False) -> AgentProfile:
+    encoded = persistence.encode_profile(
+        profile, encoder=SessionValueEncoder(kedi_models={}), model_names={}, path="profile"
+    )
+    return persistence.decode_profile(
+        json.loads(json.dumps(encoded)),
+        decoder=SessionValueDecoder(kedi_models={}),
+        kedi_models={},
+        trusted=trusted,
+    )
+
+
+def test_profile_codec_preserves_all_portable_fields(tmp_path: Path) -> None:
+    span = Span(1, 9, 2, 3, 2, 11, source_path="main.kedi")
+    capability = AppliedCapability(
+        identity="evidence:1",
+        name="evidence",
+        description="Check the supplied evidence.",
+        loc=span,
+        deferred=True,
+        instructions_enabled=False,
+        instructions_restored=True,
+        profile=AgentProfile(
+            system="Use supplied evidence.",
+            capabilities=(
+                AppliedCapability(
+                    identity="concise:1",
+                    name="concise",
+                    description=None,
+                    profile=AgentProfile(system="Be brief."),
+                ),
+            ),
+        ),
+    )
+    profile = AgentProfile(
+        fallback_models=("openai/backup",),
+        run_budget=RunBudget(request_limit=0, tool_attempt_limit=3),
+        requirements=("tool_registration",),
+        requirement_origins={"tool_registration": (span,)},
+        capability_instructions=(
+            CapabilityInstruction(identity="evidence:1", content="Be exact."),
+        ),
+        capabilities=(capability,),
+        history_processing=HistoryProcessingSettings(inherit_processor=True),
+    )
+    restored = _profile_round_trip(profile)
+    assert restored == profile
+    assert restored.capabilities[0].loc == span
+    assert restored.merge(AgentProfile()).run_budget == profile.run_budget
+    snapshot = tmp_path / "profile.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session._top_level_state.active_profile = profile
+        session.dump(snapshot)
+    with kedi.load_session(snapshot) as loaded:
+        assert loaded._top_level_state.active_profile == profile
+
+
+@pytest.mark.parametrize("field", ["hooks", "_hook_enforcement"])
+@pytest.mark.parametrize("event", HOOK_EVENT_NAMES)
+def test_profile_codec_preserves_every_hook_event_and_requires_trust(
+    field: str, event: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = AgentProfile(**{field: HookSettings(**{event: (operator.truth,)})})
+    assert _profile_round_trip(profile, trusted=True) == profile
+    encoded = persistence.encode_profile(
+        profile, encoder=SessionValueEncoder(kedi_models={}), model_names={}, path="profile"
+    )
+    with monkeypatch.context() as patch:
+
+        def reject_import(*_args: Any, **_kwargs: Any) -> Any:
+            pytest.fail("Untrusted hook import")
+
+        patch.setattr(persistence, "_resolve_importable_callable", reject_import)
+        with pytest.raises(SessionLoadError, match="trusted=True"):
+            persistence.decode_profile(
+                encoded, decoder=SessionValueDecoder(kedi_models={}), kedi_models={}
+            )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        HistoryProcessingSettings(processor=operator.truth),
+        HistoryProcessingSettings(condition=operator.truth, inherit_processor=True),
+    ],
+)
+def test_profile_codec_rejects_process_local_history_callbacks(
+    policy: HistoryProcessingSettings,
+) -> None:
+    with pytest.raises(UnsupportedSessionValue, match="history_processing"):
+        _profile_round_trip(AgentProfile(history_processing=policy))
+
+
+def test_every_profile_field_has_an_explicit_persistence_policy() -> None:
+    encoded = persistence.encode_profile(
+        AgentProfile(), encoder=SessionValueEncoder(kedi_models={}), model_names={}, path="profile"
+    )
+    renamed = {"_hook_enforcement": "hook_enforcement"}
+    rejected = {"tool_bindings", "subagent_bindings"}
+    assert {
+        field.name
+        for field in fields(AgentProfile)
+        if field.name not in rejected and renamed.get(field.name, field.name) not in encoded
+    } == set()
+
+
+def test_profile_codec_loads_older_snapshots_without_new_fields() -> None:
+    encoded = persistence.encode_profile(
+        AgentProfile(), encoder=SessionValueEncoder(kedi_models={}), model_names={}, path="profile"
+    )
+    for name in (
+        "fallback_models",
+        "run_budget",
+        "requirements",
+        "requirement_origins",
+        "capability_instructions",
+        "capabilities",
+        "history_processing",
+    ):
+        encoded.pop(name)
+    assert (
+        persistence.decode_profile(
+            encoded, decoder=SessionValueDecoder(kedi_models={}), kedi_models={}
+        )
+        == AgentProfile()
+    )
+
+
+def test_profile_codec_bounds_nested_capability_depth(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = AgentProfile()
+    for index in range(3):
+        profile = AgentProfile(
+            capabilities=(
+                AppliedCapability(
+                    identity=f"cap:{index}",
+                    name="nested",
+                    description=None,
+                    profile=profile,
+                ),
+            )
+        )
+    encoded = persistence.encode_profile(
+        profile, encoder=SessionValueEncoder(kedi_models={}), model_names={}, path="profile"
+    )
+    monkeypatch.setattr(persistence, "MAX_VALUE_DEPTH", 1)
+    with pytest.raises(UnsupportedSessionValue, match="maximum nesting depth"):
+        _profile_round_trip(profile)
+    with pytest.raises(SessionLoadError, match="maximum nesting depth"):
+        persistence.decode_profile(
+            encoded, decoder=SessionValueDecoder(kedi_models={}), kedi_models={}
+        )
 
 
 class SnapshotModel(BaseModel):

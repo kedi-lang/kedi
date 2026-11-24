@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
 from pathlib import Path
@@ -233,7 +233,25 @@ class SubagentCoordinator:
             parent_concurrency=parent_concurrency,
             subagent_definitions=subagent_definitions,
         )
-        return await self.wait(handle.run_id)
+        return await self._wait_foreground(handle.run_id)
+
+    async def _wait_foreground(self, run_id: str) -> DelegationResult:
+        try:
+            return await self.wait(run_id)
+        except asyncio.CancelledError:
+            self.cancel(run_id)
+            cleanup = asyncio.create_task(self.wait(run_id, timeout=INTERRUPT_CLEANUP_SECONDS))
+            try:
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        continue
+            except Exception:
+                pass
+            with suppress(Exception, asyncio.CancelledError):
+                cleanup.result()
+            raise
 
     def start(
         self,
@@ -423,7 +441,7 @@ class SubagentCoordinator:
             parent_concurrency=parent_concurrency,
             subagent_definitions=subagent_definitions,
         )
-        return await self.wait(handle.run_id)
+        return await self._wait_foreground(handle.run_id)
 
     def start_continuation(
         self,
@@ -581,11 +599,20 @@ class SubagentCoordinator:
         self._discard_runs(discarded)
 
     def _prune_finished_locked(self) -> list[str]:
+        parents = {run.run_id: run.parent_run_id for run in self.runs.snapshot()}
+        protected: set[str] = set()
+        for run_id, owned in self._tasks.items():
+            if not owned.task.done():
+                ancestor = parents.get(run_id)
+                while ancestor is not None and ancestor not in protected:
+                    protected.add(ancestor)
+                    ancestor = parents.get(ancestor)
+        protected.update(self._retained_native_runs)
         discarded: list[str] = []
         for candidate_id, candidate in tuple(self._tasks.items()):
             if len(self._tasks) <= self.max_retained_runs:
                 break
-            if candidate_id not in self._retained_native_runs and candidate.task.done():
+            if candidate_id not in protected and candidate.task.done():
                 self._tasks.pop(candidate_id)
                 self._controls.pop(candidate_id, None)
                 self._cancel_requested.discard(candidate_id)

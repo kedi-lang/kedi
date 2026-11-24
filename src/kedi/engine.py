@@ -241,6 +241,8 @@ class RetryPolicy:
         # the ORIGINAL provider exception (kept on `.original`) so a 429/timeout still retries.
         if isinstance(exc, KediExecutionError) and isinstance(exc.original, BaseException):
             exc = exc.original
+        if not isinstance(exc, Exception):
+            return False
         # Our own validation / unsupported-feature errors are terminal — never retry them.
         if isinstance(exc, (KediExecutionError, ValueError, TypeError, KeyError)):
             return False
@@ -396,8 +398,13 @@ class JobManagerEngine(ThreadEngine):
         return super().schedule(deps, lambda: self._run_with_policy(job))
 
     def _run_with_policy(self, job: Job) -> Any:
+        # A waiting worker may steal a separately submitted job while retaining
+        # its permit. Like a reentrant job, that child must not acquire another.
+        if getattr(self._local, "permit_held", False):
+            return job()
         self.breaker.check()
         self.limiter.acquire()
+        self._local.permit_held = True
         start = self._clock()
         try:
             attempt = 0
@@ -408,9 +415,9 @@ class JobManagerEngine(ThreadEngine):
                     self.breaker.record_success()
                     return result
                 except BaseException as exc:  # noqa: BLE001
-                    self.breaker.record_failure()
                     retryable = self.policy.is_retryable(exc)
                     if retryable:
+                        self.breaker.record_failure()
                         self.limiter.on_throttle()
                     attempt += 1
                     elapsed = self._clock() - start
@@ -425,7 +432,7 @@ class JobManagerEngine(ThreadEngine):
                         min(
                             remaining,
                             self.policy.backoff(
-                                attempt, retry_after=self.policy.retry_after_of(exc)
+                                attempt - 1, retry_after=self.policy.retry_after_of(exc)
                             ),
                         )
                     )
@@ -433,4 +440,5 @@ class JobManagerEngine(ThreadEngine):
                     if self._clock() - start >= self.policy.deadline:
                         raise
         finally:
+            self._local.permit_held = False
             self.limiter.release()
