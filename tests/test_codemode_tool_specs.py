@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import AsyncExitStack
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import fastmcp
 import pytest
+from fastmcp.client.client import CallToolResult
 
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.codemode import CodeModeHydrationError, CodeModeLimits
@@ -21,6 +24,8 @@ from kedi.agent_adapter.codemode.tool_specs import (
 )
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import McpServerSpec
+
+WIKI_SERVER = Path(__file__).parent / "files" / "mcp_wiki_server.py"
 
 
 def test_tool_spec_bridge_exposes_only_uniform_controls() -> None:
@@ -320,12 +325,15 @@ def test_codemode_mcp_materializer_owns_client_lifecycle(
                 )
             ]
 
-        async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        async def call_tool(
+            self, name: str, arguments: dict[str, Any], *, raise_on_error: bool
+        ) -> CallToolResult:
             assert name == "mcp_lookup"
-            return SimpleNamespace(
-                isError=False,
-                structuredContent={"query": arguments["query"]},
+            assert raise_on_error is False
+            return CallToolResult(
                 content=[],
+                structured_content={"query": arguments["query"]},
+                meta=None,
             )
 
     monkeypatch.setattr(fastmcp, "Client", FakeClient)
@@ -380,25 +388,26 @@ def test_codemode_mcp_configs_and_result_normalization() -> None:
         "url": "https://example.test/mcp",
     }
 
+    image = SimpleNamespace(model_dump=lambda **_kwargs: {"type": "image"})
     results = [
-        SimpleNamespace(isError=False, structuredContent={"value": 3}, content=[]),
-        SimpleNamespace(
-            isError=False,
-            structuredContent=None,
-            content=[
-                TextContent(type="text", text="plain"),
-                SimpleNamespace(model_dump=lambda **_kwargs: {"type": "image"}),
-            ],
+        CallToolResult(content=[], structured_content={"value": 3}, meta=None),
+        CallToolResult(
+            content=[TextContent(type="text", text="plain"), image],  # type: ignore[list-item]
+            structured_content=None,
+            meta=None,
         ),
-        SimpleNamespace(
-            isError=True,
-            structuredContent=None,
+        CallToolResult(
             content=[TextContent(type="text", text="failed")],
+            structured_content=None,
+            meta=None,
+            is_error=True,
         ),
     ]
 
     class Client:
-        async def call_tool(self, _name: str, _arguments: dict[str, Any]) -> Any:
+        async def call_tool(
+            self, _name: str, _arguments: dict[str, Any], *, raise_on_error: bool
+        ) -> CallToolResult:
             return results.pop(0)
 
     spec = codemode_mcp_module._tool_spec(
@@ -421,3 +430,21 @@ def test_codemode_mcp_configs_and_result_normalization() -> None:
             await spec.fn()
 
     asyncio.run(run())
+
+
+def test_codemode_mcp_tools_read_a_real_server_result(tmp_path: Path) -> None:
+    log = tmp_path / "wiki.log"
+    server = McpServerSpec(command=sys.executable, args=(str(WIKI_SERVER), str(log)))
+
+    async def run() -> None:
+        async with AsyncExitStack() as stack:
+            tools = await codemode_mcp_module.materialize_mcp_tool_specs(
+                stack, [server], adapter_shortname="claude"
+            )
+            by_name = {tool.name: tool for tool in tools}
+            assert await by_name["delete_page"].fn(page="Home") == {"result": "deleted Home"}
+            with pytest.raises(RuntimeError, match="cannot open Home"):
+                await by_name["broken_page"].fn(page="Home")
+
+    asyncio.run(run())
+    assert log.read_text(encoding="utf-8") == "deleted Home\n"

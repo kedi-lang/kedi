@@ -58,7 +58,7 @@ from kedi.agent_adapter.adapters.langchain.tools import _validated_tool_argument
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.adapters.pydantic.hooks import _KediHookCapability
 from kedi.agent_adapter.adapters.pydantic.tools import pydantic_toolset_from_specs
-from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
+from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter, _RuntimeTool
 from kedi.agent_adapter.approvals.policy import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -2183,17 +2183,20 @@ def test_webgpu_hook_bridge_handles_mcp_denial_validation_and_cancellation() -> 
             del payload, timeout
             return {"text": "unused"}
 
-    class RuntimeTool:
-        name = "external"
-        description = "External tool"
-        input_schema = {"type": "object", "properties": {}}
-
-        async def call(self, arguments: dict[str, Any]) -> Any:
-            del arguments
-            raise asyncio.CancelledError
+    async def cancelled(**_arguments: Any) -> Any:
+        raise asyncio.CancelledError
 
     adapter = WebGPUAdapter(Bridge(), model="browser")
-    runtime_tool = cast(Any, RuntimeTool())
+    runtime_tool = _RuntimeTool(
+        ToolSpec(
+            fn=cancelled,
+            name="external",
+            description="External tool",
+            json_schema={"type": "object", "properties": {}},
+            metadata={"source": "mcp"},
+        ),
+        "mcp",
+    )
 
     deny_dispatcher = HookDispatcher(
         HookDispatcherSnapshot.compose(

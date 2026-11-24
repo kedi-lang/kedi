@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
-from contextlib import AbstractAsyncContextManager, contextmanager
-from types import ModuleType, SimpleNamespace
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Annotated, Any, Iterator
 
 import pytest
-from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ValidationError
 
 import kedi.agent_adapter.adapters.webgpu as webgpu_module
 from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
+from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, McpServerSpec
+
+WIKI_SERVER = Path(__file__).parent / "files" / "mcp_wiki_server.py"
 
 
 class QueueBridge:
@@ -549,18 +552,10 @@ def test_webgpu_adapter_enforces_tool_step_limit() -> None:
 def test_webgpu_adapter_rejects_duplicate_local_and_mcp_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_mcp_tools(*_: Any) -> list[Any]:
-        return [
-            webgpu_module._McpRuntimeTool(
-                name="same",
-                description="",
-                input_schema={},
-                return_schema=None,
-                client=None,
-            )
-        ]
+    async def fake_mcp_tools(*_: Any, **_kwargs: Any) -> tuple[ToolSpec, ...]:
+        return (ToolSpec(fn=lambda: None, name="same", metadata={"source": "mcp"}),)
 
-    monkeypatch.setattr(webgpu_module, "_mcp_tools", fake_mcp_tools)
+    monkeypatch.setattr(webgpu_module, "materialize_mcp_tool_specs", fake_mcp_tools)
     adapter = WebGPUAdapter(QueueBridge(), model="bonsai")
     profile = AgentProfile(mcp_servers=(McpServerSpec(command="tool"),))
     with (
@@ -594,89 +589,56 @@ def test_webgpu_adapter_allowed_mcp_policy_accepts_empty_profile() -> None:
     assert result.answer == "ok"
 
 
-def test_fastmcp_configs_cover_transports() -> None:
-    stdio = webgpu_module._fastmcp_config(
-        McpServerSpec(command="uvx", args=("server",), env={"A": "B"}),
-        0,
-    )
-    sse = webgpu_module._fastmcp_config(
-        McpServerSpec(transport="sse", url="https://example.test/sse"),
-        1,
-    )
-    http = webgpu_module._fastmcp_config(
-        McpServerSpec(transport="http", url="https://example.test/mcp", headers={"X": "Y"}),
-        2,
-    )
+class McpWikiBridge:
+    """Call one MCP tool, then answer with the tool result the adapter sent back."""
 
-    assert stdio["mcpServers"]["kedi_webgpu_0"]["env"] == {"A": "B"}
-    assert sse["mcpServers"]["kedi_webgpu_1"]["transport"] == "sse"
-    assert http["mcpServers"]["kedi_webgpu_2"]["transport"] == "streamable-http"
-    assert http["mcpServers"]["kedi_webgpu_2"]["headers"] == {"X": "Y"}
+    def __init__(self, tool: str) -> None:
+        self.tool = tool
+
+    def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        results = [m for m in payload["messages"] if m.get("role") == "tool"]
+        if not results:
+            arguments = {"page": "Home"}
+            return {"kind": "tool_call", "name": self.tool, "arguments": arguments, "callId": "c1"}
+        return {"kind": "final", "text": results[-1]["content"]}
 
 
-def test_mcp_runtime_tool_covers_structured_text_and_error() -> None:
-    class Client:
-        def __init__(self, *results: CallToolResult) -> None:
-            self.results = list(results)
-
-        async def call_tool(self, *_: Any) -> CallToolResult:
-            return self.results.pop(0)
-
-    client = Client(
-        CallToolResult(content=[], structuredContent={"value": 1}),
-        CallToolResult(content=[TextContent(type="text", text="plain")]),
-        CallToolResult(content=[TextContent(type="text", text="bad")], isError=True),
-    )
-    tool = webgpu_module._McpRuntimeTool("mcp", "", {}, None, client)
-
-    assert asyncio.run(tool.call({})) == {"value": 1}
-    assert asyncio.run(tool.call({})) == "plain"
-    with pytest.raises(RuntimeError, match="bad"):
-        asyncio.run(tool.call({}))
-
-    non_text = SimpleNamespace(model_dump=lambda **_: {"type": "image", "data": "..."})
-    result = SimpleNamespace(content=[non_text])
-    assert webgpu_module._mcp_result_text(result) == '{"type": "image", "data": "..."}'
-
-
-def test_mcp_tools_are_discovered_and_context_is_closed(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("approval", "deleted"),
+    [
+        (ApprovalPolicy.deny(), False),
+        (None, False),  # MCP tools are mutating, so no policy denies them as on other adapters
+        (ApprovalPolicy.allow(), True),
+    ],
+)
+def test_webgpu_mcp_tools_follow_the_profile_approval(
+    tmp_path: Path, approval: ApprovalPolicy | None, deleted: bool
 ) -> None:
-    events: list[str] = []
+    log = tmp_path / "wiki.log"
+    server = McpServerSpec(command=sys.executable, args=(str(WIKI_SERVER), str(log)))
+    adapter = WebGPUAdapter(McpWikiBridge("delete_page"), model="bonsai")
 
-    class Client(AbstractAsyncContextManager[Any]):
-        def __init__(self, config: dict[str, Any]) -> None:
-            assert "mcpServers" in config
+    with adapter.profile_override(AgentProfile(mcp_servers=(server,), approval=approval)):
+        content = json.loads(adapter.invoke_sync(prompt="Delete the Home page."))
 
-        async def __aenter__(self) -> Client:
-            events.append("enter")
-            return self
+    if deleted:
+        assert content == {"ok": True, "result": {"result": "deleted Home"}}
+        assert log.read_text(encoding="utf-8") == "deleted Home\n"
+    else:
+        assert content["ok"] is False
+        assert content["error"].startswith("ToolApprovalDenied: Tool 'delete_page' was denied")
+        assert "Kedi stack trace" not in content["error"]
+        assert not log.exists()
 
-        async def __aexit__(self, *_: Any) -> None:
-            events.append("exit")
 
-        async def list_tools(self) -> list[Any]:
-            return [
-                SimpleNamespace(
-                    name="remote",
-                    description=None,
-                    inputSchema={"type": "object"},
-                    outputSchema=None,
-                )
-            ]
+def test_webgpu_mcp_tool_errors_reach_the_model(tmp_path: Path) -> None:
+    server = McpServerSpec(command=sys.executable, args=(str(WIKI_SERVER), str(tmp_path / "log")))
+    adapter = WebGPUAdapter(McpWikiBridge("broken_page"), model="bonsai")
 
-    module = ModuleType("fastmcp")
-    module.Client = Client  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "fastmcp", module)
+    with adapter.profile_override(
+        AgentProfile(mcp_servers=(server,), approval=ApprovalPolicy.allow())
+    ):
+        content = json.loads(adapter.invoke_sync(prompt="Open the Home page."))
 
-    async def discover() -> list[Any]:
-        async with webgpu_module.AsyncExitStack() as stack:
-            return await webgpu_module._mcp_tools(
-                stack,
-                (McpServerSpec(command="server"),),
-            )
-
-    tools = asyncio.run(discover())
-    assert [tool.name for tool in tools] == ["remote"]
-    assert events == ["enter", "exit"]
-    assert asyncio.run(webgpu_module._mcp_tools(webgpu_module.AsyncExitStack(), ())) == []
+    assert content["ok"] is False
+    assert "cannot open Home" in content["error"]
