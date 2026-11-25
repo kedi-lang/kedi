@@ -27,7 +27,17 @@ from kedi.core import model_calls as _model_calls
 from kedi.core import tool_binding as _tool_binding
 from kedi.core import tracing as _tracing
 from kedi.core.engines import _default_engine
-from kedi.core.expressions import CallExpr, Expression, InputExpr, OutputExpr, ValueEnv, c, i, o
+from kedi.core.expressions import (
+    CallExpr,
+    Expression,
+    InputExpr,
+    OutputExpr,
+    ReferenceExpr,
+    ValueEnv,
+    c,
+    i,
+    o,
+)
 from kedi.core.lifecycle import RuntimeLifecycle
 from kedi.core.scopes import ProcessingScope
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
@@ -327,6 +337,7 @@ class KediRuntime:
             capture_key=capture,
             output_type=output_type,
             binding_contract=binding_contract,
+            attaches=any(isinstance(expr, ReferenceExpr) for expr in expressions),
         )
         if capture is None:
             return None
@@ -456,6 +467,7 @@ class KediRuntime:
         capture_key: str | None,
         output_type: Any | None = None,
         binding_contract: Any | None = None,
+        attaches: bool = False,
     ) -> Dict[str, Any]:
         return _model_calls._invoke_text_parts(
             self,
@@ -465,6 +477,7 @@ class KediRuntime:
             capture_key=capture_key,
             output_type=output_type,
             binding_contract=binding_contract,
+            attaches=attaches,
         )
 
     def _evaluate_claim(self, claim: str | Sequence[Any]) -> bool:

@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from kedi.agent_adapter.approvals.policy import ToolRisk
+from kedi.agent_adapter.request.media import RETURN_MEDIA_METADATA
 from kedi.agent_adapter.tools.retry import (
     ToolRetryPolicy,
     tool_body,
@@ -37,7 +38,9 @@ from kedi.lang.procedure_schema import (
     build_procedure_description,
     procedure_json_schema,
     procedure_return_json_schema,
+    procedure_return_type,
 )
+from kedi.media import media_kinds
 from kedi.module_registry import internal_module_path
 from kedi.tool_context import kedi_tool_call_context
 
@@ -74,14 +77,17 @@ def kedi_procedure_tool_spec(
         description=tool_description,
         json_schema=json_schema,
         return_schema=return_schema,
-        metadata=_tool_metadata(
-            proc,
-            json_schema,
-            return_schema,
-            exposed_name=exposed_name,
-            description=tool_description,
-            retry_policy=retry_policy,
-        ),
+        metadata={
+            **_tool_metadata(
+                proc,
+                json_schema,
+                return_schema,
+                exposed_name=exposed_name,
+                description=tool_description,
+                retry_policy=retry_policy,
+            ),
+            **_return_media(procedure_return_type(rt, proc, local_env=local_env)),
+        },
         proc=proc,
         risk=declaration.risk if declaration is not None else _procedure_tool_risk(proc),
         risk_resolver=_procedure_tool_risk_resolver(proc),
@@ -109,6 +115,13 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     kind = getattr(fn, "__kedi_tool_kind__", None)
     if isinstance(kind, str):
         metadata["kedi_tool_kind"] = kind
+    metadata.update(
+        _return_media(
+            logical_return
+            if logical_return is not None
+            else _python_callable_return_type(callable_body)
+        )
+    )
     return ToolSpec(
         fn=tool_fn,
         name=name,
@@ -125,7 +138,19 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     )
 
 
-def _python_callable_return_schema(fn: Callable[..., Any]) -> dict[str, Any] | None:
+def _return_media(annotation: Any) -> dict[str, Any]:
+    """Tool metadata naming the media kinds a tool's declared return type can hold.
+
+    ``[x: Audio] <<`` with such a tool in scope names the audio it returns instead of speaking.
+    """
+
+    kinds = media_kinds(annotation)
+    return {RETURN_MEDIA_METADATA: sorted(kinds)} if kinds else {}
+
+
+def _python_callable_return_type(fn: Callable[..., Any]) -> Any | None:
+    """A callable's declared return type, or ``None`` when it declares none we can resolve."""
+
     annotation = inspect.signature(fn).return_annotation
     if annotation is inspect.Signature.empty:
         return None
@@ -135,10 +160,15 @@ def _python_callable_return_schema(fn: Callable[..., Any]) -> dict[str, Any] | N
     if not inspect.isroutine(target):
         target = target.__call__
     try:
-        annotation = get_type_hints(target, include_extras=True).get("return", annotation)
+        return get_type_hints(target, include_extras=True).get("return", annotation)
     except (NameError, TypeError):
-        if isinstance(annotation, str):
-            return None
+        return None if isinstance(annotation, str) else annotation
+
+
+def _python_callable_return_schema(fn: Callable[..., Any]) -> dict[str, Any] | None:
+    annotation = _python_callable_return_type(fn)
+    if annotation is None:
+        return None
     try:
         return TypeAdapter(annotation).json_schema()
     except (

@@ -63,6 +63,22 @@ def procedure_json_schema(
     return schema
 
 
+def procedure_return_type(
+    rt: KediRuntime,
+    proc: ProcedureDef,
+    local_env: dict[str, Any] | None = None,
+) -> Any | None:
+    """The Python type a procedure declares it returns, or ``None`` when it declares none."""
+
+    kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
+    if kedi_type.is_none():
+        return None
+    resolved = kedi_type.resolve(rt, local_env)
+    if resolved is None:
+        raise TypeError(f"Unknown return type annotation in procedure {proc.name!r}")
+    return resolved
+
+
 def procedure_return_json_schema(
     rt: KediRuntime,
     proc: ProcedureDef,
@@ -70,15 +86,12 @@ def procedure_return_json_schema(
 ) -> dict[str, Any]:
     """Build the JSON Schema for a procedure's return value."""
     parsed_docstring = parse_procedure_docstring(proc.docstring)
-    kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
-    if kedi_type.is_none():
+    resolved = procedure_return_type(rt, proc, local_env)
+    if resolved is None:
         schema = TypeAdapter(str).json_schema()
         if parsed_docstring.return_description:
             schema["description"] = parsed_docstring.return_description
         return schema
-    resolved = kedi_type.resolve(rt, local_env)
-    if resolved is None:
-        raise TypeError(f"Unknown return type annotation in procedure {proc.name!r}")
     annotation, description = annotated_field_metadata(resolved)
     schema = _strip_introspection_descriptions(TypeAdapter(annotation).json_schema())
     if description is not None:

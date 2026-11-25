@@ -1285,12 +1285,12 @@ def contains_media(value: Any, *, _depth: int = 0) -> bool:
     return False
 
 
-def type_holds_media(annotation: Any, *, _seen: frozenset[int] = frozenset()) -> bool:
-    """Return whether values of ``annotation`` can hold media: ``Image``, ``list[Image]``, a
-    model or dataclass with a media field, ..."""
+def media_kinds(annotation: Any, *, _seen: frozenset[int] = frozenset()) -> frozenset[MediaKind]:
+    """The media kinds values of ``annotation`` can hold: ``{"image"}`` for ``Image`` or
+    ``list[Image]``, every kind for ``Media``, the kinds of a model's or dataclass's fields."""
 
     if id(annotation) in _seen:
-        return False
+        return frozenset()
     seen = _seen | {id(annotation)}
     import typing
 
@@ -1298,18 +1298,25 @@ def type_holds_media(annotation: Any, *, _seen: frozenset[int] = frozenset()) ->
 
     if isinstance(annotation, type):
         if issubclass(annotation, Media):
-            return True
+            return frozenset(_KIND_CLASSES) if annotation is Media else frozenset({annotation.kind})
         if issubclass(annotation, BaseModel):
             fields = [field.annotation for field in annotation.model_fields.values()]
         elif dataclasses.is_dataclass(annotation) or typing.is_typeddict(annotation):
             try:
                 fields = list(typing.get_type_hints(annotation).values())
             except Exception:  # noqa: BLE001 - unresolvable hints hold no media we can name
-                return False
+                return frozenset()
         else:
             fields = []
-        return any(type_holds_media(field, _seen=seen) for field in fields)
-    return any(type_holds_media(arg, _seen=seen) for arg in typing.get_args(annotation))
+    else:
+        fields = list(typing.get_args(annotation))
+    return frozenset().union(*(media_kinds(field, _seen=seen) for field in fields))
+
+
+def type_holds_media(annotation: Any) -> bool:
+    """Return whether values of ``annotation`` can hold media (see :func:`media_kinds`)."""
+
+    return bool(media_kinds(annotation))
 
 
 def _context_names(info: core_schema.ValidationInfo | None) -> Mapping[str, Media] | None:
@@ -1462,6 +1469,7 @@ __all__ = [
     "as_media",
     "reference",
     "is_text_media_type",
+    "media_kinds",
     "Reference",
     "type_holds_media",
     "workspace_path",

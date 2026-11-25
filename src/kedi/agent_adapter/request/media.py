@@ -25,10 +25,11 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
 from kedi.media import (
+    Audio,
     Media,
     MediaError,
     MediaKind,
@@ -422,6 +423,9 @@ def check_media_limit(attachments: Sequence[MediaAttachment], limit: int | None)
 
 OutputMediaKind = Literal["image", "audio"]
 
+NamedAudio = Annotated[Audio, "an audio of the request, by name"]
+"""``[x: Audio] <<`` when the model names an audio of its request instead of speaking."""
+
 
 def output_media_kind(output_type: Any) -> OutputMediaKind | None:
     """The media a typed call asks the model itself to produce, if any.
@@ -442,8 +446,7 @@ def output_media_kind(output_type: Any) -> OutputMediaKind | None:
 def require_media_output(
     adapter: Any, kind: OutputMediaKind, attachments: Sequence[MediaAttachment]
 ) -> None:
-    """Fail before any model I/O when ``adapter`` cannot produce ``kind``, or when a speech
-    request has media to send.
+    """Fail before any model I/O when ``adapter`` cannot produce ``kind``.
 
     An adapter with image output decides per model whether the model draws the image or names
     one of its request. Any other adapter that validates structured output can only have the
@@ -473,11 +476,34 @@ def require_media_output(
             f"Adapter {adapter.shortname!r} cannot produce speech; Pydantic AI returns it from "
             "realtime models and LangChain from audio models"
         )
-    if attachments:
-        raise MediaError(
-            f"{attachments[0].name}: a speech request sends text only; describe the media in "
-            "an earlier request and speak its answer"
-        )
+
+
+def require_audio_to_name(attachments: Sequence[MediaAttachment], *, tools: Iterable[Any]) -> None:
+    """Fail before the request when ``[x: Audio] <<`` names an audio and none could be named.
+
+    The request has attachments, so it does not speak: a speech request sends text only.
+    """
+
+    if tools_return(tools, "audio") or any(item.media.kind == "audio" for item in attachments):
+        return
+    names = ", ".join(item.name for item in attachments)
+    raise MediaError(
+        f"{names}: a speech request sends text only, and no attachment is audio the model could "
+        "name; describe the media in an earlier request and speak its answer"
+    )
+
+
+RETURN_MEDIA_METADATA = "kedi_return_media"
+"""Tool metadata key: the media kinds a tool's declared return type can hold."""
+
+
+def tools_return(tools: Iterable[Any], kind: MediaKind) -> bool:
+    """Whether one of ``tools`` (tool specs) declares a return type that can hold ``kind``."""
+
+    return any(
+        kind in (getattr(tool, "metadata", None) or {}).get(RETURN_MEDIA_METADATA, ())
+        for tool in tools
+    )
 
 
 def tools_may_return_media(tools: Iterable[Any]) -> bool:
@@ -785,6 +811,8 @@ def _model_text(model: str | None) -> str:
 
 __all__ = [
     "MediaAttachment",
+    "NamedAudio",
+    "RETURN_MEDIA_METADATA",
     "ATTACHMENTS_CLOSE",
     "ATTACHMENTS_OPEN",
     "MediaNamer",
@@ -799,9 +827,11 @@ __all__ = [
     "gemini_video_metadata",
     "image_size",
     "output_media_kind",
+    "require_audio_to_name",
     "require_image_to_name",
     "require_media_output",
     "tools_may_return_media",
+    "tools_return",
     "compose_prompt",
     "history_keeps_media",
     "media_digest_material",

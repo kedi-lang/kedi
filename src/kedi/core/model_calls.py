@@ -170,8 +170,12 @@ def _invoke_text_parts(
     capture_key: str | None,
     output_type: Any | None = None,
     binding_contract: Any | None = None,
+    attaches: bool = False,
 ) -> Dict[str, Any]:
-    """Run a raw prompt: a text ``invoke``, or a typed ``produce`` when ``output_type`` is set."""
+    """Run a raw prompt: a text ``invoke``, or a typed ``produce`` when ``output_type`` is set.
+
+    ``attaches`` tells whether the prompt references values (``<<x>>``).
+    """
     if capture_key is not None:
         from kedi.lang.compiler.environment import assert_not_cli_args_identifier
 
@@ -184,9 +188,22 @@ def _invoke_text_parts(
     adapter = self._concrete_adapter(self._resolve_adapter(block_profile))
     captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
     self._assert_profile_override_supported(block_profile, adapter)
-    from kedi.agent_adapter.request.media import output_media_kind, require_media_output
+    from kedi.agent_adapter.request.media import (
+        NamedAudio,
+        output_media_kind,
+        require_audio_to_name,
+        require_media_output,
+        tools_return,
+    )
 
     output_media = output_media_kind(output_type)
+    # A speech request sends text only and takes no tools. With attachments, or a tool that
+    # returns audio, ``[x: Audio] <<`` has the model name an audio of its request instead.
+    names_audio = output_media == "audio" and (
+        attaches or tools_return(captured_tool_specs, "audio")
+    )
+    if names_audio:
+        output_type, output_media = NamedAudio, None
     # Speech stays outside the conversation: it neither reads nor records history, so a later
     # text turn never replays an audio-only reply.
     conversation_state, conversation_ticket, lane_identity = (
@@ -242,6 +259,8 @@ def _invoke_text_parts(
             )
             if output_media is not None:
                 require_media_output(adapter, output_media, attachments)
+            if names_audio:
+                require_audio_to_name(attachments, tools=captured_tool_specs)
             if output_media == "audio":
                 # Speech runs without tools, so only the program's own instructions apply.
                 instruction_parts = tuple(

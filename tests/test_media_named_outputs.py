@@ -167,6 +167,79 @@ def test_a_text_model_with_nothing_to_name_is_refused_before_the_request(
     assert requests == []
 
 
+# Audio: a raw invoke speaks, unless the model has audio to name
+
+
+def test_an_audio_output_names_an_attached_clip(workspace: Path) -> None:
+    from tests.test_media_speech_output import WAV
+
+    (workspace / "bark.wav").write_bytes(WAV)
+    (workspace / "meow.wav").write_bytes(WAV + b"\x00\x00")
+    model, requests = _answers({"response": "clips_2"}, tool=False)
+    source = (
+        "> import: media\n"
+        '[clips: list[Audio]] = `[audio("bark.wav"), audio("meow.wav")]`\n'
+        "[clip: Audio] << Which of <<clips>> is the cat?\n= `clip`\n"
+    )
+    clip = _run(source, PydanticAdapter(model=model))
+    assert isinstance(clip, Audio) and clip.data == WAV + b"\x00\x00"
+    assert len(requests) == 1
+
+
+def test_an_audio_output_names_what_a_tool_declared_to_return_audio(workspace: Path) -> None:
+    from tests.test_media_speech_output import WAV
+
+    (workspace / "bark.wav").write_bytes(WAV)
+    requests: list[list[ModelMessage]] = []
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        requests.append(list(messages))
+        if len(requests) == 1:
+            return ModelResponse(parts=[ToolCallPart("record", {})])
+        (output,) = info.output_tools
+        return ModelResponse(parts=[ToolCallPart(output.name, {"response": "record_result_1"})])
+
+    source = (
+        "> import: media\n"
+        '@record() -> Audio:\n  = `audio("bark.wav")`\n\n'
+        "> approval: allow\n> use: record\n"
+        "[clip: Audio] << Record the dog.\n= `clip`\n"
+    )
+    assert _run(source, PydanticAdapter(model=FunctionModel(respond))).data == WAV
+
+
+def test_tools_that_return_no_audio_leave_speech_as_it_was(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_media_speech_output import _fake_realtime, _live_model
+
+    record = _fake_realtime(monkeypatch)
+    source = (
+        "> import: media\n"
+        "@weather(city: str) -> str:\n  = sunny\n\n"
+        "> use: weather\n"
+        "[speech: Audio] << Read this aloud: sunny in Ankara.\n= `speech`\n"
+    )
+    speech = _run(source, PydanticAdapter(model=_live_model()))
+    assert isinstance(speech, Audio) and record["prompt"].endswith("sunny in Ankara.")
+
+
+def test_tool_specs_record_the_media_their_return_type_holds() -> None:
+    from kedi.agent_adapter.tools.conversion import python_callable_tool_spec
+
+    def record() -> Audio: ...
+
+    def shots() -> list[Image]: ...
+
+    def plain() -> str: ...
+
+    kinds = {
+        fn.__name__: python_callable_tool_spec(fn.__name__, fn).metadata.get("kedi_return_media")
+        for fn in (record, shots, plain)
+    }
+    assert kinds == {"record": ["audio"], "shots": ["image"], "plain": None}
+
+
 # Models that draw
 
 
@@ -370,6 +443,19 @@ def test_harness_adapters_name_attachments_only() -> None:
     with pytest.raises(MediaError, match="Adapter 'acp' cannot produce images; Pydantic AI"):
         acp = SimpleNamespace(shortname="acp", capabilities=ACPAdapter.capabilities)
         require_media_output(acp, "image", (red,))
+
+
+def test_the_editor_accepts_audio_outputs_that_name_an_attachment() -> None:
+    source = (
+        "> agent: claude\n> import: media\n"
+        '[clips: list[Audio]] = `[audio("bark.wav")]`\n'
+        "[clip: Audio] << Which of <<clips>> barks?\n= `clip`\n"
+    )
+    assert [
+        diagnostic
+        for diagnostic in diagnostics_for(source, "/tmp/pick.kedi")
+        if "speech output" in diagnostic.message
+    ] == []
 
 
 def test_the_editor_accepts_image_outputs_that_name_an_attachment() -> None:

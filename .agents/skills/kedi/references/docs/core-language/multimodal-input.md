@@ -369,8 +369,10 @@ media, an attachment or a tool result, and Kedi binds that value:
 - Pydantic AI, LangChain, the Claude Agent SDK and Codex resolve names. The
   harnesses' tool bridges send text only, so there the model names
   attachments.
-- Not yet: tool arguments typed `Image` take no names, and `[x: Audio] <<`
-  remains speech output.
+- `[x: Audio] <<` names an audio when the prompt attaches media or a tool in
+  scope declares an audio return type; otherwise it speaks (see
+  [Speech Output](#speech-output)).
+- Not yet: tool arguments typed `Image` take no names.
 
 ## Speech Output
 
@@ -401,18 +403,22 @@ model reports it, and is `None` otherwise.
   `voice` field, such as a local TTS model wrapped as a chat model, gets it.
   LangChain's Gemini models take no voice setting, so setting one there is an
   error.
-- A speech request sends text only: a prompt that references media fails
-  before the call. Describe the media in an earlier request and speak its
-  answer.
-- A speech request offers no tools. Only the program's own `> instructions:`
-  go with it, and a Gemini TTS model, which reads its prompt aloud, gets none.
+- A speech request sends text only and offers no tools. Only the program's
+  own `> instructions:` go with it, and a Gemini TTS model, which reads its
+  prompt aloud, gets none.
+- A prompt that attaches media, or a call with a tool in scope that declares an
+  audio return type (`-> Audio`, `-> list[Audio]`, `-> Media`), does not speak:
+  the model names an audio of its request instead (see
+  [Media in Outputs](#media-in-outputs)), and the call is an ordinary turn of
+  the conversation. With no audio attached and no such tool, it fails before
+  the call. Other tools leave the call speech.
 - A speech request stays outside the conversation: with `> history: enabled`
   it neither reads nor records history, so later text turns do not see it.
 - It counts as one model request for `> budget:`. Fallback models are not
   tried for it.
 - Any other model fails with an error naming it. Adapters without speech
   output (Claude Agent SDK, Codex, WebGPU, ACP, A2A) fail before the call, and
-  the editor reports `[x: Audio] <<` on them.
+  the editor reports `[x: Audio] <<` on them unless the prompt attaches media.
 - Only `[x: Audio] <<` produces speech. Live voice sessions, with microphone
   input and interruptions, are not part of Kedi yet.
 
