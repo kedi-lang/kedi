@@ -31,7 +31,11 @@ for line in sys.stdin:
     method = request.get("method")
     params = request.get("params") or {}
     if method == "initialize":
-        _send({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": 1}})
+        capabilities = json.loads(os.getenv("KEDI_ACP_FAKE_PROMPT_CAPABILITIES", "null"))
+        result = {"protocolVersion": 1}
+        if capabilities is not None:
+            result["agentCapabilities"] = {"promptCapabilities": capabilities}
+        _send({"jsonrpc": "2.0", "id": request_id, "result": result})
     elif method == "session/new":
         sessions += 1
         _send({"jsonrpc": "2.0", "id": request_id, "result": {"sessionId": f"session-{sessions}"}})
