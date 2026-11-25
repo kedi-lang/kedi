@@ -38,6 +38,7 @@ from kedi.decisions import (
     publish_decision_record,
 )
 from kedi.errors import KediExecutionError
+from kedi.media import type_holds_media
 from kedi.promise import KediPromise
 
 if TYPE_CHECKING:
@@ -147,6 +148,19 @@ def _prepare_attachments(
     return tuple(prepared)
 
 
+def _media_output_instruction() -> Any:
+    """How a model gives media in its answer: by the name its request gives them."""
+
+    from kedi.agent_adapter.request import InstructionPart
+    from kedi.agent_adapter.request.prompts import MEDIA_OUTPUT_INSTRUCTION
+
+    return InstructionPart(
+        identity="media_output.instructions",
+        source="runtime",
+        content=f"<MediaOutputInstructions>\n{MEDIA_OUTPUT_INSTRUCTION}\n</MediaOutputInstructions>",
+    )
+
+
 def _invoke_text_parts(
     self: KediRuntime,
     parts: Sequence[Any],
@@ -233,6 +247,8 @@ def _invoke_text_parts(
                 instruction_parts = tuple(
                     part for part in instruction_parts if part.source == "profile"
                 )
+            elif type_holds_media(output_type):
+                instruction_parts = (*instruction_parts, _media_output_instruction())
             with override_ctx:
                 return self._run_conversation_call(
                     adapter,
@@ -577,6 +593,8 @@ def _kedi_run(
                 *prompt_builder.instruction_parts(),
                 *self._agent_instruction_parts(profile, adapter),
             )
+            if any(type_holds_media(field_type) for field_type in typed_fields.values()):
+                instruction_parts = (*instruction_parts, _media_output_instruction())
 
             with override_ctx:
                 result_map = self._run_conversation_call(

@@ -189,3 +189,21 @@ else:
 The image reached the backend as its own part, labeled by name, before the
 prompt text; the adapter without the capability was refused before any
 request.
+
+## Media in Outputs
+
+A model never writes media: where its answer holds an `Image` or another
+media type, it names one of its request's media, such as `chart` or
+`<image chart>`. To bind the value, validate the model's structured output
+inside the call with the request's names:
+
+```python
+from kedi.agent_adapter.request.media import media_validation_context
+
+value = TypeAdapter(output_type).validate_python(decoded, context=media_validation_context())
+```
+
+`media_validation_context()` holds the prompt's attachments and the media
+Kedi's tools returned so far; pass your own validation context to it to keep
+its keys. Kedi's own check after `produce` returns does not resolve names, so
+an adapter that skips this step refuses every media name.

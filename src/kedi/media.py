@@ -16,7 +16,7 @@ import json
 import mimetypes
 import os
 import re
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -57,6 +57,17 @@ VideoResolution = Literal["low", "medium", "high"]
 VIDEO_RESOLUTIONS: tuple[VideoResolution, ...] = ("low", "medium", "high")
 MAX_VIDEO_FPS = 24.0
 """Gemini's highest video sampling rate; its range is (0, 24] frames per second."""
+
+MEDIA_NAMES = "kedi_media_names"
+"""Validation context key: the media a model's request holds, by name.
+
+A model never writes media. Where it gives a media-typed value (an output field or a tool
+argument), it names an attachment or a tool result of its request: ``photo_1`` or
+``<image photo_1>``. Adapters pass ``{MEDIA_NAMES: names}`` when they validate what a model
+wrote; without it, strings are never converted to media.
+"""
+
+_PLACEHOLDER = re.compile(r"<(?:image|audio|video|document) ([^<>\s]+)>")
 
 _OFFICE_MEDIA_TYPES = frozenset(
     {
@@ -640,13 +651,49 @@ class Media:
         return getattr(cls, "_type_label", "a media value")
 
     @classmethod
-    def _validate_python(cls: type[MediaT], value: Any) -> MediaT:
+    def _named(cls: type[MediaT], value: Any, names: Mapping[str, Media]) -> MediaT:
+        """The media a model names: ``photo_1`` or ``<image photo_1>``, one of ``names``.
+
+        A model never writes media itself; it names an attachment or a tool result of its
+        request. The errors list the names it can use, since the model reads them to retry.
+        """
+
+        if not isinstance(value, str):
+            raise MediaError(
+                f"Expected the name of {cls._label()} in this request, got {type(value).__name__}"
+            )
+        placeholder = _PLACEHOLDER.fullmatch(value.strip())
+        name = placeholder.group(1) if placeholder else value.strip()
+        media = names.get(name)
+        if isinstance(media, cls):
+            return media
+        if media is not None:
+            raise MediaError(f"{name} is {media.label}, not {cls._label()}")
+        choices = [key for key, item in names.items() if isinstance(item, cls)]
+        if not choices:
+            raise MediaError(
+                f"Expected the name of {cls._label()} in this request, which holds none; "
+                f"got {value!r}"
+            )
+        raise MediaError(
+            f"Expected the name of {cls._label()} in this request ({', '.join(choices)}), "
+            f"got {value!r}"
+        )
+
+    @classmethod
+    def _validate_python(
+        cls: type[MediaT], value: Any, info: core_schema.ValidationInfo | None = None
+    ) -> MediaT:
         """Accept media values and their native equivalents only, never a path or URL string.
 
         Loading a file or a URL is explicit: ``image("cat.png")`` or ``Image.from_path(...)``.
+        What a model wrote names one of its request's media instead (see :data:`MEDIA_NAMES`).
         """
 
         media = as_media(value)
+        names = _context_names(info)
+        if media is None and names is not None:
+            return cls._named(value, names)
         if media is None:
             raise MediaError(
                 f"Expected {cls._label()}, got {type(value).__name__}; strings are never "
@@ -657,9 +704,18 @@ class Media:
         return media
 
     @classmethod
-    def _validate_json(cls: type[MediaT], value: Any) -> MediaT:
-        """Read back what JSON serialization writes: a data URI, a URL or a file id."""
+    def _validate_json(
+        cls: type[MediaT], value: Any, info: core_schema.ValidationInfo | None = None
+    ) -> MediaT:
+        """Read back what JSON serialization writes: a data URI, a URL or a file id.
 
+        JSON a model wrote names one of its request's media instead; a URL or data URI it made
+        up is refused (see :data:`MEDIA_NAMES`).
+        """
+
+        names = _context_names(info)
+        if names is not None:
+            return cls._named(value, names)
         if isinstance(value, str) and value.startswith("data:"):
             media: Media = cls.from_data_uri(value)
         elif isinstance(value, str) and urlparse(value).scheme.lower() in _URL_SCHEMES:
@@ -682,11 +738,11 @@ class Media:
         handler: GetCoreSchemaHandler,
     ) -> core_schema.CoreSchema:
         return core_schema.json_or_python_schema(
-            json_schema=core_schema.no_info_plain_validator_function(
+            json_schema=core_schema.with_info_plain_validator_function(
                 cls._validate_json,
                 json_schema_input_schema=core_schema.str_schema(),
             ),
-            python_schema=core_schema.no_info_plain_validator_function(cls._validate_python),
+            python_schema=core_schema.with_info_plain_validator_function(cls._validate_python),
             serialization=core_schema.plain_serializer_function_ser_schema(
                 _serialize, info_arg=True
             ),
@@ -1229,6 +1285,41 @@ def contains_media(value: Any, *, _depth: int = 0) -> bool:
     return False
 
 
+def type_holds_media(annotation: Any, *, _seen: frozenset[int] = frozenset()) -> bool:
+    """Return whether values of ``annotation`` can hold media: ``Image``, ``list[Image]``, a
+    model or dataclass with a media field, ..."""
+
+    if id(annotation) in _seen:
+        return False
+    seen = _seen | {id(annotation)}
+    import typing
+
+    from pydantic import BaseModel
+
+    if isinstance(annotation, type):
+        if issubclass(annotation, Media):
+            return True
+        if issubclass(annotation, BaseModel):
+            fields = [field.annotation for field in annotation.model_fields.values()]
+        elif dataclasses.is_dataclass(annotation) or typing.is_typeddict(annotation):
+            try:
+                fields = list(typing.get_type_hints(annotation).values())
+            except Exception:  # noqa: BLE001 - unresolvable hints hold no media we can name
+                return False
+        else:
+            fields = []
+        return any(type_holds_media(field, _seen=seen) for field in fields)
+    return any(type_holds_media(arg, _seen=seen) for arg in typing.get_args(annotation))
+
+
+def _context_names(info: core_schema.ValidationInfo | None) -> Mapping[str, Media] | None:
+    """The request media a validation may name (see :data:`MEDIA_NAMES`), if it was given."""
+
+    context = getattr(info, "context", None)
+    names = context.get(MEDIA_NAMES) if isinstance(context, Mapping) else None
+    return names if isinstance(names, Mapping) else None
+
+
 def media_error_detail(exc: BaseException) -> str | None:
     """Return the reason a media value failed validation, for wrapped type errors."""
 
@@ -1358,6 +1449,7 @@ def _serialize(value: Media, info: core_schema.SerializationInfo) -> Any:
 
 __all__ = [
     "MAX_MEDIA_BYTES",
+    "MEDIA_NAMES",
     "contains_media",
     "Audio",
     "Document",
@@ -1371,5 +1463,6 @@ __all__ = [
     "reference",
     "is_text_media_type",
     "Reference",
+    "type_holds_media",
     "workspace_path",
 ]

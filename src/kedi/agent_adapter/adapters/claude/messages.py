@@ -119,11 +119,15 @@ def _output_json_schema(output_type: type[Any]) -> dict[str, Any]:
 
 
 def _structured_output_value(value: Any, output_type: type[Any]) -> Any:
+    from kedi.agent_adapter.request.media import media_validation_context
+
+    # A media field names one of the request's attachments.
+    context = media_validation_context()
     if isinstance(output_type, type) and issubclass(output_type, BaseModel):
         if isinstance(value, output_type):
             return value
-        return output_type.model_validate(value)
-    return TypeAdapter(output_type).validate_python(value)
+        return output_type.model_validate(value, context=context)
+    return TypeAdapter(output_type).validate_python(value, context=context)
 
 
 def _claude_text_response(message: Any) -> str:

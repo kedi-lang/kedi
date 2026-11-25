@@ -75,6 +75,11 @@ from kedi.agent_adapter.models import (
 )
 from kedi.agent_adapter.output_schema import OutputCorrection, build_output_model
 from kedi.agent_adapter.prefix_cache import langchain_cache_settings
+from kedi.agent_adapter.request.media import (
+    media_validation_context,
+    require_image_to_name,
+    tools_may_return_media,
+)
 from kedi.agent_adapter.responses_session import model_responses_session, model_responses_turn
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
@@ -390,15 +395,22 @@ class LangChainAdapter(HookRegistrationMixin):
         if output_media == "audio":
             return cast(OutputDataT, await self._speak(template, kwargs))
         if output_media == "image":
-            # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
             model = _chat_model_instance(self._chat_model_for_run())
-            if (getattr(model, "profile", None) or {}).get("image_outputs") is not True:
-                raise MediaError(
-                    f"Model {_model_label(model)} cannot produce images; use an image model "
-                    "such as google_genai:gemini-2.5-flash-image"
+            if (getattr(model, "profile", None) or {}).get("image_outputs") is True:
+                # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
+                result = await self._run_plain_agent(
+                    template, kwargs, model=model, emit_final=False
                 )
-            result = await self._run_plain_agent(template, kwargs, model=model, emit_final=False)
-            return cast(OutputDataT, _langchain_image_response(result, model))
+                return cast(OutputDataT, _langchain_image_response(result, model))
+            # Any other model names an image of its request, such as one a tool returned.
+            if (
+                not tools_may_return_media(self.scoped_tool_specs)
+                and not self.active_profile.mcp_servers
+                and self._history_archive is None
+            ):
+                require_image_to_name(
+                    _model_label(model), example="google_genai:gemini-2.5-flash-image"
+                )
 
         output_model, unwrap_response = _langchain_typed_output(resolved_output_type)
         response_schema = output_model.model_json_schema()
@@ -442,7 +454,9 @@ class LangChainAdapter(HookRegistrationMixin):
             )
             structured = _langchain_structured_response(result)
             if structured is not None and not isinstance(structured, output_model):
-                structured = output_model.model_validate_json(json.dumps(structured))
+                structured = output_model.model_validate_json(
+                    json.dumps(structured), context=media_validation_context()
+                )
             return cast(OutputDataT, unwrap_response(structured))
 
     @hooked_agent_run("template")
@@ -1286,7 +1300,9 @@ def _accept_typed_output(output_model: type[BaseModel], output: Any) -> BaseMode
     from kedi.agent_adapter.adapters.langchain.runtime import structured_output_feedback
 
     try:
-        return output_model.model_validate_json(json.dumps(output))
+        return output_model.model_validate_json(
+            json.dumps(output), context=media_validation_context()
+        )
     except ValidationError as exc:
         raise OutputCorrection(structured_output_feedback(exc)) from exc
 

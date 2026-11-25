@@ -72,7 +72,10 @@ def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, N
     )
     from .media import MediaNamer
 
-    namer_token = _TOOL_MEDIA_NAMER.set(MediaNamer())
+    namer = MediaNamer()
+    # A tool's media never take a prompt attachment's name: a model names either one.
+    namer.reserve(attachment.name for attachment in request.prompt.media)
+    namer_token = _TOOL_MEDIA_NAMER.set(namer)
     try:
         yield
     finally:
@@ -122,5 +125,6 @@ __all__ = [
     "current_agent_run_request",
     "prompt_media_scope",
     "take_prompt_media",
+    "tool_media_namer",
     "tool_media_scope",
 ]

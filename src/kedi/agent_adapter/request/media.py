@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -237,6 +237,11 @@ class MediaNamer:
     def attachments(self) -> tuple[MediaAttachment, ...]:
         return tuple(self._attachments)
 
+    def reserve(self, names: Iterable[str]) -> None:
+        """Keep ``names`` (the prompt's attachments) from being given to other media."""
+
+        self._names.update(names)
+
     def _unique(self, base: str) -> str:
         if base not in self._names:
             return base
@@ -251,6 +256,60 @@ class MediaNamer:
             candidate = f"{kind}_{self._generated[kind]}"
             if candidate not in self._names:
                 return candidate
+
+
+class RequestMedia(Mapping[str, Media]):
+    """The media a model can name in its request: the prompt's attachments and the media its
+    tools returned so far.
+
+    Tool media are read on each lookup, so a name a tool gave after validation began still
+    resolves.
+    """
+
+    def __init__(self, attachments: Sequence[MediaAttachment], namer: MediaNamer) -> None:
+        self._attachments = tuple(attachments)
+        self._namer = namer
+
+    def _named(self) -> dict[str, Media]:
+        named = {attachment.name: attachment.media for attachment in self._attachments}
+        for attachment in self._namer.attachments:
+            named.setdefault(attachment.name, attachment.media)
+        return named
+
+    def __getitem__(self, name: str) -> Media:
+        return self._named()[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._named())
+
+    def __len__(self) -> int:
+        return len(self._named())
+
+
+def request_media() -> RequestMedia:
+    """The current request's media by name; outside a request, only tool media of this scope."""
+
+    from .context import current_agent_run_request, tool_media_namer
+
+    request = current_agent_run_request()
+    return RequestMedia(request.prompt.media if request is not None else (), tool_media_namer())
+
+
+def media_validation_context(context: Any = None) -> Any:
+    """``context`` with the current request's media names, to validate what a model wrote.
+
+    A media-typed value a model gives (an output field or a tool argument) names one of its
+    request's media (see :data:`kedi.media.MEDIA_NAMES`). A caller's own mapping context keeps
+    its keys; any other context is returned unchanged.
+    """
+
+    from kedi.media import MEDIA_NAMES
+
+    if context is None:
+        return {MEDIA_NAMES: request_media()}
+    if isinstance(context, Mapping):
+        return {**context, MEDIA_NAMES: request_media()}
+    return context
 
 
 def require_media_input(adapter: Any) -> None:
@@ -384,13 +443,29 @@ def require_media_output(
     adapter: Any, kind: OutputMediaKind, attachments: Sequence[MediaAttachment]
 ) -> None:
     """Fail before any model I/O when ``adapter`` cannot produce ``kind``, or when a speech
-    request has media to send."""
+    request has media to send.
+
+    An adapter with image output decides per model whether the model draws the image or names
+    one of its request. Any other adapter that validates structured output can only have the
+    model name an attachment: its tool bridge sends text only.
+    """
 
     if kind == "image":
-        if not adapter.capabilities.supports("image_output"):
+        capabilities = adapter.capabilities
+        if capabilities.supports("image_output"):
+            return
+        if not (
+            capabilities.supports("structured_output") and capabilities.supports("media_input")
+        ):
             raise MediaError(
                 f"Adapter {adapter.shortname!r} cannot produce images; "
                 "Pydantic AI and LangChain return images from image models"
+            )
+        if not any(attachment.media.kind == "image" for attachment in attachments):
+            raise MediaError(
+                f"Adapter {adapter.shortname!r} cannot produce images, and this request holds "
+                "no image to name; attach the images to choose from, or use Pydantic AI or "
+                "LangChain with an image model"
             )
         return
     if not adapter.capabilities.supports("audio_output"):
@@ -403,6 +478,36 @@ def require_media_output(
             f"{attachments[0].name}: a speech request sends text only; describe the media in "
             "an earlier request and speak its answer"
         )
+
+
+def tools_may_return_media(tools: Iterable[Any]) -> bool:
+    """Whether one of ``tools`` (tool specs) may return media for a model to name.
+
+    Kedi's artifact tools return media only from archived history, which callers check
+    separately.
+    """
+
+    return any(
+        (getattr(tool, "metadata", None) or {}).get("kedi_tool_kind") != "artifact_management"
+        for tool in tools
+    )
+
+
+def require_image_to_name(model: str, *, example: str) -> None:
+    """Fail before the request when ``model`` cannot draw and its request holds no image to name.
+
+    Called only when no tool could return one: the prompt's attachments are all it can name.
+    """
+
+    from .context import current_agent_run_request
+
+    request = current_agent_run_request()
+    if request is not None and any(item.media.kind == "image" for item in request.prompt.media):
+        return
+    raise MediaError(
+        f"Model {model} cannot produce images; use an image model such as {example}, or give "
+        "it images to choose from: attachments, or a tool that returns one"
+    )
 
 
 def check_media_support(
@@ -685,6 +790,7 @@ __all__ = [
     "MediaNamer",
     "MediaProvider",
     "MediaSummary",
+    "RequestMedia",
     "attachment_content",
     "check_media_support",
     "download_image_urls",
@@ -693,12 +799,16 @@ __all__ = [
     "gemini_video_metadata",
     "image_size",
     "output_media_kind",
+    "require_image_to_name",
     "require_media_output",
+    "tools_may_return_media",
     "compose_prompt",
     "history_keeps_media",
     "media_digest_material",
     "media_provider",
     "media_summaries",
+    "media_validation_context",
+    "request_media",
     "require_media_input",
     "scan_sent_content",
     "unsent_attachments",

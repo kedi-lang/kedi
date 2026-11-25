@@ -287,7 +287,9 @@ A tool that returns media gives it to the model as media:
 The tool result is a placeholder, `<image snap_result_1>`, and the image
 follows natively. A dict, a model or a list holding media becomes JSON with a
 placeholder for each one, as `<<x>>` does. Names stay unique across the tool
-calls of one request; like prompt names, a later request may reuse them.
+calls of one request and never take an attachment's name; like prompt names, a
+later request may reuse them. The model can answer with these media by name:
+see [Media in Outputs](#media-in-outputs).
 
 | Adapter | Where the media go |
 | --- | --- |
@@ -304,7 +306,8 @@ calls of one request; like prompt names, a later request may reuse them.
 
 ## Image Output
 
-A typed raw invoke with `Image` asks the model itself for an image:
+A typed raw invoke with `Image` asks the model for an image. An image model
+draws it:
 
 ```kedi
 > import: media
@@ -318,19 +321,56 @@ A typed raw invoke with `Image` asks the model itself for an image:
 `img` is an ordinary `Image`: reference it, save it, or show it in Kedi
 Notebook.
 
-| Adapter | Models |
+| Adapter | Models that draw |
 | --- | --- |
 | Pydantic AI | image models such as `google:gemini-2.5-flash-image`, and OpenAI Responses models, which get the image generation tool |
 | LangChain | chat models whose profile sets `image_outputs`, such as Gemini image models |
 
-- Any other model fails before the call, with an error naming it.
-- Adapters without image output (Claude Agent SDK, Codex, WebGPU, ACP, A2A)
-  fail before the call too, and the editor reports `[x: Image] <<` on them.
+- Any other model names an image of its request instead: see
+  [Media in Outputs](#media-in-outputs). An OpenAI Responses model may either
+  draw or name one.
+- A model that cannot draw fails before the call, with an error naming it, when
+  nothing could be named: no image attached, and no tool, MCP server or
+  archived history that could return one.
+- Adapters without image output (Claude Agent SDK, Codex) can only name an
+  attached image. Without one, and on WebGPU, ACP and A2A, the call fails
+  before it starts. The editor reports `[x: Image] <<` on adapters without
+  image output unless the prompt attaches media.
 - Image models take no tools, so Kedi leaves its artifact tools out for them.
-  A program that turns artifacts on explicitly gets an error instead.
-- Only `[x: Image] <<` produces an image. An `Image` field inside a template
-  capture or a model is still structured output, which the model writes as
-  text.
+  A program that turns artifacts on explicitly gets an error instead, and so
+  does a call with `> use:` tools.
+
+## Media in Outputs
+
+A model never writes media. Where its answer holds media (the output itself, a
+template field, a list item or a model field), it names one of its request's
+media, an attachment or a tool result, and Kedi binds that value:
+
+```kedi
+> import: media
+
+@satellite(region: str) -> Image:
+  = `image("tiles/" + region + ".png")`
+
+> approval: allow
+> use: satellite
+[tile: Image] << Fetch the satellite image of Ankara.
+[photos: list[Image]] = `[image("a.png"), image("b.png")]`
+>> Pick the sharpest of <<photos>> as [best: Image] and say why as [reason].
+```
+
+- The model writes the name the request gives the media (`satellite_result_1`,
+  `photos_2`) or its placeholder (`<image satellite_result_1>`).
+- Any other string is refused, made-up URLs and data URIs included. The model
+  reads the names it can use and answers again.
+- Requests whose output holds media get one instruction that says so.
+- Only media of the current request can be named. With `> history: enabled`,
+  a later request may give an earlier name to other media.
+- Pydantic AI, LangChain, the Claude Agent SDK and Codex resolve names. The
+  harnesses' tool bridges send text only, so there the model names
+  attachments.
+- Not yet: tool arguments typed `Image` take no names, and `[x: Audio] <<`
+  remains speech output.
 
 ## Speech Output
 
