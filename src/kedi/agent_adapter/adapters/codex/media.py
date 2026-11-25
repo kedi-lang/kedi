@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import mimetypes
 import tempfile
 from collections.abc import Generator, Sequence
@@ -46,19 +47,21 @@ def codex_turn_input(
     check_media_support(attachments, provider="openai", model=model)
     check_media_limit(attachments, media_limit)
     with tempfile.TemporaryDirectory(prefix="kedi-codex-media-") as directory:
+        images = (Path(directory) / f"image-{index}" for index in itertools.count(1))
         yield [
             {"type": "text", "text": piece}
             if isinstance(piece, str)
-            else _image_input(piece, Path(directory))
+            else _image_input(piece, next(images))
             for piece in attachment_content(prompt, attachments)
         ]
 
 
-def _image_input(attachment: MediaAttachment, directory: Path) -> dict[str, Any]:
+def _image_input(attachment: MediaAttachment, stem: Path) -> dict[str, Any]:
+    # Attachment names may hold any text, so the file is named by position, not by name.
     media = attachment.media
     if media.data is not None:
         suffix = mimetypes.guess_extension(media.media_type or "") or ""
-        path = directory / f"{attachment.name}{suffix}"
+        path = stem.with_suffix(suffix)
         path.write_bytes(media.data)
         return {"type": "localImage", "path": str(path)}
     if media.url is not None and urlparse(media.url).scheme.lower() in {"http", "https"}:

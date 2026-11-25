@@ -158,7 +158,18 @@ def test_codex_sends_image_data_as_local_files_for_the_turn(workspace: Path) -> 
     assert seen["sha256"] == hashlib.sha256(PNG).hexdigest()
     # The file lived for the turn only.
     assert not Path(items[1]["path"]).exists()
-    assert Path(items[1]["path"]).name == "cat.png"
+    assert Path(items[1]["path"]).name == "image-1.png"
+
+
+def test_codex_names_image_files_by_position_not_by_attachment_name() -> None:
+    attachments = [
+        MediaAttachment("../photos/cat", Image.from_bytes(PNG, "image/png")),
+        MediaAttachment("dog", Image.from_bytes(PNG, "image/png")),
+    ]
+    with codex_turn_input("Compare.", attachments, model=None, media_limit=None) as items:
+        paths = [Path(item["path"]) for item in items if item["type"] == "localImage"]
+        assert [path.name for path in paths] == ["image-1.png", "image-2.png"]
+        assert paths[0].parent == paths[1].parent and all(path.exists() for path in paths)
 
 
 def test_codex_sends_image_urls_and_openai_files_by_reference() -> None:
