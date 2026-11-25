@@ -550,13 +550,20 @@ over `http(s)` only, with private and cloud-metadata addresses blocked. YouTube 
 never downloaded, and only Gemini reads them. `s3://` and `gs://` URIs pass through. Do not
 build media URLs from untrusted input.
 
-**Image output.** `[img: Image] << Draw a cat.` asks the model itself for an image and binds
-an `Image`, an ordinary media value: reference it (`<<img>>`), `save()` it or show it. With
-Pydantic AI the model must be an image model (`google:gemini-2.5-flash-image`) or an OpenAI
-Responses model, which gets the image generation tool; with LangChain, a chat model whose
-profile sets `image_outputs` (Gemini image models). Any other model or adapter fails before the
-call, and the editor reports `[x: Image] <<` on adapters without image output. Image models take
-no tools, so Kedi's artifact tools are left out for them.
+**Image output.** `[img: Image] << Draw a cat.` asks the model for an image and binds an
+`Image`, an ordinary media value: reference it (`<<img>>`), `save()` it or show it. An image
+model draws it: with Pydantic AI, an image model (`google:gemini-2.5-flash-image`) or an
+OpenAI Responses model, which gets the image generation tool; with LangChain, a chat model
+whose profile sets `image_outputs` (Gemini image models). Image models take no tools: Kedi's
+artifact tools are left out for them, and a call with `> use:` tools fails before the request.
+Any other model names an image of its request instead (see Media in outputs below), and an
+OpenAI Responses model may draw or name one when there is one to name. A model that cannot draw
+fails before the
+call when nothing could be named: no image attached, and no tool, MCP server or archived
+history that could return one. On adapters without image output (the Claude Agent SDK,
+Codex), the model can only name an attached image; without one the call fails before it
+starts. The editor reports `[x: Image] <<` on adapters without image output unless the prompt
+attaches media.
 
 **Speech output.** `[speech: Audio] << Read this aloud: <script>` asks the model itself to speak
 and binds an `Audio` (WAV): reference it, `save()` it or play it in Kedi Notebook. Its
@@ -570,7 +577,11 @@ model with a `voice` field gets it, and LangChain's Gemini models take none). A 
 `> instructions:` go with it. It stays outside the conversation: with `> history: enabled` it
 neither reads nor records history. It counts as one model request for `> budget:`, and fallback
 models are not tried for it. Any other model or adapter fails before the call, and the editor
-reports `[x: Audio] <<` on adapters without speech output.
+reports `[x: Audio] <<` on adapters without speech output. A prompt that attaches media, or a
+call with a tool in scope that declares an audio return type (`-> Audio`, `-> list[Audio]`,
+`-> Media`), does not speak: the model names an audio of its request instead (see Media in
+outputs below), and the call is an ordinary turn of the conversation. Other tools leave the
+call speech; a speech request does not offer them.
 
 **Media from tools.** A tool that returns media (an `Image`, a `Document`, or a dict or model
 holding them) gives it to the model as media. The tool result names each one with a
@@ -580,10 +591,40 @@ natively: Pydantic AI places them inside the tool result where the provider take
 in the tool message when the model's profile sets `image_tool_message` or `pdf_tool_message`
 and moves them to a following user message otherwise. Provider rules and `media_limit` apply as
 for prompt media, and media are never stored as artifacts. Names are unique within one request,
-as prompt names are, so a later request may reuse `snap_result_1`. CodeMode code receives the
+as prompt names are, so a later request may reuse `snap_result_1`, and a tool's media never
+take an attachment's name. The model can answer with them by name (see Media in outputs below).
+CodeMode code receives the
 placeholders, and media its result names are attached to it. The Claude Agent SDK, Codex and
 WebGPU tool bridges send text only: the model reads a tool error instead. PostToolUse hooks see
 the result as the adapter sends it, media included.
+
+**Media in outputs.** A model never writes media. Where its answer holds an `Image`, `Audio`,
+`Video`, `Document` or `Media` (the output itself, a template field, a list item or a model
+field), it names one of its request's media, an attachment or a tool result, and Kedi binds
+that value:
+
+```kedi
+> import: media
+
+@satellite(region: str) -> Image:
+  = `image("tiles/" + region + ".png")`
+
+> approval: allow
+> use: satellite
+[tile: Image] << Fetch the satellite image of Ankara.
+[photos: list[Image]] = `[image("a.png"), image("b.png")]`
+>> Pick the sharpest of <<photos>> as [best: Image] and say why as [reason].
+```
+
+The model writes the name the request gives the media (`satellite_result_1`, `photos_2`) or
+its placeholder (`<image satellite_result_1>`). Any other string is refused, made-up URLs and
+data URIs included; the model reads the names it can use and answers again. Requests whose
+output holds media, and that attach media or offer tools, get one instruction that says so.
+Only media of the current request can
+be named: with `> history: enabled`, a later request may give an earlier name to other media.
+Pydantic AI, LangChain, the Claude Agent SDK and Codex resolve names; the harnesses' tool
+bridges send text only, so there the model names attachments. Tool arguments typed `Image`
+do not take names yet.
 
 **Outside prompts.** A media value is a native value: keep it with single backticks
 (`` [copy: Image] = `cat_image` ``, ``<caption(`cat_image`)>``). `> show: `cat_image`` and

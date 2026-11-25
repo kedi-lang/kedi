@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel, ValidationError
 
 from kedi.agent_adapter.output_schema import OutputCorrection
+from kedi.agent_adapter.request.media import media_validation_context
 from kedi.agent_adapter.subagents import SubagentOutputState, accept_subagent_output
 
 
@@ -134,7 +135,10 @@ class LangChainDuplicateOutputMiddleware(AgentMiddleware):
         try:
             for call in calls:
                 if self.output_model is not None:
-                    self.output_model.model_validate_json(json.dumps(call["args"], allow_nan=False))
+                    self.output_model.model_validate_json(
+                        json.dumps(call["args"], allow_nan=False),
+                        context=media_validation_context(),
+                    )
                 else:
                     accept_subagent_output(
                         call["args"],

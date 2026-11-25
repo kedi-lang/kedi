@@ -513,6 +513,8 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
     assert tool.fn(country="Turkey") == "Konya"
     capabilities = created_agents[0]["kwargs"].pop("capabilities")
     assert [type(item).__name__ for item in capabilities] == ["PydanticHistoryProcessingCapability"]
+    # The fresh agent resolves media names in what the model writes, as the adapter does.
+    assert callable(created_agents[0]["kwargs"].pop("validation_context"))
     assert created_agents == [
         {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
     ]
@@ -3646,6 +3648,8 @@ def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
 
     capabilities = created_agents[0]["kwargs"].pop("capabilities")
     assert [type(item).__name__ for item in capabilities] == ["PydanticHistoryProcessingCapability"]
+    # The fresh agent resolves media names in what the model writes, as the adapter does.
+    assert callable(created_agents[0]["kwargs"].pop("validation_context"))
     assert created_agents == [
         {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
     ]

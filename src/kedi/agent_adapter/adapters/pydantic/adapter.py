@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import (
     AbstractAsyncContextManager,
     ExitStack,
@@ -36,6 +36,7 @@ from pydantic_ai.run import AgentRun
 from pydantic_ai.tools import (
     AgentDepsT,
     DeferredToolResults,
+    RunContext,
     ToolDefinition,
 )
 from pydantic_ai.toolsets import AbstractToolset
@@ -106,6 +107,12 @@ from kedi.agent_adapter.models import (
 )
 from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.request.context import tool_media_scope
+from kedi.agent_adapter.request.media import (
+    media_validation_context,
+    no_image_to_name,
+    request_attaches,
+    tools_may_return_media,
+)
 from kedi.agent_adapter.responses_session import model_responses_session as _model_responses_session
 from kedi.agent_adapter.responses_session import model_responses_turn as _model_responses_turn
 from kedi.agent_adapter.subagents import (
@@ -151,16 +158,14 @@ def _takes_tools(model: object) -> bool:
     return True
 
 
-def _require_image_model(model: Model) -> None:
-    """Fail before the request when the selected model cannot return an image."""
+def _with_media_names(context: Any) -> Callable[[RunContext[Any]], Any]:
+    """The agent's validation context with the current request's media names added."""
 
-    if not model.profile.get("supports_image_output", False):
-        from kedi.media import MediaError
+    def build(run_context: RunContext[Any]) -> Any:
+        own = context(run_context) if callable(context) else context
+        return media_validation_context(own)
 
-        raise MediaError(
-            f"Model {model.system}:{model.model_name} cannot produce images; use an image model "
-            "such as google:gemini-2.5-flash-image or an OpenAI Responses model"
-        )
+    return build
 
 
 class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
@@ -377,6 +382,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             PydanticHistoryProcessingCapability,
             lambda: PydanticHistoryProcessingCapability(self._history_processor_runner),
         )
+        # A media-typed output field or tool argument the model writes names one of its
+        # request's media.
+        kwargs["validation_context"] = _with_media_names(kwargs.get("validation_context"))
         self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
 
@@ -597,22 +605,17 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         agent = self._agent_for_produce()
         if output_media == "audio":
             return cast(OutputDataT, await self._speak(agent, template, kwargs))
-        # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
-        image = output_media == "image"
-        run_kwargs: dict[str, object] = {
-            "output_type": BinaryImage if image else output_type,
-            **kwargs,
-        }
+        run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
         self._apply_default_usage_limits(run_kwargs)
         tool_specs = self._tool_specs_for_run(run_kwargs)
         if agent is not self:
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        if image:
-            _require_image_model(
-                effective_model(agent, cast("Model | str | None", run_kwargs.get("model")))
-            )
+        draws = False
+        if output_media == "image":
+            model = effective_model(agent, cast("Model | str | None", run_kwargs.get("model")))
+            draws = self._image_output(model, run_kwargs, tool_specs)
         result = await self._run_agent(
             agent,
             template,
@@ -621,11 +624,54 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             emit_final=False,
         )
         _messages._capture_typesafe_decision_evidence(result)
-        if image:
+        if draws:
             from kedi.media import as_media
 
             return cast(OutputDataT, as_media(result.output))
         return result.output
+
+    def _image_output(
+        self, model: Model, run_kwargs: dict[str, object], tool_specs: Sequence[ToolSpec]
+    ) -> bool:
+        """Set up ``[img: Image] << ...`` for ``model``; return whether the model may draw.
+
+        An image model draws the image. A model that also takes tools (OpenAI Responses) may
+        instead name an image of its request, such as one a tool returned, when there is one
+        to name. Any other model names one; it fails before the request when there is nothing
+        it could name.
+        """
+
+        from kedi.media import Image, MediaError
+
+        label = f"{model.system}:{model.model_name}"
+        returning = [spec.name for spec in tool_specs if tools_may_return_media((spec,))]
+        may_name = bool(returning) or self._may_return_media() or request_attaches("image")
+        if not model.profile.get("supports_image_output", False):
+            if not may_name:
+                raise no_image_to_name(
+                    label, example="google:gemini-2.5-flash-image or an OpenAI Responses model"
+                )
+            return False
+        if not model.profile.get("supports_tools", True):
+            if returning:
+                raise MediaError(
+                    f"Model {label} draws images and takes no tools, so it cannot call "
+                    f"{', '.join(returning)}; to return an image a tool gives, use a model that "
+                    "takes tools"
+                )
+            may_name = False
+        run_kwargs["output_type"] = [BinaryImage, Image] if may_name else BinaryImage
+        return True
+
+    def _may_return_media(self) -> bool:
+        """Whether a tool outside Kedi's registrations may return media to name: a constructor
+        toolset, an MCP server, or ``read_artifact`` over archived history."""
+
+        return (
+            self._has_native_approval_tools()
+            or bool(self.active_profile.mcp_servers)
+            or self._history_archive is not None
+        )
 
     async def _speak(self, agent: Agent[Any, Any], prompt: str, kwargs: Mapping[str, Any]) -> Any:
         """``[speech: Audio] << Read this aloud.``: one realtime session speaks the reply."""

@@ -1019,7 +1019,11 @@ def _raw_invoke_capability_diagnostics(
         return []
     span = stmt.type_expr.loc if stmt.type_expr is not None else stmt.loc
     output = _MEDIA_OUTPUTS.get(stmt.type_annotation.strip())
-    if output is not None and media_names.calls:
+    # With attachments, the model names one: ``[best: Image] << Pick the sharpest of
+    # <<photos>>.`` is structured output on an adapter without image output, and
+    # ``[clip: Audio] << Which of <<clips>> barks?`` never speaks.
+    names_attachment = output is not None and bool(media_prompt_spans(stmt.segments, media_names))
+    if output is not None and media_names.calls and not names_attachment:
         # ``[img: Image] << Draw a cat.`` asks the model for an image, and
         # ``[speech: Audio] << Read this aloud.`` for speech, not for structured output.
         capability, description = output

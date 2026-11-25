@@ -8,6 +8,7 @@ from typing import (
     Annotated,
     Any,
     Dict,
+    Iterable,
     List,
     Sequence,
     cast,
@@ -38,6 +39,7 @@ from kedi.decisions import (
     publish_decision_record,
 )
 from kedi.errors import KediExecutionError
+from kedi.media import type_holds_media
 from kedi.promise import KediPromise
 
 if TYPE_CHECKING:
@@ -147,6 +149,32 @@ def _prepare_attachments(
     return tuple(prepared)
 
 
+def _may_name_media(
+    output_types: Iterable[Any], attachments: Sequence[Any], tools: Sequence[Any], profile: Any
+) -> bool:
+    """Whether the model's answer may name media of its request: the output holds media, and
+    an attachment, a tool or an MCP server could give some."""
+
+    from kedi.agent_adapter.request.media import tools_may_return_media
+
+    return any(type_holds_media(output_type) for output_type in output_types) and (
+        bool(attachments) or tools_may_return_media(tools) or bool(profile.mcp_servers)
+    )
+
+
+def _media_output_instruction() -> Any:
+    """How a model gives media in its answer: by the name its request gives them."""
+
+    from kedi.agent_adapter.request import InstructionPart
+    from kedi.agent_adapter.request.prompts import MEDIA_OUTPUT_INSTRUCTION
+
+    return InstructionPart(
+        identity="media_output.instructions",
+        source="runtime",
+        content=f"<MediaOutputInstructions>\n{MEDIA_OUTPUT_INSTRUCTION}\n</MediaOutputInstructions>",
+    )
+
+
 def _invoke_text_parts(
     self: KediRuntime,
     parts: Sequence[Any],
@@ -156,8 +184,12 @@ def _invoke_text_parts(
     capture_key: str | None,
     output_type: Any | None = None,
     binding_contract: Any | None = None,
+    attaches: bool = False,
 ) -> Dict[str, Any]:
-    """Run a raw prompt: a text ``invoke``, or a typed ``produce`` when ``output_type`` is set."""
+    """Run a raw prompt: a text ``invoke``, or a typed ``produce`` when ``output_type`` is set.
+
+    ``attaches`` tells whether the prompt references values (``<<x>>``).
+    """
     if capture_key is not None:
         from kedi.lang.compiler.environment import assert_not_cli_args_identifier
 
@@ -170,9 +202,22 @@ def _invoke_text_parts(
     adapter = self._concrete_adapter(self._resolve_adapter(block_profile))
     captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
     self._assert_profile_override_supported(block_profile, adapter)
-    from kedi.agent_adapter.request.media import output_media_kind, require_media_output
+    from kedi.agent_adapter.request.media import (
+        NamedAudio,
+        output_media_kind,
+        require_audio_to_name,
+        require_media_output,
+        tools_return,
+    )
 
     output_media = output_media_kind(output_type)
+    # A speech request sends text only and takes no tools. With attachments, or a tool that
+    # returns audio, ``[x: Audio] <<`` has the model name an audio of its request instead.
+    names_audio = output_media == "audio" and (
+        attaches or tools_return(captured_tool_specs, "audio")
+    )
+    if names_audio:
+        output_type, output_media = NamedAudio, None
     # Speech stays outside the conversation: it neither reads nor records history, so a later
     # text turn never replays an audio-only reply.
     conversation_state, conversation_ticket, lane_identity = (
@@ -228,11 +273,15 @@ def _invoke_text_parts(
             )
             if output_media is not None:
                 require_media_output(adapter, output_media, attachments)
+            if names_audio:
+                require_audio_to_name(attachments, tools=captured_tool_specs)
             if output_media == "audio":
                 # Speech runs without tools, so only the program's own instructions apply.
                 instruction_parts = tuple(
                     part for part in instruction_parts if part.source == "profile"
                 )
+            elif _may_name_media((output_type,), attachments, captured_tool_specs, profile):
+                instruction_parts = (*instruction_parts, _media_output_instruction())
             with override_ctx:
                 return self._run_conversation_call(
                     adapter,
@@ -568,15 +617,16 @@ def _kedi_run(
                     else "completion"
                 ),
             )
-            prompt = prompt_builder.build().with_media(
-                _prepare_attachments(
-                    self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
-                )
+            attachments = _prepare_attachments(
+                self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
             )
+            prompt = prompt_builder.build().with_media(attachments)
             instruction_parts = (
                 *prompt_builder.instruction_parts(),
                 *self._agent_instruction_parts(profile, adapter),
             )
+            if _may_name_media(typed_fields.values(), attachments, captured_tool_specs, profile):
+                instruction_parts = (*instruction_parts, _media_output_instruction())
 
             with override_ctx:
                 result_map = self._run_conversation_call(

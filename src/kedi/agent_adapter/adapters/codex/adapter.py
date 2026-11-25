@@ -735,7 +735,10 @@ def _parse_structured_result(result: CodexTurnResult, output_type: Any) -> Any:
                 "Codex scalar structured output must contain a 'response' field."
             )
         value = value["response"]
-    return adapter.validate_python(value)
+    from kedi.agent_adapter.request.media import media_validation_context
+
+    # A media field names one of the request's attachments.
+    return adapter.validate_python(value, context=media_validation_context())
 
 
 def _json_object_result(result: CodexTurnResult) -> Mapping[str, Any]:
