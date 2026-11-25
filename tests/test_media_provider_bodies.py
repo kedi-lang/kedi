@@ -133,7 +133,8 @@ def pydantic_model(provider: str, bodies: Bodies, name: str | None = None) -> An
 
         client = httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=60)
         return GoogleModel(
-            "gemini-2.5-flash", provider=GoogleProvider(api_key="test", http_client=client)
+            name or "gemini-2.5-flash",
+            provider=GoogleProvider(api_key="test", http_client=client),
         )
     if provider == "anthropic":
         httpx2 = pytest.importorskip("httpx2")
