@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Generator, Mapping, Sequence, cast
 
 from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook, fatal_hook_errors
+from kedi.agent_adapter.adapters.claude.media import claude_prompt
 from kedi.agent_adapter.adapters.claude.messages import (
     _active_claude_hook_identities,
     _claude_invocation_usage,
@@ -38,13 +39,18 @@ from kedi.agent_adapter.hooks import HookHandler, HookRegistrationMixin, hooked_
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.output_schema import build_output_model
+from kedi.agent_adapter.request import take_prompt_media
 from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tools.scope import ToolScope
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
-from kedi.agent_profile.settings import CLAUDE_AGENT_SETTING_KEYS, claude_agent_settings
+from kedi.agent_profile.settings import (
+    CLAUDE_AGENT_SETTING_KEYS,
+    claude_agent_settings,
+    media_limit_bytes,
+)
 from kedi.effort import pydantic_effort_value
 from kedi.resolved_types import ResolvedKediType
 
@@ -93,7 +99,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
-        supports_media_input=False,
+        supports_media_input=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "provider_builtin"}),
@@ -227,6 +233,13 @@ class ClaudeAdapter(HookRegistrationMixin):
         sdk = _claude_sdk()
         run_kwargs = dict(kwargs)
         instructions = cast(str | None, run_kwargs.pop("instructions", None))
+        # The first native run in the request takes its attachments; nested runs get none.
+        sdk_prompt = claude_prompt(
+            prompt,
+            take_prompt_media(),
+            model=self._model_for_run(),
+            media_limit=media_limit_bytes(self.active_profile.settings),
+        )
         async with AsyncExitStack() as stack:
             projection, codemode_settings = await self._projected_tools_for_run(stack)
             options, session_fingerprint = self._options_for_run(
@@ -277,12 +290,14 @@ class ClaudeAdapter(HookRegistrationMixin):
 
                 control = current_live_input()
                 if control is None:
-                    async for message in sdk.query(prompt=prompt, options=options):
+                    async for message in sdk.query(prompt=sdk_prompt, options=options):
                         observe_message(message)
                 else:
                     from .live import run_query
 
-                    result = await run_query(options, prompt, control, observe_message)
+                    result = await run_query(
+                        options, sdk_prompt, control, observe_message, text=prompt
+                    )
 
                 check_hooks()
                 if result is None:

@@ -61,7 +61,7 @@ Kedi checks before the call; the program sees each failure as a
 
 | Condition | Error |
 |---|---|
-| a prompt has attachments and the adapter does not advertise `supports_media_input` | `MediaError: Adapter '<shortname>' does not accept media input; use the Pydantic AI or LangChain adapter for prompts with media` |
+| a prompt has attachments and the adapter does not advertise `supports_media_input` | `MediaError: Adapter '<shortname>' does not accept media input; Pydantic AI, LangChain, the Claude Agent SDK and Codex take prompts with media` |
 | an attachment is larger than the `media_limit` setting | `MediaError: <name>: ... is larger than the media_limit setting` |
 | a known provider cannot take the attachment's kind, type, or source | `MediaError` naming the attachment |
 

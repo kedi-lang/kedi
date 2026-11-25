@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from kedi.agent_adapter.subagents.control import (
     LiveInput,
@@ -21,10 +21,22 @@ if TYPE_CHECKING:
 
 async def run_query(
     options: ClaudeAgentOptions,
-    prompt: str,
+    prompt: str | AsyncIterator[dict[str, Any]],
     control: LiveInput,
     observe: Callable[[Message], None],
+    *,
+    text: str | None = None,
 ) -> ResultMessage:
+    """Run one Claude query under live input.
+
+    ``text`` is the prompt text the run confirms; it is required when ``prompt`` is a
+    streamed message carrying attachments.
+    """
+    if text is None:
+        if not isinstance(prompt, str):
+            raise TypeError("run_query needs the prompt text for a streamed prompt")
+        text = prompt
+    confirmed_text = text
     from claude_agent_sdk import ClaudeSDKClient, HookMatcher, ResultMessage
 
     revision = current_live_revision(control)
@@ -70,7 +82,7 @@ async def run_query(
             result: ResultMessage | None = None
             try:
                 await client.query(prompt)
-                control.confirm_contents((prompt,))
+                control.confirm_contents((confirmed_text,))
                 async for message in client.receive_response():
                     observe(message)
                     if isinstance(message, ResultMessage):

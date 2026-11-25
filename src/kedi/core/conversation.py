@@ -109,7 +109,7 @@ def _execute_conversation_call(
 
         raise MediaError(
             f"Adapter {adapter.shortname!r} does not accept media input; "
-            "use the Pydantic AI or LangChain adapter for prompts with media"
+            "Pydantic AI, LangChain, the Claude Agent SDK and Codex take prompts with media"
         )
     runtime_adapter: Any = adapter
     if isinstance(runtime_adapter, HookRegistrationMixin):
