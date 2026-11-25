@@ -78,8 +78,11 @@ def _run_kwargs(
                 "the upstream TypeSafeModel uses a fixed decision policy"
             )
     self._apply_default_usage_limits(run_kwargs)
-    if self.active_profile.system is not None and run_kwargs.get("instructions") is None:
-        run_kwargs["instructions"] = self.active_profile.system
+    instructions = self.active_profile.call_instructions(
+        cast("str | None", run_kwargs.get("instructions"))
+    )
+    if instructions is not None:
+        run_kwargs["instructions"] = instructions
     model_settings = pydantic_model_settings(self.active_profile.settings)
     if self.active_profile.effort is not None:
         model_settings["thinking"] = pydantic_effort_value(self.active_profile.effort)

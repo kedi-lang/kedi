@@ -303,6 +303,12 @@ def _parse_error_message(self: _Walker, node: Node, fallback: str) -> str:
         )
     if "``" in raw:
         return "inline Python expression cannot be empty"
+    leading_zero = _leading_zero_integer(self.source, node)
+    if leading_zero is not None:
+        return (
+            f"invalid integer {leading_zero!r}: Python does not allow leading zeros; "
+            f"write {int(leading_zero)}, or quote it as a string"
+        )
     invalid_identifier = _hyphenated_identifier_from_error(self.source, node)
     if invalid_identifier is not None:
         return (
@@ -310,6 +316,19 @@ def _parse_error_message(self: _Walker, node: Node, fallback: str) -> str:
             "Kedi identifiers; use '_' instead"
         )
     return fallback
+
+
+_LEADING_ZERO_LITERAL = re.compile(r"Literal\[[^\]\n]*?(?<![\w.])(0\d+)(?![\w.])")
+
+
+def _leading_zero_integer(source: bytes, node: Node) -> str | None:
+    """An integer with leading zeros, such as ``01`` in ``Literal[01]``, on the error's line."""
+
+    line_start = source.rfind(b"\n", 0, node.start_byte) + 1
+    line_end = source.find(b"\n", node.start_byte)
+    line = source[line_start : len(source) if line_end < 0 else line_end]
+    match = _LEADING_ZERO_LITERAL.search(line.decode("utf-8", "replace"))
+    return None if match is None else match.group(1)
 
 
 def _template_condition_has_bare_python(raw: str) -> bool:

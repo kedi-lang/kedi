@@ -248,7 +248,7 @@ class WebGPUAdapter(HookRegistrationMixin):
                 payload = {
                     "model": profile.model or self._model,
                     "messages": [dict(message) for message in messages],
-                    "instructions": instructions or profile.system,
+                    "instructions": profile.call_instructions(instructions),
                     "effort": profile.effort,
                     "settings": settings,
                     "tools": tool_contracts,

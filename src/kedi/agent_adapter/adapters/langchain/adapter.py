@@ -402,9 +402,7 @@ class LangChainAdapter(HookRegistrationMixin):
 
         output_model, unwrap_response = _langchain_typed_output(resolved_output_type)
         response_schema = output_model.model_json_schema()
-        instructions = cast(str | None, kwargs.pop("instructions", None))
-        if instructions is None:
-            instructions = self.active_profile.system
+        instructions = self.active_profile.call_instructions(kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
@@ -455,9 +453,7 @@ class LangChainAdapter(HookRegistrationMixin):
         output_schema: dict[str, Any],
         **kwargs: Any,
     ) -> Mapping[str, Any]:
-        instructions = cast(str | None, kwargs.pop("instructions", None))
-        if instructions is None:
-            instructions = self.active_profile.system
+        instructions = self.active_profile.call_instructions(kwargs.pop("instructions", None))
         validator = validator_for(output_schema)(output_schema)
         output_state = self._subagent_output_state_var.get()
         model = self._chat_model_for_run()
@@ -519,9 +515,7 @@ class LangChainAdapter(HookRegistrationMixin):
         model = speech_model(
             selected, voice=speech_voice(self.active_profile.settings), label=label
         )
-        instructions = cast(str | None, kwargs.pop("instructions", None))
-        if instructions is None:
-            instructions = self.active_profile.system
+        instructions = self.active_profile.call_instructions(kwargs.pop("instructions", None))
         agent = self._create_agent(
             model=model,
             tools=[],
@@ -540,11 +534,11 @@ class LangChainAdapter(HookRegistrationMixin):
     ) -> Any:
         """Run the agent without a response format and return its raw result."""
 
-        instructions = cast(str | None, kwargs.pop("instructions", None))
+        instructions = self.active_profile.call_instructions(kwargs.pop("instructions", None))
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
                 append_codemode_instructions(
-                    instructions if instructions is not None else self.active_profile.system,
+                    instructions,
                     enabled=projection.enabled,
                     preloaded_tools=projection.preloaded_tools,
                 ),

@@ -477,3 +477,37 @@ def test_speech_counts_against_the_request_budget(
     assert "prompt" not in record
     if adapter_name == "langchain":
         assert _Recorded.calls == []
+
+
+def test_a_speech_chat_model_with_a_voice_field_gets_the_voice(workspace: Path) -> None:
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    voices: list[str | None] = []
+
+    class LocalSpeaker(GenericFakeChatModel):
+        """A local TTS wrapped as a chat model, with voices of its own."""
+
+        model: str = "local-tts"
+        voice: str | None = None
+
+        def _generate(self, messages: list[Any], *args: Any, **kwargs: Any) -> Any:
+            voices.append(self.voice)
+            return ChatResult(generations=[ChatGeneration(message=_wav_block_message())])
+
+    model = LocalSpeaker(messages=iter([]))
+    model.profile = {"audio_outputs": True}
+    source = SPEAK.replace("[speech", "> settings:\n    voice: zoey\n[speech")
+    assert _run(source, LangChainAdapter(model=model)).data == WAV
+    assert voices == ["zoey"]
+    # The adapter's own model keeps its voice; only the speech request's copy changes.
+    assert model.voice is None
+
+
+def test_an_explicit_empty_instruction_sends_none() -> None:
+    from kedi.agent_profile import AgentProfile
+
+    profile = AgentProfile(system="Profile instructions")
+    assert profile.call_instructions(None) == "Profile instructions"
+    assert profile.call_instructions("") == ""
+    assert profile.call_instructions("Call instructions") == "Call instructions"

@@ -102,6 +102,16 @@ class AgentProfile:
             normalize_hook_settings(self._hook_enforcement),
         )
 
+    def call_instructions(self, instructions: str | None) -> str | None:
+        """The instructions one adapter call sends.
+
+        Kedi calls always pass their rendered instructions. A direct or native adapter call
+        that passes none uses this profile's ``> instructions:``; an explicit empty string
+        sends none.
+        """
+
+        return self.system if instructions is None else instructions
+
     @classmethod
     def empty(cls) -> AgentProfile:
         return cls(artifacts=ArtifactPolicy.patch({}))

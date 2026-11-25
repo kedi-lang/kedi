@@ -109,7 +109,9 @@ def test_output_type_display_name_supports_plain_and_annotated_types() -> None:
 
 def test_request_assembler_snapshots_resolved_collections() -> None:
     schema: dict[str, Any] = {"answer": str}
-    instructions = [InstructionPart(identity="profile.system", source="profile", content="system")]
+    instructions = [
+        InstructionPart(identity="profile.instructions", source="profile", content="system")
+    ]
     request = RunRequestAssembler().assemble(
         prompt=RawPromptBuilder(content="hello").build(),
         instructions=instructions,
@@ -185,7 +187,7 @@ def test_request_assembler_projects_live_tools_into_immutable_definitions() -> N
         prompt=RawPromptBuilder(content="secret prompt").build(),
         instructions=(
             InstructionPart(
-                identity="profile.system",
+                identity="profile.instructions",
                 source="profile",
                 content="secret instruction",
             ),
@@ -208,7 +210,7 @@ def test_request_assembler_projects_live_tools_into_immutable_definitions() -> N
 
     diagnostics = request_diagnostics(request)
     assert diagnostics.tool_names == ("read_file",)
-    assert diagnostics.instruction_identities == ("profile.system",)
+    assert diagnostics.instruction_identities == ("profile.instructions",)
     assert "secret prompt" not in repr(diagnostics)
     assert "secret instruction" not in repr(diagnostics)
 

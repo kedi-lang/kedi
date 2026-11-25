@@ -436,7 +436,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         if model is not None:
             options_kwargs["model"] = model
         system_prompt = append_codemode_instructions(
-            instructions or self.active_profile.system,
+            self.active_profile.call_instructions(instructions),
             enabled=codemode_enabled,
             preloaded_tools=codemode_preloaded_tools,
         )

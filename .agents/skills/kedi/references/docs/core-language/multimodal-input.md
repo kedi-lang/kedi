@@ -357,8 +357,10 @@ model reports it, and is `None` otherwise.
 | LangChain | Gemini TTS models such as `gemini-2.5-flash-preview-tts`, which read the prompt aloud, and OpenAI audio models such as `gpt-audio` |
 
 - `voice` in `> settings:` picks the voice: Kore and the other Gemini voices,
-  alloy and the other OpenAI voices. LangChain's Gemini models take no voice
-  setting, so setting one there is an error.
+  alloy and the other OpenAI voices. On LangChain, a chat model that declares a
+  `voice` field, such as a local TTS model wrapped as a chat model, gets it.
+  LangChain's Gemini models take no voice setting, so setting one there is an
+  error.
 - A speech request sends text only: a prompt that references media fails
   before the call. Describe the media in an earlier request and speak its
   answer.
