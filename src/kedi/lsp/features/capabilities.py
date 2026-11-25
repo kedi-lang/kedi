@@ -1003,6 +1003,12 @@ def _template_line_capability_diagnostics(
     )
 
 
+_MEDIA_OUTPUTS: dict[str, tuple[AdapterCapability, str]] = {
+    "Image": ("image_output", "image output"),
+    "Audio": ("audio_output", "speech output"),
+}
+
+
 def _raw_invoke_capability_diagnostics(
     state: _AdapterDiagnosticState,
     stmt: RawInvokeStmt,
@@ -1012,13 +1018,16 @@ def _raw_invoke_capability_diagnostics(
     if stmt.type_annotation in (None, "str"):
         return []
     span = stmt.type_expr.loc if stmt.type_expr is not None else stmt.loc
-    if stmt.type_annotation.strip() == "Image" and media_names.calls:
-        # ``[img: Image] << Draw a cat.`` asks the model for an image, not structured output.
+    output = _MEDIA_OUTPUTS.get(stmt.type_annotation.strip())
+    if output is not None and media_names.calls:
+        # ``[img: Image] << Draw a cat.`` asks the model for an image, and
+        # ``[speech: Audio] << Read this aloud.`` for speech, not for structured output.
+        capability, description = output
         return _unsupported_capability_diagnostics(
             state,
-            "image_output",
+            capability,
             [span],
-            "image output",
+            description,
             severity=lsp.DiagnosticSeverity.Error,
         )
     return _structured_output_diagnostics(

@@ -332,6 +332,48 @@ Notebook.
   capture or a model is still structured output, which the model writes as
   text.
 
+## Speech Output
+
+A typed raw invoke with `Audio` asks the model itself to speak:
+
+```kedi
+> import: media
+
+> settings:
+    voice: Kore
+
+[speech: Audio] << Say good morning to the team in one sentence.
+[path] = `save(speech, "out/morning.wav")`
+= `speech.transcript`
+```
+
+`speech` is an ordinary `Audio` value in WAV: reference it, save it, or play
+it in Kedi Notebook. `speech.transcript` holds what the model said, when the
+model reports it, and is `None` otherwise.
+
+| Adapter | Models |
+| --- | --- |
+| Pydantic AI | realtime models such as `google:gemini-3.1-flash-live-preview` and `openai:gpt-realtime`; Kedi opens a one-shot realtime session, sends the prompt, keeps the reply's speech and closes the session |
+| LangChain | Gemini TTS models such as `gemini-2.5-flash-preview-tts`, which read the prompt aloud, and OpenAI audio models such as `gpt-audio` |
+
+- `voice` in `> settings:` picks the voice: Kore and the other Gemini voices,
+  alloy and the other OpenAI voices. LangChain's Gemini models take no voice
+  setting, so setting one there is an error.
+- A speech request sends text only: a prompt that references media fails
+  before the call. Describe the media in an earlier request and speak its
+  answer.
+- A speech request offers no tools. Only the program's own `> instructions:`
+  go with it, and a Gemini TTS model, which reads its prompt aloud, gets none.
+- A speech request stays outside the conversation: with `> history: enabled`
+  it neither reads nor records history, so later text turns do not see it.
+- It counts as one model request for `> budget:`. Fallback models are not
+  tried for it.
+- Any other model fails with an error naming it. Adapters without speech
+  output (Claude Agent SDK, Codex, WebGPU, ACP, A2A) fail before the call, and
+  the editor reports `[x: Audio] <<` on them.
+- Only `[x: Audio] <<` produces speech. Live voice sessions, with microphone
+  input and interruptions, are not part of Kedi yet.
+
 ## History
 
 With `> history: enabled`, an attachment that the replayed history already

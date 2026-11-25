@@ -253,6 +253,7 @@ directive-value registry (`src/kedi/directive_values.py`) where one exists.
 | `tool_reason` | Activation: `enabled`/`disabled`, or a backtick expression returning `bool` | Kedi runtime |
 | `tools` | Backtick Python list or mapping | Claude |
 | `top_p` | Numeric value | Pydantic AI, LangChain |
+| `voice` | Voice name for speech output (`[x: Audio] <<`) | Kedi runtime |
 
 ## Unknown and Inapplicable Settings
 

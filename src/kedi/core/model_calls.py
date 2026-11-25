@@ -170,8 +170,15 @@ def _invoke_text_parts(
     adapter = self._concrete_adapter(self._resolve_adapter(block_profile))
     captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
     self._assert_profile_override_supported(block_profile, adapter)
-    conversation_state, conversation_ticket, lane_identity = self._reserve_conversation_turn(
-        block_profile, adapter, captured_tool_specs
+    from kedi.agent_adapter.request.media import output_media_kind, require_media_output
+
+    output_media = output_media_kind(output_type)
+    # Speech stays outside the conversation: it neither reads nor records history, so a later
+    # text turn never replays an audio-only reply.
+    conversation_state, conversation_ticket, lane_identity = (
+        (None, None, None)
+        if output_media == "audio"
+        else self._reserve_conversation_turn(block_profile, adapter, captured_tool_specs)
     )
 
     def _call_invoke() -> Any:
@@ -185,7 +192,6 @@ def _invoke_text_parts(
             compose_prompt,
             lower_request_sync,
         )
-        from kedi.agent_adapter.request.media import produces_image, require_image_output
         from kedi.agent_adapter.tools.specs import SupportsToolRegistration
 
         prompt, media = compose_prompt(resolved_parts)
@@ -220,8 +226,13 @@ def _invoke_text_parts(
             attachments = _prepare_attachments(
                 self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
             )
-            if produces_image(output_type):
-                require_image_output(adapter)
+            if output_media is not None:
+                require_media_output(adapter, output_media, attachments)
+            if output_media == "audio":
+                # Speech runs without tools, so only the program's own instructions apply.
+                instruction_parts = tuple(
+                    part for part in instruction_parts if part.source == "profile"
+                )
             with override_ctx:
                 return self._run_conversation_call(
                     adapter,

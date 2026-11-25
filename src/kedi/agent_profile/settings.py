@@ -9,7 +9,7 @@ SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
 
 KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset(
-    {"tool_reason", "media_limit", "context_limit", "request_retries"}
+    {"tool_reason", "media_limit", "context_limit", "request_retries", "voice"}
 )
 
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
@@ -148,6 +148,14 @@ def context_limit_tokens(settings: SettingsMap) -> int | None:
     value = settings.get("context_limit")
     if value is not None:
         validate_field("settings", "context_limit", value)
+    return value
+
+
+def speech_voice(settings: SettingsMap) -> str | None:
+    """The voice a speech request asks for: ``[speech: Audio] << ...``; ``None`` keeps the model's."""
+    value = settings.get("voice")
+    if value is not None:
+        validate_field("settings", "voice", value)
     return value
 
 

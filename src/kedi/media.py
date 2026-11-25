@@ -246,6 +246,7 @@ class Media:
 
     kind: ClassVar[MediaKind]
     _type_label: ClassVar[str]
+    # A subclass's own constructor fields: video clip settings, a speech transcript.
     _SETTINGS: ClassVar[tuple[str, ...]] = ()
     __slots__ = (*_FIELDS, "_sha256")
 
@@ -448,6 +449,8 @@ class Media:
             fields.append(f"size={self.size}")
         for attribute in ("url", "file_id", "provider", "name", "filename", *self._SETTINGS):
             value = getattr(self, attribute)
+            if attribute in self._SETTINGS and isinstance(value, str) and len(value) > 60:
+                value = value[:57] + "..."
             if value is not None:
                 fields.append(f"{attribute}={value!r}")
         return f"{type(self).__name__}({', '.join(fields)})"
@@ -706,11 +709,34 @@ class Image(Media):
 
 
 class Audio(Media):
-    """Audio: WAV, MP3, OGG, FLAC, AIFF or AAC."""
+    """Audio: WAV, MP3, OGG, FLAC, AIFF or AAC.
 
-    __slots__ = ()
+    Speech a model produced (``[speech: Audio] << ...``) keeps the model's ``transcript`` when
+    it gave one. The transcript is a label: it is never sent to a model and two audio values
+    with the same content are equal whatever their transcripts.
+    """
+
+    __slots__ = ("transcript",)
     kind: ClassVar[MediaKind] = "audio"
     _type_label: ClassVar[str] = "audio"
+    _SETTINGS: ClassVar[tuple[str, ...]] = ("transcript",)
+    transcript: str | None
+
+    def __init__(self, *, transcript: str | None = None, **fields: Any) -> None:
+        object.__setattr__(self, "transcript", transcript)
+        super().__init__(**fields)
+
+    def _validate(self) -> None:
+        super()._validate()
+        if self.transcript is not None and not isinstance(self.transcript, str):
+            raise MediaError(
+                f"An audio transcript must be text, not {type(self.transcript).__name__}"
+            )
+
+    def with_transcript(self, transcript: str | None) -> Audio:
+        """Return the same audio with ``transcript``; ``None`` clears it."""
+
+        return type(self)(**{**self._values(), "transcript": transcript})
 
     def _check_media_type(self, media_type: str) -> None:
         super()._check_media_type(media_type)
@@ -1303,7 +1329,7 @@ def from_bridge(payload: Any) -> Media:
     fields = {name: payload.get(name) for name in _FIELDS}
     if any(value is not None and not isinstance(value, str) for value in fields.values()):
         raise MediaError("Bridged media fields must be strings")
-    # Settings are numbers and names; the constructor validates each value.
+    # Settings are numbers, names and text; the constructor validates each value.
     fields.update({name: payload.get(name) for name in cls._SETTINGS})
     data = fields["data"]
     if data is not None:

@@ -361,21 +361,47 @@ def check_media_limit(attachments: Sequence[MediaAttachment], limit: int | None)
             )
 
 
-def produces_image(output_type: Any) -> bool:
-    """Whether a typed call asks the model for an image: ``[img: Image] << Draw a cat.``"""
-
-    from kedi.media import Image
-
-    return output_type is Image
+OutputMediaKind = Literal["image", "audio"]
 
 
-def require_image_output(adapter: Any) -> None:
-    """Fail before any model I/O when ``adapter`` cannot return an image."""
+def output_media_kind(output_type: Any) -> OutputMediaKind | None:
+    """The media a typed call asks the model itself to produce, if any.
 
-    if not adapter.capabilities.supports("image_output"):
+    ``[img: Image] << Draw a cat.`` asks for an image, ``[speech: Audio] << Read this aloud.``
+    for speech.
+    """
+
+    from kedi.media import Audio, Image
+
+    if output_type is Image:
+        return "image"
+    if output_type is Audio:
+        return "audio"
+    return None
+
+
+def require_media_output(
+    adapter: Any, kind: OutputMediaKind, attachments: Sequence[MediaAttachment]
+) -> None:
+    """Fail before any model I/O when ``adapter`` cannot produce ``kind``, or when a speech
+    request has media to send."""
+
+    if kind == "image":
+        if not adapter.capabilities.supports("image_output"):
+            raise MediaError(
+                f"Adapter {adapter.shortname!r} cannot produce images; "
+                "Pydantic AI and LangChain return images from image models"
+            )
+        return
+    if not adapter.capabilities.supports("audio_output"):
         raise MediaError(
-            f"Adapter {adapter.shortname!r} cannot produce images; "
-            "Pydantic AI and LangChain return images from image models"
+            f"Adapter {adapter.shortname!r} cannot produce speech; Pydantic AI returns it from "
+            "realtime models and LangChain from audio models"
+        )
+    if attachments:
+        raise MediaError(
+            f"{attachments[0].name}: a speech request sends text only; describe the media in "
+            "an earlier request and speak its answer"
         )
 
 
@@ -666,8 +692,8 @@ __all__ = [
     "gemini_settings_key",
     "gemini_video_metadata",
     "image_size",
-    "produces_image",
-    "require_image_output",
+    "output_media_kind",
+    "require_media_output",
     "compose_prompt",
     "history_keeps_media",
     "media_digest_material",

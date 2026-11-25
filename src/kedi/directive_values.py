@@ -238,6 +238,7 @@ FIELD_RULES: dict[str, dict[str, ValueRule]] = {
             "Additional attempts for transient model request errors", kind="int", minimum=0
         ),
         "media_limit": ValueRule("Largest media value sent to the model", kind="size"),
+        "voice": ValueRule("Voice name for speech output", kind="string"),
         "context_limit": ValueRule(
             "Model context window in tokens for Kedi's request ceiling", kind="int", minimum=32_768
         ),

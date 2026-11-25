@@ -41,6 +41,7 @@ part of the base adapter protocol rather than an optional capability.
 | Native history processing | yes | yes |
 | Media input | yes | yes |
 | Image output | yes | yes |
+| Speech output | yes | yes |
 | Agent lifecycle hooks | yes | yes |
 
 ## Agent Harnesses
@@ -74,6 +75,7 @@ part of the base adapter protocol rather than an optional capability.
 | Native history processing | no | no | no | no |
 | Media input | yes | yes | yes | yes |
 | Image output | no | no | no | no |
+| Speech output | no | no | no | no |
 | Agent lifecycle hooks | yes | yes | yes | yes |
 <!-- END GENERATED ADAPTER CAPABILITIES -->
 

@@ -170,7 +170,7 @@ Kedi enters `profile_override(profile)` around every call. Once an adapter
 implements it, Kedi no longer rejects profile fields on the adapter's behalf,
 so the adapter must refuse what it cannot honor. Settings named in
 `KEDI_RUNTIME_SETTING_KEYS` (`context_limit`, `media_limit`, `request_retries`,
-`tool_reason`) belong to Kedi and are never an error; see [Profiles, Models,
+`tool_reason`, `voice`) belong to Kedi and are never an error; see [Profiles, Models,
 and Settings](profiles.md). The profile's `> instructions:`
 need no handling here: Kedi already renders them into the `instructions` argument.
 
