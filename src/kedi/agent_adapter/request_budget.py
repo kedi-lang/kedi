@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from threading import RLock
-from typing import Any, Generator, Iterable, Mapping, Protocol, runtime_checkable
+from typing import Any, Callable, Generator, Iterable, Mapping, Protocol, runtime_checkable
 
 from .invocation import InvocationUsage
 
@@ -323,6 +323,57 @@ def estimate_attachment_tokens(attachments: Iterable[Any]) -> int:
     return total
 
 
+@dataclass(frozen=True, slots=True)
+class MediaPayload:
+    """One inline base64 media payload found in serialized messages."""
+
+    kind: str
+    media_type: str | None
+    encoded: str
+    name: str | None
+
+
+def map_media_payloads(value: Any, replace: Callable[[MediaPayload], str]) -> Any:
+    """Return ``value`` with each inline media payload replaced by ``replace(payload)``.
+
+    Finds Pydantic AI ``BinaryContent``, LangChain v1 data blocks and v0 base64 blocks, and
+    ``data:`` URLs; the rest of each message keeps its shape.
+    """
+
+    def visit(node: Any) -> Any:
+        if isinstance(node, Mapping):
+            key = _media_payload_key(node)
+            if key is None:
+                return {name: visit(item) for name, item in node.items()}
+            media_type = node.get("media_type") or node.get("mime_type")
+            name = node.get("identifier") or node.get("id")
+            payload = MediaPayload(
+                kind=_payload_kind(node),
+                media_type=media_type if isinstance(media_type, str) else None,
+                encoded=node[key],
+                name=name if isinstance(name, str) else None,
+            )
+            return {
+                field: replace(payload) if field == key else visit(item)
+                for field, item in node.items()
+            }
+        if isinstance(node, (list, tuple)):
+            return [visit(item) for item in node]
+        if isinstance(node, str) and node.startswith("data:") and ";base64," in node[:128]:
+            media_type, encoded = node[5:].split(";base64,", 1)
+            return replace(
+                MediaPayload(
+                    kind=_kind_for_media_type(media_type),
+                    media_type=media_type or None,
+                    encoded=encoded,
+                    name=None,
+                )
+            )
+        return node
+
+    return visit(value)
+
+
 def project_media_payloads(value: Any) -> tuple[Any, int]:
     """Replace inline media payloads in serialized messages with short placeholders.
 
@@ -332,27 +383,13 @@ def project_media_payloads(value: Any) -> tuple[Any, int]:
 
     tokens = 0
 
-    def placeholder(kind: str, encoded: str) -> str:
+    def placeholder(payload: MediaPayload) -> str:
         nonlocal tokens
-        size = len(encoded) * 3 // 4
-        tokens += estimate_media_tokens(kind, size)
-        return f"[{kind}: {size} bytes]"
+        size = len(payload.encoded) * 3 // 4
+        tokens += estimate_media_tokens(payload.kind, size)
+        return f"[{payload.kind}: {size} bytes]"
 
-    def visit(node: Any) -> Any:
-        if isinstance(node, Mapping):
-            key = _media_payload_key(node)
-            return {
-                name: (placeholder(_payload_kind(node), item) if name == key else visit(item))
-                for name, item in node.items()
-            }
-        if isinstance(node, (list, tuple)):
-            return [visit(item) for item in node]
-        if isinstance(node, str) and node.startswith("data:") and ";base64," in node[:128]:
-            media_type, encoded = node[5:].split(";base64,", 1)
-            return placeholder(_kind_for_media_type(media_type), encoded)
-        return node
-
-    return visit(value), tokens
+    return map_media_payloads(value, placeholder), tokens
 
 
 def _media_payload_key(node: Mapping[Any, Any]) -> str | None:

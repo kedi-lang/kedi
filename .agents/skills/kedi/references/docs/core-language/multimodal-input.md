@@ -342,6 +342,18 @@ rebinds `photo`, the new content is attached again.
 With a history processor, native compaction or history archiving, Kedi cannot
 tell what the model still sees, so it attaches references on every turn.
 
+History archiving keeps media out of the archived transcript:
+
+- Each image, audio, video or PDF of the archived turns is stored once as an
+  artifact of its own, marked sensitive like the transcript.
+- The transcript names it by reference (`kedi-artifact:<ref>`), and the
+  checkpoint lists it by name and reference.
+- `read_artifact` on that reference returns the media itself, so the model can
+  look at an archived image again; Pydantic AI and LangChain send it natively.
+- URLs and uploaded files stay as they are, and media in the turns that are
+  kept are not moved. If storing a media artifact fails, the turns are not
+  archived.
+
 ## Python
 
 `kedi.media` provides the same types:

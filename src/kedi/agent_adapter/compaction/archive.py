@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from abc import ABC, abstractmethod
 from collections import Counter
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Generic, TypeVar, cast
 
-from kedi.artifacts import ArtifactError, ArtifactHandle, ArtifactPolicy
+from kedi.artifacts import ArtifactError, ArtifactHandle, ArtifactManager, ArtifactPolicy
+from kedi.artifacts.tools import MEDIA_ARTIFACT_SOURCE
 
+from ..request_budget import MediaPayload, map_media_payloads
 from ..tools.scope import current_artifact_admission
 from .checkpoint import render_checkpoint
 from .codecs import AdapterHistoryCodec, conservative_token_estimate, fingerprint_sequence
@@ -95,15 +99,6 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
         serialized = self.serialize(selected)
         source_digest = fingerprint_sequence(list(selected))
         checkpoint_id = f"history_{source_digest[:16]}"
-        archive_payload = {
-            "schema": f"kedi.{self.codec.adapter_shortname}-history-archive.v1",
-            "checkpoint_id": checkpoint_id,
-            "source_digest": source_digest,
-            "source_tokens": window.source_tokens,
-            "messages": serialized,
-        }
-        if provider_pressure is not None:
-            archive_payload["provider_input_baseline_tokens"] = provider_pressure.baseline_tokens
         forced_policy = effective_policy.overlay(ArtifactPolicy.patch({"threshold_bytes": 0}))
 
         with compact_history_span(
@@ -126,7 +121,20 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
                     "kedi.history.compaction.provider_history_growth_tokens",
                     provider_pressure.growth_tokens,
                 )
+            archived_media = _ArchivedMedia(manager, forced_policy, checkpoint_id)
             try:
+                # Media go to artifacts of their own; the archive names them by reference.
+                archive_payload = {
+                    "schema": f"kedi.{self.codec.adapter_shortname}-history-archive.v1",
+                    "checkpoint_id": checkpoint_id,
+                    "source_digest": source_digest,
+                    "source_tokens": window.source_tokens,
+                    "messages": map_media_payloads(serialized, archived_media.store),
+                }
+                if provider_pressure is not None:
+                    archive_payload["provider_input_baseline_tokens"] = (
+                        provider_pressure.baseline_tokens
+                    )
                 stored = manager.artifactize(
                     archive_payload,
                     policy=forced_policy,
@@ -140,6 +148,7 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
                     },
                 )
             except (ArtifactError, OSError) as exc:
+                archived_media.release()
                 telemetry.span.add_event(
                     "compaction rejected",
                     {
@@ -175,6 +184,7 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
                 checkpoint_id=checkpoint_id,
                 source_digest=source_digest,
                 archive_ref=stored.ref.ref_id,
+                media=archived_media.items,
             )
             updated_state = self.codec.replace_range(
                 {self.codec.state_key: messages},
@@ -295,6 +305,7 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
         checkpoint_id: str,
         source_digest: str,
         archive_ref: str,
+        media: tuple[_StoredMedia, ...] = (),
     ) -> CompactionCheckpoint:
         outcomes = self.tool_outcomes(selected)
         inherited_refs = {
@@ -316,9 +327,18 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
             ),
             source_tokens=window.source_tokens,
             checkpoint_tokens=1,
-            resources=(f"Exact archived transcript: {archive_ref}",),
+            resources=(
+                f"Exact archived transcript: {archive_ref}",
+                *(
+                    f"Archived {item.kind} {item.name}: {item.ref_id} "
+                    "(read_artifact returns it as media)"
+                    for item in media
+                ),
+            ),
             completed_outcomes=outcomes,
-            artifact_refs=tuple(sorted({archive_ref, *inherited_refs})),
+            artifact_refs=tuple(
+                sorted({archive_ref, *inherited_refs, *(item.ref_id for item in media)})
+            ),
         )
         for _ in range(3):
             estimate = conservative_token_estimate(render_checkpoint(checkpoint).encode("utf-8"))
@@ -338,6 +358,62 @@ class ArtifactHistoryProcessor(Generic[MessageT], ABC):
 
     @abstractmethod
     def tool_outcomes(self, messages: list[MessageT]) -> tuple[str, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredMedia:
+    ref_id: str
+    kind: str
+    name: str
+    media_type: str | None
+
+
+class _ArchivedMedia:
+    """Store each distinct media payload of an archive once, and name it by reference."""
+
+    def __init__(
+        self, manager: ArtifactManager, policy: ArtifactPolicy, checkpoint_id: str
+    ) -> None:
+        self._manager = manager
+        self._policy = policy
+        self._checkpoint_id = checkpoint_id
+        self._by_digest: dict[str, _StoredMedia] = {}
+
+    @property
+    def items(self) -> tuple[_StoredMedia, ...]:
+        return tuple(self._by_digest.values())
+
+    def store(self, payload: MediaPayload) -> str:
+        data = base64.b64decode(payload.encoded)
+        digest = sha256(data).hexdigest()
+        item = self._by_digest.get(digest)
+        if item is None:
+            name = payload.name or f"{payload.kind}_{len(self._by_digest) + 1}"
+            stored = self._manager.artifactize(
+                data,
+                policy=self._policy,
+                source=MEDIA_ARTIFACT_SOURCE,
+                sensitive=True,
+                provenance={
+                    "checkpoint_id": self._checkpoint_id,
+                    "media_kind": payload.kind,
+                    "media_type": payload.media_type,
+                    "name": name,
+                },
+            )
+            if not isinstance(stored, ArtifactHandle):
+                raise RuntimeError("forced media archival did not create an artifact")
+            item = _StoredMedia(stored.ref.ref_id, payload.kind, name, payload.media_type)
+            self._by_digest[digest] = item
+        return f"kedi-artifact:{item.ref_id}"
+
+    def release(self) -> None:
+        """Drop the media stored for an archive that was rejected."""
+
+        for item in self._by_digest.values():
+            with suppress(ArtifactError):
+                self._manager.release(item.ref_id)
+        self._by_digest.clear()
 
 
 def cache_epoch_key(cache_key: str, checkpoint_id: str) -> str:

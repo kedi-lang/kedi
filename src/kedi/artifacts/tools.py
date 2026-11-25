@@ -6,6 +6,7 @@ from inspect import signature
 from typing import Any, Literal
 
 from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.media import Media
 
 from .codemode import ARTIFACT_COMPUTE_GUIDANCE, artifact_code_provenance
 from .codemode import run_artifact_code as execute_artifact_code
@@ -30,6 +31,22 @@ def _validated_spec(tool: ToolSpec) -> ToolSpec:
     return replace(tool, fn=invoke)
 
 
+MEDIA_ARTIFACT_SOURCE = "history:media"
+"""The source of media that history compaction archives as artifacts of their own."""
+
+
+def _archived_media(manager: ArtifactManager, ref_id: str) -> Media | None:
+    metadata = manager.metadata(ref_id)
+    if metadata.get("source") != MEDIA_ARTIFACT_SOURCE:
+        return None
+    provenance = metadata.get("provenance") or {}
+    return Media.from_bytes(
+        manager.get_value(ref_id),
+        provenance.get("media_type"),
+        name=provenance.get("name"),
+    )
+
+
 def artifact_tool_specs(
     manager: ArtifactManager,
     policy: ArtifactPolicy | None = None,
@@ -50,9 +67,18 @@ def artifact_tool_specs(
         path: str | None = None,
         pattern: str | None = None,
         max_matches: int = 20,
-    ) -> dict[str, Any] | list[dict[str, Any]]:
+    ) -> dict[str, Any] | list[dict[str, Any]] | Media:
         """Read or search bounded artifact content in the active session."""
 
+        media = _archived_media(manager, ref_id)
+        if media is not None:
+            # Media archived from history come back as media, which the tool bridge sends.
+            if pattern is not None or path is not None or offset != 0 or max_chars != -1:
+                raise ArtifactInputError(
+                    f"{ref_id} is archived media; read it whole, without a pattern, path, "
+                    "offset or limit"
+                )
+            return media
         if pattern is not None:
             if offset != 0 or offset_from != "start":
                 raise ArtifactInputError(
