@@ -8,7 +8,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from kedi import Capability
 from kedi.agent_adapter import PydanticAdapter
-from kedi.agent_adapter.adapters.pydantic.capabilities import _KediArtifactCapability
+from kedi.agent_adapter.adapters.pydantic.capabilities import _KediToolResultCapability
 from kedi.agent_adapter.adapters.pydantic.user_capabilities import _DeferredCapabilityGraph
 from kedi.agent_adapter.tools.errors import CapabilityActivationError, correctable_tool_error
 from kedi.agent_adapter.tools.specs import ToolSpec
@@ -59,7 +59,7 @@ async def test_native_tool_cannot_bypass_its_inactive_capability():
 
 @pytest.mark.asyncio
 async def test_artifact_capability_without_admission_preserves_result():
-    capability = _KediArtifactCapability(PydanticAdapter(TestModel()))
+    capability = _KediToolResultCapability(PydanticAdapter(TestModel()))
     result = object()
     assert await capability.after_run(SimpleNamespace(), result=result) is result
 

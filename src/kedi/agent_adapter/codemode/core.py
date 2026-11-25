@@ -24,6 +24,7 @@ from pydantic_monty import (
     MontyError,
 )
 
+from kedi.agent_adapter.tools.media import sandbox_value
 from kedi.errors import KediExecutionError
 from kedi.run_budget import RunBudgetExceeded
 
@@ -451,7 +452,8 @@ class CodeModeSession:
                     result = await invoke(tool.name, kwargs)
             completed.append(tool.callable_name)
             try:
-                jsonable, size = _json_boundary_value(result)
+                # Media stay with the request; the code receives their placeholders.
+                jsonable, size = _json_boundary_value(sandbox_value(result, tool_name=tool.name))
                 if size > self.limits.max_tool_result_bytes:
                     raise CodeModeBoundaryError(
                         f"Tool {tool.name!r} returned {size} bytes; CodeMode allows "

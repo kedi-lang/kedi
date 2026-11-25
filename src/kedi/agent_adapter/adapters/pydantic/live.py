@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.capabilities.abstract import ValidatedToolArgs, WrapModelRequestHandler
@@ -83,8 +83,20 @@ class InputDeliveryCapability(AbstractCapability[DepsT]):
         args: ValidatedToolArgs,
         result: ToolResultT,
     ) -> ToolResultT:
+        from kedi.agent_adapter.tools.scope import results_go_to_code
+
+        from .capabilities import lower_tool_media
+
+        # This runs before Kedi's own tool capability; record media as the model reads them,
+        # since an interrupted run replays these results.
+        recorded: Any = result
+        if not results_go_to_code():
+            lowered = lower_tool_media(
+                result, ctx=ctx, call=call, tool_def=tool_def, media_limit=None
+            )
+            recorded = result if lowered is None else lowered
         self.completed_tools[call.tool_call_id] = (
-            result if isinstance(result, ToolReturn) else ToolReturn(result)
+            recorded if isinstance(recorded, ToolReturn) else ToolReturn(recorded)
         )
         return result
 

@@ -9,6 +9,7 @@ from typing import (
     Sequence,
 )
 
+from kedi.agent_adapter.adapters.langchain.media import holds_media_blocks
 from kedi.agent_adapter.adapters.langchain.tools import (
     _langchain_external_tool_spec,
     _langchain_tool_error,
@@ -202,6 +203,10 @@ def _langchain_approval_middleware(
                         tool.artifact_result != "never"
                         and not tool_has_artifact_boundary(tool)
                         and (tool.metadata or {}).get("kedi_codemode_control") is not True
+                        # Media reach the model as media, never as a stored reference.
+                        and not holds_media_blocks(
+                            _langchain_tool_message_for_call(result, call_id)
+                        )
                     ):
                         result = await _langchain_admit_native_tool_result(
                             result,

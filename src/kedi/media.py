@@ -1047,11 +1047,35 @@ def _media_paths(value: Any) -> dict[int, tuple[str, ...]]:
     return paths
 
 
+def _with_media_values(value: Any, _active: frozenset[int] = frozenset()) -> Any:
+    """``value`` with Pydantic AI and PIL media inside dicts, lists and tuples as media values.
+
+    A container that holds itself is kept as it is; its text form reports the cycle.
+    """
+
+    if isinstance(value, Media):
+        return value
+    media = as_media(value)
+    if media is not None:
+        return media
+    if id(value) in _active:
+        return value
+    active = _active | {id(value)}
+    if isinstance(value, dict):
+        return {key: _with_media_values(item, active) for key, item in value.items()}
+    if type(value) in (list, tuple):
+        return type(value)(_with_media_values(item, active) for item in value)
+    return value
+
+
 def _nested_reference(
     value: Any, *, binding: str | None, call: str | None, subject: str
 ) -> Reference:
     probe = Reference(items=(), binding=binding, call=call)
     base = probe.preferred_name(1) or cast(str, probe.generated_base)
+    # Pydantic AI and PIL media serialize as their own data; as media values they get
+    # placeholders like any other.
+    value = _with_media_values(value)
     paths = _media_paths(value)
     preferred: list[str] = []
 
@@ -1127,7 +1151,7 @@ def reference(value: Any, *, binding: str | None = None, call: str | None = None
             )
     if value is None:
         raise MediaError(f"{subject} is None; there is nothing to attach")
-    if _contains_media(value):
+    if contains_media(value):
         return _nested_reference(value, binding=binding, call=call, subject=subject)
     from kedi.text_form import text_form
 
@@ -1153,7 +1177,7 @@ def as_media(value: Any) -> Media | None:
     return None
 
 
-def _contains_media(value: Any, *, _depth: int = 0) -> bool:
+def contains_media(value: Any, *, _depth: int = 0) -> bool:
     """Return whether a container holds a media value (bounded depth)."""
 
     if _depth > 8 or isinstance(value, (str, bytes, int, float, bool)) or value is None:
@@ -1161,19 +1185,19 @@ def _contains_media(value: Any, *, _depth: int = 0) -> bool:
     if as_media(value) is not None:
         return True
     if isinstance(value, dict):
-        return any(_contains_media(item, _depth=_depth + 1) for item in value.values())
+        return any(contains_media(item, _depth=_depth + 1) for item in value.values())
     if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_contains_media(item, _depth=_depth + 1) for item in value)
+        return any(contains_media(item, _depth=_depth + 1) for item in value)
     from pydantic import BaseModel
 
     if isinstance(value, BaseModel):
         return any(
-            _contains_media(item, _depth=_depth + 1)
+            contains_media(item, _depth=_depth + 1)
             for item in object.__getattribute__(value, "__dict__").values()
         )
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return any(
-            _contains_media(object.__getattribute__(value, field.name), _depth=_depth + 1)
+            contains_media(object.__getattribute__(value, field.name), _depth=_depth + 1)
             for field in dataclasses.fields(value)
         )
     return False
@@ -1308,6 +1332,7 @@ def _serialize(value: Media, info: core_schema.SerializationInfo) -> Any:
 
 __all__ = [
     "MAX_MEDIA_BYTES",
+    "contains_media",
     "Audio",
     "Document",
     "Image",

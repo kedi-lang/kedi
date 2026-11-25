@@ -11,6 +11,7 @@ from kedi.agent_adapter.tools.execution import arguments_target_secret_file, too
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.errors import KediExecutionError
+from kedi.media import MediaError
 
 
 def _claude_sdk() -> Any:
@@ -64,14 +65,12 @@ def _claude_sdk_tool(sdk: Any, tool: ToolSpec) -> Any:
             if message is None:
                 raise
             return {"content": [{"type": "text", "text": message}], "is_error": True}
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": _tool_result_text(result),
-                }
-            ]
-        }
+        try:
+            text = _tool_result_text(result)
+        except MediaError as exc:
+            # As on Codex, the model sees the refusal as the tool's error.
+            return {"content": [{"type": "text", "text": str(exc)}], "is_error": True}
+        return {"content": [{"type": "text", "text": text}]}
 
     _call.__name__ = tool.name
     _call.__doc__ = description

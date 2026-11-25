@@ -34,6 +34,7 @@ from pydantic_ai.tools import (
     ToolDefinition,
 )
 
+from kedi.agent_adapter.adapters.pydantic.media import tool_result_content
 from kedi.agent_adapter.adapters.pydantic.tools import (
     KEDI_APPROVAL_METADATA_KEY,
     _approval_request_payload,
@@ -50,7 +51,8 @@ from kedi.agent_adapter.tools.execution import (
     admit_current_artifact_result,
     approval_request_for_tool,
 )
-from kedi.agent_adapter.tools.scope import current_artifact_admission
+from kedi.agent_adapter.tools.media import codemode_media, tool_media
+from kedi.agent_adapter.tools.scope import current_artifact_admission, results_go_to_code
 from kedi.agent_adapter.tools.specs import tool_has_artifact_boundary
 from kedi.artifacts.policy import warn_unmatched_tool_exclusions
 
@@ -112,14 +114,14 @@ class _KediTelemetryCapability(AbstractCapability[Any]):
             return await handler(args)
 
 
-class _KediArtifactCapability(AbstractCapability[Any]):
-    """Admit native and MCP results before Pydantic commits tool history."""
+class _KediToolResultCapability(AbstractCapability[Any]):
+    """Lower tool media and admit native and MCP results before Pydantic commits tool history."""
 
     def __init__(self, adapter: PydanticAdapter[Any, Any]) -> None:
         self.adapter = adapter
         self._tool_names: set[str] = set()
 
-    async def for_run(self, ctx: RunContext[Any]) -> _KediArtifactCapability:
+    async def for_run(self, ctx: RunContext[Any]) -> _KediToolResultCapability:
         return type(self)(self.adapter)
 
     async def prepare_tools(
@@ -152,13 +154,26 @@ class _KediArtifactCapability(AbstractCapability[Any]):
         args: ValidatedToolArgs,
         result: Any,
     ) -> Any:
-        del ctx, args
+        del args
+        if results_go_to_code():
+            # A nested CodeMode call: the code receives placeholders at its boundary.
+            return result
+        lowered = lower_tool_media(
+            result,
+            ctx=ctx,
+            call=call,
+            tool_def=tool_def,
+            media_limit=self.adapter.active_media_limit,
+        )
+        if lowered is not None:
+            # Media reach the model as media, never as a stored artifact reference.
+            return lowered
         if (tool_def.metadata or {}).get("kedi_codemode_control") is True:
             return result
+        payload = result.return_value if isinstance(result, ToolReturn) else result
         tool = self.adapter._tool_spec_for_call(call.tool_name)
         if tool.artifact_result == "never" or tool_has_artifact_boundary(tool):
             return result
-        payload = result.return_value if isinstance(result, ToolReturn) else result
         admitted = await admit_current_artifact_result(
             payload,
             tool_name=call.tool_name,
@@ -167,6 +182,30 @@ class _KediArtifactCapability(AbstractCapability[Any]):
         if isinstance(result, ToolReturn):
             return replace(result, return_value=admitted, content=None)
         return admitted
+
+
+def lower_tool_media(
+    result: Any,
+    *,
+    ctx: RunContext[Any],
+    call: ToolCallPart,
+    tool_def: ToolDefinition,
+    media_limit: int | None,
+) -> Any | None:
+    """``result`` with its media as native content, or ``None`` when it holds none.
+
+    A CodeMode result holds placeholders only; the media they name are attached to it.
+    """
+
+    payload = result.return_value if isinstance(result, ToolReturn) else result
+    if (tool_def.metadata or {}).get("kedi_codemode_control") is True:
+        media = codemode_media(payload)
+    else:
+        media = tool_media(payload, tool_name=call.tool_name)
+    if media is None:
+        return None
+    content = tool_result_content(media, model=ctx.model, media_limit=media_limit)
+    return replace(result, return_value=content) if isinstance(result, ToolReturn) else content
 
 
 class _KediEmptyToolResultCapability(AbstractCapability[Any]):

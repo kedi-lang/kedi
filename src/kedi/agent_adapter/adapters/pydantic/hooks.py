@@ -36,11 +36,11 @@ from pydantic_ai.tools import (
 )
 
 from kedi.agent_adapter.adapters.pydantic.capabilities import (
-    _KediArtifactCapability,
     _KediDeferredApprovalCapability,
     _KediExternalApprovalCapability,
     _KediRequiredToolCapability,
     _KediTelemetryCapability,
+    _KediToolResultCapability,
 )
 from kedi.agent_adapter.adapters.pydantic.tools import (
     _external_tool_spec,
@@ -89,7 +89,7 @@ class _KediHookCapability(AbstractCapability[Any]):
                 _KediDeferredApprovalCapability,
                 _KediExternalApprovalCapability,
                 _KediRequiredToolCapability,
-                _KediArtifactCapability,
+                _KediToolResultCapability,
                 _KediTelemetryCapability,
             )
         )

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from kedi.agent_adapter.request.media import (
     MediaAttachment,
     attachment_content,
+    check_media_limit,
     check_media_support,
     download_image_urls,
     gemini_media_resolution,
@@ -23,6 +24,9 @@ from kedi.agent_adapter.request.media import (
     unsent_attachments,
 )
 from kedi.media import media_kind
+
+if TYPE_CHECKING:
+    from kedi.agent_adapter.tools.media import ToolMedia
 
 
 async def user_prompt(
@@ -51,6 +55,22 @@ async def user_prompt(
         piece if isinstance(piece, str) else _native_content(piece)
         for piece in attachment_content(prompt, pending)
     ]
+
+
+def tool_result_content(media: ToolMedia, *, model: Any, media_limit: int | None) -> list[Any]:
+    """A tool result holding media as Pydantic AI content: its text, then each media part.
+
+    Pydantic AI sends the parts natively: inside the tool result where the provider takes
+    them (Anthropic), in a following user message otherwise (OpenAI, Gemini). The same
+    provider rules and size limit as prompt media apply.
+    """
+
+    provider = media_provider(getattr(model, "system", None))
+    check_media_support(
+        media.attachments, provider=provider, model=getattr(model, "model_name", None)
+    )
+    check_media_limit(media.attachments, media_limit)
+    return [media.text, *(_native_content(attachment) for attachment in media.attachments)]
 
 
 def sent_attachments(messages: Sequence[Any]) -> dict[str, tuple[str, ...]]:

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Generator
 from .models import AgentRunRequest
 
 if TYPE_CHECKING:
-    from .media import MediaAttachment
+    from .media import MediaAttachment, MediaNamer
 
 _CURRENT_AGENT_RUN_REQUEST: ContextVar[AgentRunRequest | None] = ContextVar(
     "kedi_current_agent_run_request",
@@ -28,6 +28,40 @@ _PROMPT_MEDIA: ContextVar[_PromptMediaClaim | None] = ContextVar(
 )
 
 
+_TOOL_MEDIA_NAMER: ContextVar[MediaNamer | None] = ContextVar(
+    "kedi_tool_media_namer",
+    default=None,
+)
+
+
+def tool_media_namer() -> MediaNamer:
+    """The namer for media that tools return in the current request.
+
+    One namer serves every tool call of a request, so ``snap_result_1`` and
+    ``snap_result_2`` stay apart; outside a request each call gets its own.
+    """
+
+    from .media import MediaNamer
+
+    return _TOOL_MEDIA_NAMER.get() or MediaNamer()
+
+
+@contextmanager
+def tool_media_scope() -> Generator[None, None, None]:
+    """Keep tool media names unique in an adapter run started outside a Kedi request."""
+
+    if _TOOL_MEDIA_NAMER.get() is not None:
+        yield
+        return
+    from .media import MediaNamer
+
+    token = _TOOL_MEDIA_NAMER.set(MediaNamer())
+    try:
+        yield
+    finally:
+        _TOOL_MEDIA_NAMER.reset(token)
+
+
 @contextmanager
 def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, None]:
     """Expose one immutable semantic request while its adapter call is active."""
@@ -36,9 +70,13 @@ def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, N
     media_token = _PROMPT_MEDIA.set(
         _PromptMediaClaim(request.prompt.media) if request.prompt.media else None
     )
+    from .media import MediaNamer
+
+    namer_token = _TOOL_MEDIA_NAMER.set(MediaNamer())
     try:
         yield
     finally:
+        _TOOL_MEDIA_NAMER.reset(namer_token)
         _PROMPT_MEDIA.reset(media_token)
         _CURRENT_AGENT_RUN_REQUEST.reset(token)
 
@@ -84,4 +122,5 @@ __all__ = [
     "current_agent_run_request",
     "prompt_media_scope",
     "take_prompt_media",
+    "tool_media_scope",
 ]
