@@ -64,3 +64,7 @@ accepted edit replaces durable history.
 
 See [User-Defined History Processing](history.md#user-defined-history-processing)
 for the callback contract and a whole-group selection example.
+
+Exact archival stores the media of archived turns as artifacts of their own and
+names them from the transcript; `read_artifact` returns them as media. See
+[Multimodal Input](../core-language/multimodal-input.md#history).
