@@ -29,7 +29,7 @@ report_invocation(
 | Field | Meaning |
 |---|---|
 | `requests` | model requests completed (normally 1 per report) |
-| `tool_calls` | tool calls the model made in that response |
+| `tool_calls` | business tool calls the adapter admitted for that response; never structured-output protocol calls, such as an output function that carries a typed answer |
 | `input_tokens` | all input tokens, including cached ones |
 | `cache_read_tokens`, `cache_write_tokens` | the cached part of the input, when the provider reports it |
 | `output_tokens`, `total_tokens` | as reported by the provider |

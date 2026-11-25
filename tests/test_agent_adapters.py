@@ -1153,7 +1153,8 @@ def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) 
     assert usages == [
         InvocationUsage(
             requests=1,
-            tool_calls=1,
+            # The response names a tool the run never admitted, so it is not a tool call (#230).
+            tool_calls=0,
             input_tokens=2,
             output_tokens=3,
             total_tokens=5,

@@ -134,8 +134,10 @@ def _langchain_invocation_usage(
         return InvocationUsage(requests=1)
     messages = _langchain_current_messages(messages, input_messages)
 
+    # Tool calls are not counted here: a response's tool_calls also carry structured-output
+    # protocol calls. The run counts admitted tools natively (LangChainRunState.native_usage).
     input_tokens = cache_read_tokens = cache_write_tokens = 0
-    output_tokens = total_tokens = tool_calls = requests = 0
+    output_tokens = total_tokens = requests = 0
     for message in messages:
         usage = getattr(message, "usage_metadata", None)
         if isinstance(usage, Mapping):
@@ -155,14 +157,10 @@ def _langchain_invocation_usage(
             output_tokens += _usage_int(usage, "output_tokens", "outputTokens")
             total_tokens += _usage_int(usage, "total_tokens", "totalTokens")
             requests += 1
-        calls = getattr(message, "tool_calls", None)
-        if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)):
-            tool_calls += len(calls)
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens
     return InvocationUsage(
         requests=max(requests, 1),
-        tool_calls=tool_calls,
         input_tokens=input_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_write_tokens=cache_write_tokens,
