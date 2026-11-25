@@ -121,6 +121,7 @@ class CodexAdapter(HookRegistrationMixin):
         supports_native_compaction=True,
         supports_stream_events=True,
         supports_media_input=True,
+        supports_image_output=False,
         hooks=HookCapabilities.full(
             tool_bridge="kedi",
             tool_origins=frozenset({"kedi"}),

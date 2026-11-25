@@ -26,6 +26,7 @@ from pydantic_ai.capabilities import (
     AgentCapability,
 )
 from pydantic_ai.messages import (
+    BinaryImage,
     ModelMessage,
     UserContent,
 )
@@ -136,6 +137,30 @@ if TYPE_CHECKING:
     from pydantic_ai.tools import Tool as PydanticTool
 
 
+def _takes_tools(model: object) -> bool:
+    """Whether a configured model accepts function tools, judged without a provider."""
+
+    if isinstance(model, Model):
+        return bool(model.profile.get("supports_tools", True))
+    if isinstance(model, str):
+        from pydantic_ai.models import infer_model_profile
+
+        return bool(infer_model_profile(model).get("supports_tools", True))
+    return True
+
+
+def _require_image_model(model: Model) -> None:
+    """Fail before the request when the selected model cannot return an image."""
+
+    if not model.profile.get("supports_image_output", False):
+        from kedi.media import MediaError
+
+        raise MediaError(
+            f"Model {model.system}:{model.model_name} cannot produce images; use an image model "
+            "such as google:gemini-2.5-flash-image or an OpenAI Responses model"
+        )
+
+
 class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     """
     Adapter to use Pydantic AI agents.
@@ -175,6 +200,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_request_budget=True,
         supports_tool_attempt_budget=True,
         supports_media_input=True,
+        supports_image_output=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -188,12 +214,15 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         return operation in {"run_agent", "chat", "call_tool"} and self.instrument is not False
 
     def supports_artifact_contract(self, profile: AgentProfile) -> bool:
-        """Return whether the active model can receive artifact management tools."""
+        """Return whether the active model can receive artifact management tools.
+
+        Decision models and models that take no tools (image models, for example) cannot.
+        """
 
         if profile.model is not None:
-            return not is_decision_model_id(profile.model)
+            return not is_decision_model_id(profile.model) and _takes_tools(profile.model)
         model = getattr(self, "_agent_model_arg", None)
-        return model_template_prompt_mode(model) != "decision"
+        return model_template_prompt_mode(model) != "decision" and _takes_tools(model)
 
     def template_prompt_mode(self, profile: AgentProfile) -> TemplatePromptMode:
         from .compat import configured_prompt_model
@@ -559,14 +588,25 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             raise ValueError("Output spec must be provided.")
         if output_schema:
             output_type = self.type_builder(output_schema)
+        from kedi.agent_adapter.request.media import produces_image
+
+        # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
+        image = produces_image(output_type)
         agent = self._agent_for_produce()
-        run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        run_kwargs: dict[str, object] = {
+            "output_type": BinaryImage if image else output_type,
+            **kwargs,
+        }
         self._apply_default_usage_limits(run_kwargs)
         tool_specs = self._tool_specs_for_run(run_kwargs)
         if agent is not self:
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
+        if image:
+            _require_image_model(
+                effective_model(agent, cast("Model | str | None", run_kwargs.get("model")))
+            )
         result = await self._run_agent(
             agent,
             template,
@@ -575,6 +615,10 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             emit_final=False,
         )
         _messages._capture_typesafe_decision_evidence(result)
+        if image:
+            from kedi.media import as_media
+
+            return cast(OutputDataT, as_media(result.output))
         return result.output
 
     @hooked_agent_run("prompt")

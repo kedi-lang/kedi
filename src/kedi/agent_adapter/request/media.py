@@ -361,6 +361,24 @@ def check_media_limit(attachments: Sequence[MediaAttachment], limit: int | None)
             )
 
 
+def produces_image(output_type: Any) -> bool:
+    """Whether a typed call asks the model for an image: ``[img: Image] << Draw a cat.``"""
+
+    from kedi.media import Image
+
+    return output_type is Image
+
+
+def require_image_output(adapter: Any) -> None:
+    """Fail before any model I/O when ``adapter`` cannot return an image."""
+
+    if not adapter.capabilities.supports("image_output"):
+        raise MediaError(
+            f"Adapter {adapter.shortname!r} cannot produce images; "
+            "Pydantic AI and LangChain return images from image models"
+        )
+
+
 def check_media_support(
     attachments: Sequence[MediaAttachment],
     *,
@@ -648,6 +666,8 @@ __all__ = [
     "gemini_settings_key",
     "gemini_video_metadata",
     "image_size",
+    "produces_image",
+    "require_image_output",
     "compose_prompt",
     "history_keeps_media",
     "media_digest_material",
