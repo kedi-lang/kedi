@@ -128,6 +128,7 @@ from kedi.agent_profile.settings import (
     KEDI_RUNTIME_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
     media_limit_bytes,
+    speech_voice,
     tool_reason_enabled,
 )
 from kedi.model_normalization import normalize_for_pydantic_ai
@@ -202,6 +203,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_tool_attempt_budget=True,
         supports_media_input=True,
         supports_image_output=True,
+        supports_audio_output=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -589,11 +591,14 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             raise ValueError("Output spec must be provided.")
         if output_schema:
             output_type = self.type_builder(output_schema)
-        from kedi.agent_adapter.request.media import produces_image
+        from kedi.agent_adapter.request.media import output_media_kind
 
-        # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
-        image = produces_image(output_type)
+        output_media = output_media_kind(output_type)
         agent = self._agent_for_produce()
+        if output_media == "audio":
+            return cast(OutputDataT, await self._speak(agent, template, kwargs))
+        # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
+        image = output_media == "image"
         run_kwargs: dict[str, object] = {
             "output_type": BinaryImage if image else output_type,
             **kwargs,
@@ -621,6 +626,25 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
 
             return cast(OutputDataT, as_media(result.output))
         return result.output
+
+    async def _speak(self, agent: Agent[Any, Any], prompt: str, kwargs: Mapping[str, Any]) -> Any:
+        """``[speech: Audio] << Read this aloud.``: one realtime session speaks the reply."""
+
+        from .speech import speak
+
+        selected = kwargs.get("model") or self._profile_override_kwargs(self.active_profile).get(
+            "model"
+        )
+        settings = self.active_profile.settings
+        timeout = settings.get("timeout")
+        return await speak(
+            prompt,
+            model=effective_model(agent, cast("Model | str | None", selected)),
+            instructions=cast("str | None", kwargs.get("instructions"))
+            or self.active_profile.system,
+            voice=speech_voice(settings),
+            timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
+        )
 
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:

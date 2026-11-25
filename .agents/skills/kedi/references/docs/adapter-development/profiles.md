@@ -89,7 +89,7 @@ capabilities = AdapterCapabilities(
 )
 ```
 
-Four settings belong to Kedi and may appear in any profile
+Five settings belong to Kedi and may appear in any profile
 (`kedi.agent_profile.settings.KEDI_RUNTIME_SETTING_KEYS`):
 
 | Setting | Owner | Adapter's job |
@@ -98,6 +98,7 @@ Four settings belong to Kedi and may appear in any profile
 | `media_limit` | Kedi's media check | none |
 | `request_retries` | the adapter's request retries | read it with `request_retry_limit(settings, default)` |
 | `tool_reason` | approval reasons | only adapters that list `tool_reason` in `capabilities.settings` may receive it; Kedi refuses it for the others |
+| `voice` | speech output | an adapter with `supports_audio_output` reads it with `speech_voice(settings)` |
 
 ## Model Fallback
 

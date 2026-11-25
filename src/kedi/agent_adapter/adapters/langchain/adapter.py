@@ -94,10 +94,11 @@ from kedi.agent_profile.settings import (
     LANGCHAIN_MODEL_SETTING_KEYS,
     langchain_model_settings,
     media_limit_bytes,
+    speech_voice,
     tool_reason_enabled,
 )
 from kedi.artifacts.policy import warn_unmatched_tool_exclusions
-from kedi.media import Image, MediaError
+from kedi.media import Audio, Image, MediaError
 from kedi.model_normalization import normalize_for_langchain
 from kedi.resolved_types import ResolvedKediType
 from kedi.run_budget import assert_run_budget_supported, current_run_budget
@@ -186,6 +187,7 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_tool_attempt_budget=True,
         supports_media_input=True,
         supports_image_output=True,
+        supports_audio_output=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -382,9 +384,12 @@ class LangChainAdapter(HookRegistrationMixin):
             resolved_output_type = cast(type[OutputDataT], self.type_builder(output_schema))
         if resolved_output_type is None:
             raise ValueError("Output spec must be provided.")
-        from kedi.agent_adapter.request.media import produces_image
+        from kedi.agent_adapter.request.media import output_media_kind
 
-        if produces_image(resolved_output_type):
+        output_media = output_media_kind(resolved_output_type)
+        if output_media == "audio":
+            return cast(OutputDataT, await self._speak(template, kwargs))
+        if output_media == "image":
             # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
             model = _chat_model_instance(self._chat_model_for_run())
             if (getattr(model, "profile", None) or {}).get("image_outputs") is not True:
@@ -503,6 +508,32 @@ class LangChainAdapter(HookRegistrationMixin):
                 prompt, kwargs, model=self._chat_model_for_run(), emit_final=True
             )
         )
+
+    async def _speak(self, prompt: str, kwargs: dict[str, Any]) -> Audio:
+        """``[speech: Audio] << Read this aloud.``: an audio model speaks, without tools."""
+
+        from .speech import reads_aloud, speech_model, speech_response
+
+        selected = _chat_model_instance(self._chat_model_for_run())
+        label = _model_label(selected)
+        model = speech_model(
+            selected, voice=speech_voice(self.active_profile.settings), label=label
+        )
+        instructions = cast(str | None, kwargs.pop("instructions", None))
+        if instructions is None:
+            instructions = self.active_profile.system
+        agent = self._create_agent(
+            model=model,
+            tools=[],
+            response_format=None,
+            system_prompt=None if reads_aloud(label) else instructions,
+            middleware=self._middleware_for_run(model, [], fallbacks=False),
+        )
+        content = await self._user_content(prompt, model)
+        payload = {"messages": self._messages_for_prompt(content, model=model), **kwargs}
+        async with model_responses_turn(model):
+            result = await self._invoke_agent(agent, payload, emit_final=False)
+        return speech_response(result, label)
 
     async def _run_plain_agent(
         self, prompt: str, kwargs: dict[str, Any], *, model: Any, emit_final: bool
@@ -1078,6 +1109,7 @@ class LangChainAdapter(HookRegistrationMixin):
         output_schema: dict[str, Any] | None = None,
         output_model: type[BaseModel] | None = None,
         output_state: SubagentOutputState | None = None,
+        fallbacks: bool = True,
     ) -> list[Any]:
         from kedi.agent_adapter.adapters.langchain.duplicate_output import (
             LangChainDuplicateOutputMiddleware,
@@ -1104,7 +1136,7 @@ class LangChainAdapter(HookRegistrationMixin):
             else []
         )
         selected = self.active_profile.fallback_models
-        alternatives = self.fallback_models if selected is None else selected
+        alternatives = (self.fallback_models if selected is None else selected) if fallbacks else ()
         backups = [
             self._chat_model_for_run(self._resolve_model(item) if isinstance(item, str) else item)
             for item in alternatives

@@ -658,6 +658,12 @@ def _setting_adapter_label(name: str) -> str:
             "may attach, such as 5MB, 512KB or a number of bytes (default: the 20 MB load limit). "
             "Overrides the adapter constructor in this scope; not sent to the model provider."
         )
+    if name == "voice":
+        return (
+            "Kedi speech setting for Pydantic AI and LangChain: the voice of `[x: Audio] <<` "
+            "speech, such as Kore on Gemini or alloy on OpenAI (default: the model's voice). "
+            "Not sent to the model provider as a model setting."
+        )
     if name == "context_limit":
         return (
             "Kedi request setting for Pydantic AI and LangChain: the model's context window in "

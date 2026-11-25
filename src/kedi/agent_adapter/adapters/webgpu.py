@@ -122,6 +122,7 @@ class WebGPUAdapter(HookRegistrationMixin):
         supports_stream_events=False,
         supports_media_input=False,
         supports_image_output=False,
+        supports_audio_output=False,
         hooks=HookCapabilities.full(
             tool_bridge="kedi",
             tool_origins=frozenset({"kedi", "mcp"}),

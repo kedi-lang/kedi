@@ -304,6 +304,9 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
         == "`[search, fetch]`"
     )
     assert "largest media value" in lsp_directive_help_module._setting_adapter_label("media_limit")
+    assert "voice of `[x: Audio] <<` speech" in lsp_directive_help_module._setting_adapter_label(
+        "voice"
+    )
     assert "context window in tokens" in lsp_directive_help_module._setting_adapter_label(
         "context_limit"
     )
