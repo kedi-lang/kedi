@@ -18,10 +18,10 @@ from pydantic_ai.tools import (
 )
 
 from kedi.agent_adapter.adapters.pydantic.capabilities import (
-    _KediArtifactCapability,
     _KediEmptyToolResultCapability,
     _KediRequiredToolCapability,
     _KediTelemetryCapability,
+    _KediToolResultCapability,
 )
 from kedi.agent_adapter.adapters.pydantic.compat import effective_model
 from kedi.agent_adapter.adapters.pydantic.hooks import _KediHookCapability
@@ -36,7 +36,6 @@ from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.hooks import current_hook_dispatcher
 from kedi.agent_adapter.prefix_cache import has_response_cache_settings, pydantic_cache_settings
 from kedi.agent_adapter.request import current_agent_run_request
-from kedi.agent_adapter.tools.scope import current_artifact_admission
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import normalize_codemode_settings
 from kedi.agent_profile.settings import pydantic_model_settings
@@ -255,12 +254,12 @@ def _run_kwargs(
             _KediHookCapability,
             lambda: _KediHookCapability(self),
         )
-    if current_artifact_admission() is not None:
-        capabilities = _with_capability(
-            capabilities,
-            _KediArtifactCapability,
-            lambda: _KediArtifactCapability(self),
-        )
+    # Every run lowers tool media; artifact admission applies only inside a Kedi scope.
+    capabilities = _with_capability(
+        capabilities,
+        _KediToolResultCapability,
+        lambda: _KediToolResultCapability(self),
+    )
     codemode = normalize_codemode_settings(
         self.active_profile.codemode or getattr(self, "codemode", None)
     )

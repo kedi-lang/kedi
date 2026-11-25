@@ -503,7 +503,7 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
             assert "less known city" in template
             assert set(kwargs) == {"capabilities", "instructions", "usage"}
             assert any(
-                type(capability).__name__ == "_KediArtifactCapability"
+                type(capability).__name__ == "_KediToolResultCapability"
                 for capability in kwargs["capabilities"]
             )
             return SimpleNamespace(output=output_type(x="Konya"))
@@ -519,6 +519,15 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
 
 
 def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    # Kedi's middleware modules import from the real langchain.agents.middleware at load, so
+    # load them before it is replaced; otherwise whether they load depends on test order.
+    import kedi.agent_adapter.adapters.langchain.duplicate_output
+    import kedi.agent_adapter.adapters.langchain.fallback
+    import kedi.agent_adapter.adapters.langchain.live
+    import kedi.agent_adapter.adapters.langchain.request_retry
+    import kedi.agent_adapter.adapters.langchain.runtime
+    import kedi.agent_adapter.adapters.langchain.tool_media  # noqa: F401
+
     events: dict[str, Any] = {
         "models": [],
         "agents": [],
@@ -753,6 +762,7 @@ def test_langchain_codemode_projects_and_executes_tools(
     assert [type(item).__name__ for item in events["agents"][-1]["middleware"]] == [
         "RequestRetryMiddleware",
         "LangChainRunMiddleware",
+        "LangChainToolMediaMiddleware",
     ]
 
 
@@ -3824,10 +3834,15 @@ def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_to
     run_kwargs = adapter._run_kwargs({}, tool_specs=adapter.scoped_tool_specs)
 
     assert isinstance(run_kwargs["toolsets"][0], ApprovalRequiredToolset)
-    assert len(run_kwargs["capabilities"]) == 4
-    assert type(run_kwargs["capabilities"][0]).__name__ == "RequestRetryCapability"
-    assert isinstance(run_kwargs["capabilities"][2], HandleDeferredToolCalls)
-    assert type(run_kwargs["capabilities"][3]).__name__ == "_KediEmptyToolResultCapability"
+    names = [type(capability).__name__ for capability in run_kwargs["capabilities"]]
+    assert len(names) == 5
+    assert names[0] == "RequestRetryCapability"
+    assert any(
+        isinstance(capability, HandleDeferredToolCalls) for capability in run_kwargs["capabilities"]
+    )
+    # Every run lowers tool media, inside or outside a Kedi scope.
+    assert "_KediToolResultCapability" in names
+    assert names[-1] == "_KediEmptyToolResultCapability"
     assert PydanticAdapter.capabilities.supports("native_approvals")
     assert PydanticAdapter.capabilities.supports("native_approval_handler")
 

@@ -42,6 +42,7 @@ from ..hooks import (
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..output_schema import output_model_fields
 from ..tools.execution import with_approval
+from ..tools.media import refuse_tool_media
 from ..tools.scope import ToolScope
 from ..tools.specs import ToolSpec, tool_approval_policy
 
@@ -421,6 +422,7 @@ class WebGPUAdapter(HookRegistrationMixin):
                 )
                 with span as finish:
                     result = await tool.call(final_arguments)
+                    refuse_tool_media(result)
                     result = to_jsonable_python(result, fallback=str)
                     finish(result)
             except BaseException as exc:

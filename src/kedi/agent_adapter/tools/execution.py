@@ -263,10 +263,17 @@ def admit_artifact_result(
     tool_name: str,
     call_id: str,
 ) -> Any:
-    """Admit one successful materialized result while preserving its native call ID."""
+    """Admit one successful materialized result while preserving its native call ID.
+
+    A result holding media is never stored: the adapter's tool bridge sends the media.
+    """
 
     from kedi.artifacts import ArtifactHandle, ArtifactStream
     from kedi.artifacts.errors import ArtifactQuotaExceededError, ToolOutputTooLargeError
+    from kedi.media import contains_media
+
+    if contains_media(result):
+        return result
 
     excluded = tool_name in policy.exclude_tools
     current_span().add_event(
@@ -761,4 +768,7 @@ def tool_result_text(value: Any) -> str:
 
     if isinstance(value, str):
         return value
+    from kedi.agent_adapter.tools.media import refuse_tool_media
+
+    refuse_tool_media(value)
     return _tool_result_adapter().dump_json(value).decode("utf-8")

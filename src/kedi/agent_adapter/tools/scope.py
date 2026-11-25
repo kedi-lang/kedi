@@ -34,6 +34,12 @@ _artifact_admission_context: ContextVar[tuple[Any, Any] | None] = ContextVar(
 )
 
 
+def results_go_to_code() -> bool:
+    """Whether tool results now go to CodeMode code rather than to the model."""
+
+    return _defer_artifact_admission.get()
+
+
 @contextmanager
 def defer_artifact_admission() -> Generator[None, None, None]:
     """Keep nested tool results raw until an owning composite tool returns."""

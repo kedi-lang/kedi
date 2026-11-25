@@ -105,6 +105,7 @@ from kedi.agent_adapter.models import (
     typesafe_pydantic_model,
 )
 from kedi.agent_adapter.output_schema import build_output_model
+from kedi.agent_adapter.request.context import tool_media_scope
 from kedi.agent_adapter.responses_session import model_responses_session as _model_responses_session
 from kedi.agent_adapter.responses_session import model_responses_turn as _model_responses_turn
 from kedi.agent_adapter.subagents import (
@@ -784,6 +785,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 self._run_tool_spec_scope(tool_specs),
                 delegation_scope(self._subagent_failure_policy),
                 event_scope as event_resolver,
+                tool_media_scope(),
             ):
                 if event_resolver is not None:
                     capabilities = run_kwargs.get("capabilities")

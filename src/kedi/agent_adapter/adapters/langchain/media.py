@@ -18,6 +18,7 @@ from kedi.agent_adapter.request.media import (
     MediaAttachment,
     MediaProvider,
     attachment_content,
+    check_media_limit,
     check_media_support,
     download_image_urls,
     download_media,
@@ -32,9 +33,17 @@ from kedi.media import Media, MediaError, Video, media_kind
 if TYPE_CHECKING:
     from langchain_core.messages import HumanMessage
 
+    from kedi.agent_adapter.tools.media import ToolMedia
+
 _SOURCE_IDENTITIES = "kedi_media_sources"
 
 _BLOCK_TYPES = {"image": "image", "audio": "audio", "video": "video", "document": "file"}
+_TOOL_MESSAGE_FLAGS = {
+    "image": "image_tool_message",
+    "audio": "audio_tool_message",
+    "video": "video_tool_message",
+    "document": "pdf_tool_message",
+}
 _PROFILE_FLAGS = {
     "image": "image_inputs",
     "audio": "audio_inputs",
@@ -99,6 +108,93 @@ async def user_message(
     if sources:
         message.additional_kwargs[_SOURCE_IDENTITIES] = sources
     return message
+
+
+async def tool_result_blocks(
+    media: ToolMedia, *, model: Any, media_limit: int | None
+) -> list[dict[str, Any]]:
+    """A tool result holding media as LangChain content blocks: its text, then each media.
+
+    The same provider rules, profile flags and size limit as prompt media apply. Each block
+    carries its attachment name as ``id``, so a model-call middleware can place blocks the
+    provider takes no tool messages for in a following user message.
+    """
+
+    model_name = langchain_model_name(model)
+    check_media_support(
+        media.attachments, provider=langchain_media_provider(model), model=model_name
+    )
+    _check_profile(media.attachments, model, model_name)
+    check_media_limit(media.attachments, media_limit)
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": media.text}]
+    for attachment in media.attachments:
+        block = await _media_block(attachment, model)
+        blocks.append({**block, "id": attachment.name})
+    return blocks
+
+
+def tool_message_kinds_allowed(model: Any) -> frozenset[str]:
+    """Media kinds the model takes inside a tool message, from its LangChain profile."""
+
+    profile = getattr(model, "profile", None)
+    if not isinstance(profile, Mapping):
+        return frozenset()
+    return frozenset(
+        kind for kind, flag in _TOOL_MESSAGE_FLAGS.items() if profile.get(flag) is True
+    )
+
+
+def split_tool_media(messages: Sequence[Any], *, allowed: frozenset[str]) -> list[Any]:
+    """Move media blocks the model takes no tool messages for into a following user message.
+
+    The tool message keeps its text, which names each media; the user message after the
+    run of tool messages carries the media under the same names. History is not changed.
+    """
+
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    result: list[Any] = []
+    moved: list[dict[str, Any] | str] = []
+    for message in messages:
+        if not isinstance(message, ToolMessage) and moved:
+            result.append(HumanMessage(content=moved))
+            moved = []
+        if isinstance(message, ToolMessage) and isinstance(message.content, list):
+            kept: list[Any] = []
+            for block in message.content:
+                kind = _block_kind(block)
+                if not isinstance(block, Mapping) or kind is None or kind in allowed:
+                    kept.append(block)
+                    continue
+                name = block.get("id") or "tool_media"
+                moved.extend(
+                    [
+                        {"type": "text", "text": f'<{kind} id="{name}">'},
+                        block,
+                        {"type": "text", "text": f"</{kind}>"},
+                    ]
+                )
+            if len(kept) != len(message.content):
+                message = message.model_copy(update={"content": kept})
+        result.append(message)
+    if moved:
+        result.append(HumanMessage(content=moved))
+    return result
+
+
+def holds_media_blocks(message: Any) -> bool:
+    """Whether a tool message carries media blocks, which never go through artifacts."""
+
+    content = getattr(message, "content", None)
+    return isinstance(content, list) and any(_block_kind(block) for block in content)
+
+
+_BLOCK_KINDS = {"image": "image", "audio": "audio", "video": "video", "file": "document"}
+
+
+def _block_kind(block: Any) -> str | None:
+    block_type = block.get("type") if isinstance(block, Mapping) else None
+    return _BLOCK_KINDS.get(block_type) if isinstance(block_type, str) else None
 
 
 def langchain_media_provider(model: Any) -> MediaProvider | None:

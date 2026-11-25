@@ -660,6 +660,7 @@ class LangChainAdapter(HookRegistrationMixin):
         emit_final: bool,
     ) -> Any:
         from kedi.agent_adapter.adapters.langchain.runtime import langchain_run_scope
+        from kedi.agent_adapter.request.context import tool_media_scope
 
         payload = dict(payload)
         limits = payload.pop("usage_limits", self._default_usage_limits)
@@ -683,6 +684,7 @@ class LangChainAdapter(HookRegistrationMixin):
             langchain_run_scope(limits) as run_state,
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as resolver,
+            tool_media_scope(),
         ):
             if resolver is not None:
                 callbacks = config.get("callbacks")
@@ -1086,6 +1088,9 @@ class LangChainAdapter(HookRegistrationMixin):
             LangChainOutputCorrectionMiddleware,
             LangChainRunMiddleware,
         )
+        from kedi.agent_adapter.adapters.langchain.tool_media import (
+            LangChainToolMediaMiddleware,
+        )
         from kedi.agent_adapter.request_retry import request_retry_limit
 
         # The correction middleware is outermost, so the run middleware admits each correction.
@@ -1137,6 +1142,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 tools,
                 approval_enabled=not codemode_enabled,
             ),
+            LangChainToolMediaMiddleware(model, media_limit=self.active_media_limit),
         ]
 
     @asynccontextmanager

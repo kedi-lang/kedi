@@ -16,11 +16,11 @@ __all__ = [
 if TYPE_CHECKING:
     from .adapter import PydanticAdapter as PydanticAdapter
     from .capabilities import _KediAgentEventCapability as _KediAgentEventCapability
-    from .capabilities import _KediArtifactCapability as _KediArtifactCapability
     from .capabilities import _KediDeferredApprovalCapability as _KediDeferredApprovalCapability
     from .capabilities import _KediExternalApprovalCapability as _KediExternalApprovalCapability
     from .capabilities import _KediRequiredToolCapability as _KediRequiredToolCapability
     from .capabilities import _KediTelemetryCapability as _KediTelemetryCapability
+    from .capabilities import _KediToolResultCapability as _KediToolResultCapability
     from .hooks import _KediHookCapability as _KediHookCapability
     from .run_config import _cached_model_settings as _cached_model_settings
     from .run_config import _profile_model_settings as _profile_model_settings
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 _EXPORTS = {
     "PydanticAdapter": ("adapter", "PydanticAdapter"),
     "_KediAgentEventCapability": ("capabilities", "_KediAgentEventCapability"),
-    "_KediArtifactCapability": ("capabilities", "_KediArtifactCapability"),
+    "_KediToolResultCapability": ("capabilities", "_KediToolResultCapability"),
     "_KediDeferredApprovalCapability": ("capabilities", "_KediDeferredApprovalCapability"),
     "_KediExternalApprovalCapability": ("capabilities", "_KediExternalApprovalCapability"),
     "_KediRequiredToolCapability": ("capabilities", "_KediRequiredToolCapability"),

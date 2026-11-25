@@ -21,6 +21,7 @@ from kedi.agent_adapter.tools.execution import arguments_target_secret_file
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.capabilities import capability_mcp_policy
+from kedi.media import contains_media
 
 
 def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
@@ -126,6 +127,9 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             result = tool.fn(*args, **arguments)
             if inspect.isawaitable(result):
                 result = run_sync(cast(Coroutine[Any, Any, Any], result))
+            if contains_media(result) or _is_codemode_control(tool):
+                result = run_sync(_lowered(tool, result))
+            # The journal replays this result after an interrupt, so it holds what the model reads.
             record_live_tool_result(result)
             return result
         except CodeModeError as exc:
@@ -150,6 +154,9 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             result = tool.fn(*args, **arguments)
             if inspect.isawaitable(result):
                 result = await result
+            if contains_media(result) or _is_codemode_control(tool):
+                result = await _lowered(tool, result)
+            # The journal replays this result after an interrupt, so it holds what the model reads.
             record_live_tool_result(result)
             return result
         except CodeModeError as exc:
@@ -159,6 +166,26 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             raise
 
     return with_live_tool_tracking(replace(tool, fn=_tool)).fn
+
+
+def _is_codemode_control(tool: ToolSpec) -> bool:
+    metadata = tool.metadata or {}
+    return (
+        metadata.get("kedi_codemode_control") is True or metadata.get("kind") == "codemode_control"
+    )
+
+
+async def _lowered(tool: ToolSpec, result: Any) -> Any:
+    """Media in a tool result, or named by a CodeMode result, as content blocks."""
+
+    from kedi.agent_adapter.adapters.langchain.tool_media import (
+        lower_codemode_result,
+        lower_tool_result,
+    )
+
+    if _is_codemode_control(tool):
+        return await lower_codemode_result(result)
+    return await lower_tool_result(result, tool_name=tool.name)
 
 
 def _raise_langchain_tool_error(

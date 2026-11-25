@@ -268,6 +268,40 @@ uploaded file has no bytes and cannot be saved.
 In Kedi Notebook (host mode), ``> show: `photo` `` displays an image inline and
 gives audio a player instead of printing the label.
 
+## Media From Tools
+
+A tool that returns media gives it to the model as media:
+
+```kedi
+> import: media
+
+@snap() -> Image:
+  = `image("camera/latest.jpg")`
+
+> approval: allow
+> use: snap
+[reply] << Take a photo and say which color fills it.
+= <reply>
+```
+
+The tool result is a placeholder, `<image snap_result_1>`, and the image
+follows natively. A dict, a model or a list holding media becomes JSON with a
+placeholder for each one, as `<<x>>` does. Names stay unique across the tool
+calls of one request; like prompt names, a later request may reuse them.
+
+| Adapter | Where the media go |
+| --- | --- |
+| Pydantic AI | inside the tool result where the provider takes it (Anthropic, Gemini 3), otherwise in a following user message (OpenAI, Gemini 2.x) |
+| LangChain | in the tool message when the model profile sets `image_tool_message` or `pdf_tool_message`, otherwise in a user message after the tool messages |
+| Claude Agent SDK, Codex, WebGPU | not sent: the tool bridge carries text, so the model reads a tool error saying so |
+
+- Provider rules and `media_limit` apply as for prompt media; audio from a
+  tool fails on Anthropic models, for example.
+- Media are never stored as artifacts, whatever their size.
+- In CodeMode, code receives the placeholders. Media its result names are
+  attached to that result.
+- PostToolUse hooks see the result as the adapter sends it, media included.
+
 ## Image Output
 
 A typed raw invoke with `Image` asks the model itself for an image:
