@@ -19,6 +19,8 @@ from kedi.agent_adapter.execution import (
     _resolve_deadline,
     _shared_execution_loop,
 )
+from kedi.agent_adapter.request import prompt_media_scope
+from kedi.agent_adapter.request.media import MediaAttachment, require_media_input
 from kedi.agent_adapter.subagents import (
     _NO_TYPED_OUTPUT,
     DelegationResult,
@@ -182,10 +184,16 @@ class NativeSubagentOwner:
         *,
         task: str,
         parent_profile: AgentProfile,
+        media: tuple[MediaAttachment, ...] = (),
         final_schema: dict[str, Any] | None = None,
         output_adapter: TypeAdapter[Any] | None = None,
         wait_for_slot: bool = False,
     ) -> SubagentTask:
+        """Start a child on ``task``; ``media`` are the task prompt's attachments.
+
+        The child's first run takes the attachments, as a request's first native run does;
+        a restarted attempt continues the child's session, which already holds them.
+        """
         from .groups import check_process_cancelled, register_process_child
 
         self._check_owner()
@@ -213,12 +221,16 @@ class NativeSubagentOwner:
                 )
             if output_adapter is None and child_profile.output_type is not None:
                 output_adapter = TypeAdapter(child_profile.output_type)
+            if media:
+                require_media_input(self.runtime._resolve_adapter(child_profile))
         output_state = SubagentOutputState(output_adapter) if output_adapter is not None else None
         if wait_for_slot:
             await self.runtime._subagent_coordinator.wait_for_start_slot(self._concurrency)
         with (
             live_input_scope(current_live_input() or self.inbox),
             track_delegation_attempt(requested_profile=subagent, task=task),
+            # The child's task context is copied inside this scope (the coordinator).
+            prompt_media_scope(media),
         ):
             handle = self.runtime._start_subagent(
                 allowed_subagents=tuple(parent_profile.subagents),
@@ -244,6 +256,7 @@ class NativeSubagentOwner:
         *,
         task: str,
         parent_profile: AgentProfile,
+        media: tuple[MediaAttachment, ...] = (),
         final_schema: dict[str, Any] | None = None,
         output_adapter: TypeAdapter[Any] | None = None,
     ) -> SubagentTask:
@@ -252,6 +265,7 @@ class NativeSubagentOwner:
             lambda: self.start(
                 subagent,
                 task=task,
+                media=media,
                 parent_profile=parent_profile,
                 final_schema=final_schema,
                 output_adapter=output_adapter,

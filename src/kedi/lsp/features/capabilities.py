@@ -436,6 +436,16 @@ def _scan_capability_scope(
                         ),
                     )
                 )
+            child = profile_states.get(stmt.subagent)
+            if child is not None:
+                # The task prompt's media go to the child, so its adapter must read them.
+                diagnostics.extend(
+                    _media_capability_diagnostics(
+                        child,
+                        [seg for line in stmt.template.lines for seg in line.segments],
+                        media_names,
+                    )
+                )
             continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))

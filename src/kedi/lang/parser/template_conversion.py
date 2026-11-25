@@ -450,7 +450,8 @@ def _reject_reference(
             message=(
                 f"References (<<{segment.name}{'(...)' if isinstance(segment, CallReference) else ''}>>) "
                 f"are not allowed in {where}. "
-                "Only model prompts accept them: >> lines, [x] << invokes and > if: claims. "
+                "Only model prompts accept them: >> lines, [x] << invokes, > if: claims and "
+                "> task prompts. "
                 "Use <...> for text, or single-backtick Python for a native value, "
                 'for example [img: Image] = `image("cat.png")`.'
             ),

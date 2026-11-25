@@ -49,6 +49,21 @@ def current_agent_run_request() -> AgentRunRequest | None:
     return _CURRENT_AGENT_RUN_REQUEST.get()
 
 
+@contextmanager
+def prompt_media_scope(media: tuple[MediaAttachment, ...]) -> Generator[None, None, None]:
+    """Give ``media`` to the first native run started inside this scope, as a request does.
+
+    A subagent task's attachments travel this way: the child's run starts in a copy of this
+    context and takes them; the parent's own runs are outside the scope.
+    """
+
+    token = _PROMPT_MEDIA.set(_PromptMediaClaim(media) if media else None)
+    try:
+        yield
+    finally:
+        _PROMPT_MEDIA.reset(token)
+
+
 def take_prompt_media() -> tuple[MediaAttachment, ...]:
     """Claim the current request's attachments for the native run that sends its prompt.
 
@@ -64,4 +79,9 @@ def take_prompt_media() -> tuple[MediaAttachment, ...]:
     return claim.media
 
 
-__all__ = ["agent_run_request_scope", "current_agent_run_request", "take_prompt_media"]
+__all__ = [
+    "agent_run_request_scope",
+    "current_agent_run_request",
+    "prompt_media_scope",
+    "take_prompt_media",
+]

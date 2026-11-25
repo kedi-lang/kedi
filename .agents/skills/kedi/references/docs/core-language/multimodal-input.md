@@ -218,11 +218,37 @@ A media value is a native value. Single backticks keep it:
 
 `<cat_image>` anywhere is a type error, and the editor reports it as
 `K-SUBSTITUTION-TYPE`. `<<cat_image>>` outside a model prompt, for example in
-an assignment, a return, `> show:`, `> instructions:` or a subagent task, is a
-parse error (`K-REFERENCE-CONTEXT`). ``> show: `cat_image` `` and Python
+an assignment, a return, `> show:`, `> instructions:` or `> send` input, is a
+parse error (`K-REFERENCE-CONTEXT`). A `> task` prompt is a model prompt: its
+references go to the child (see [Native Tasks](../agentic-engineering/subagent-tasks.md)). ``> show: `cat_image` `` and Python
 `str()` display a byte-free label such as `<image cat.png · image/png · 48 KB>`.
-Media inside a dict, a model or a mixed list cannot be referenced; reference
-each media value directly.
+### Media Inside a Value
+
+Media in a dict, a model, a dataclass or a mixed list are attached each under
+a name derived from its path, and the value goes as JSON with a placeholder
+naming each one:
+
+```kedi
+> import: media
+
+[cat: Image] = `image("cat.png")`
+[report: dict] = `{"title": "Q3", "photo": cat, "pets": [cat, "note"]}`
+[reply] << Summarize <<report>>.
+= <reply>
+```
+
+The model receives one image, `report_photo`, and the document `report`:
+`{"title":"Q3","photo":"<image report_photo>","pets":["<image report_photo>","note"]}`.
+
+- Names come from the path: `report_photo`, `report_pets_1` for the first
+  item of `pets`, `pick_result_2` for the second item of `<<pick()>>`.
+- An image also referenced directly keeps its first name, so
+  `Compare <<cat>> with <<report>>` sends the image once and the JSON says
+  `<image cat>`.
+- Only media the value's serialization writes are attached: a model field
+  with `exclude=True` is neither written nor sent.
+- `<report>` still renders text, so substituting a value that holds media is
+  an error, as it is for a media value.
 
 `save` writes a value's bytes to a file and returns the path:
 

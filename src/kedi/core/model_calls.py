@@ -68,9 +68,11 @@ def _snapshot_prompt_input(
     if by_reference:
         ref = binding_reference(name, value)
         # Referenced content is identified by content, not bytes: the attachment carries it.
-        fingerprint = fingerprint_value(
-            ["reference", [[item.kind, *item.content_key] for item in ref.items]]
-        )
+        material: list[Any] = ["reference", [[item.kind, *item.content_key] for item in ref.items]]
+        if ref.layout is not None:
+            # Media inside a value: the value's JSON, with path placeholders, is content too.
+            material.append(["layout", ref.layout.skeleton])
+        fingerprint = fingerprint_value(material)
         return _PromptInputSnapshot(
             part=ref,
             identity=DecisionInput(name=name, fingerprint=fingerprint, supported=True),
@@ -119,7 +121,7 @@ def _prepare_attachments(
 
     from kedi.agent_adapter.request.media import load_text_documents
     from kedi.lang.compiler.environment import native_value
-    from kedi.media import reference
+    from kedi.media import MediaError, reference
 
     attachments = load_text_documents(attachments)
     if not any(item.stored is not None for item in attachments):
@@ -133,7 +135,13 @@ def _prepare_attachments(
         if stored is not None and readable:
             attachment = replace(attachment, artifact_ref=stored.as_ref().model_dump(mode="json"))
         elif stored is not None:
-            (media,) = reference(native_value(stored), binding=attachment.name).items
+            opened = reference(native_value(stored), binding=attachment.name)
+            if opened.layout is not None:
+                raise MediaError(
+                    f"{attachment.name}: a stored value holding media cannot be opened for a call "
+                    "without artifact tools; reference its media directly"
+                )
+            (media,) = opened.items
             attachment = replace(attachment, media=media, stored=None)
         prepared.append(attachment)
     return tuple(prepared)

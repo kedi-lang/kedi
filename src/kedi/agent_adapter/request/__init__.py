@@ -1,5 +1,10 @@
 from .assembler import RunRequestAssembler, conversation_lane_identity
-from .context import agent_run_request_scope, current_agent_run_request, take_prompt_media
+from .context import (
+    agent_run_request_scope,
+    current_agent_run_request,
+    prompt_media_scope,
+    take_prompt_media,
+)
 from .diagnostics import RequestDiagnostics, request_diagnostics
 from .lowering import RequestLoweringAdapter, lower_request_sync
 from .media import (
@@ -62,5 +67,6 @@ __all__ = [
     "conversation_lane_identity",
     "lower_request_sync",
     "media_summaries",
+    "prompt_media_scope",
     "take_prompt_media",
 ]
