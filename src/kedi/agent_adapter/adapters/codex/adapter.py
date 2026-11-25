@@ -6,7 +6,7 @@ import os
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar, copy_context
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any, Callable, Generator, Mapping, Sequence, cast, get_type_hints
 
@@ -18,6 +18,7 @@ from kedi.agent_adapter.adapters.codex.app_server import (
     CodexTurnResult,
     ServerApprovalHandler,
 )
+from kedi.agent_adapter.adapters.codex.media import codex_turn_input
 from kedi.agent_adapter.approvals.policy import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -44,6 +45,7 @@ from kedi.agent_adapter.hooks import (
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.output_schema import build_output_model
+from kedi.agent_adapter.request import take_prompt_media
 from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
@@ -54,7 +56,11 @@ from kedi.agent_adapter.tools.execution import (
 from kedi.agent_adapter.tools.scope import ToolScope
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
-from kedi.agent_profile.settings import CODEX_AGENT_SETTING_KEYS, codex_agent_settings
+from kedi.agent_profile.settings import (
+    CODEX_AGENT_SETTING_KEYS,
+    codex_agent_settings,
+    media_limit_bytes,
+)
 from kedi.effort import pydantic_effort_value
 from kedi.resolved_types import ResolvedKediType
 
@@ -114,7 +120,7 @@ class CodexAdapter(HookRegistrationMixin):
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
-        supports_media_input=False,
+        supports_media_input=True,
         hooks=HookCapabilities.full(
             tool_bridge="kedi",
             tool_origins=frozenset({"kedi"}),
@@ -329,6 +335,7 @@ class CodexAdapter(HookRegistrationMixin):
     ) -> CodexTurnResult:
         try:
             with (
+                self._turn_with_media(run) as run,
                 delegation_scope(self._subagent_failure_policy),
                 agent_event_run(self.shortname) as resolver,
             ):
@@ -382,6 +389,23 @@ class CodexAdapter(HookRegistrationMixin):
             if run.codemode_bridge is not None:
                 await run.codemode_bridge.close()
 
+    @contextmanager
+    def _turn_with_media(self, run: _CodexRun) -> Generator[_CodexRun, None, None]:
+        """The run with its prompt's attachments as turn input.
+
+        The first native run in the request takes them; nested runs get none. Image files
+        live in a directory that lasts for the turn.
+        """
+
+        (prompt_input,) = run.turn_params["input"]
+        with codex_turn_input(
+            prompt_input["text"],
+            take_prompt_media(),
+            model=run.thread_params.get("model"),
+            media_limit=media_limit_bytes(self.active_profile.settings),
+        ) as turn_input:
+            yield replace(run, turn_params={**run.turn_params, "input": turn_input})
+
     def _run_sync(
         self,
         run: _CodexRun,
@@ -389,6 +413,7 @@ class CodexAdapter(HookRegistrationMixin):
         emit_final: bool,
     ) -> CodexTurnResult:
         with (
+            self._turn_with_media(run) as run,
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as resolver,
         ):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -120,6 +121,13 @@ def request_native_approval(
 for raw_line in sys.stdin:
     message = json.loads(raw_line)
     record(message)
+    if message.get("method") == "turn/start":
+        # Prove a local image exists while the turn runs, with the bytes Kedi wrote.
+        for item in message["params"].get("input", []):
+            if item.get("type") == "localImage":
+                image = Path(item["path"])
+                digest = hashlib.sha256(image.read_bytes()).hexdigest() if image.exists() else None
+                record({"localImage": item["path"], "sha256": digest})
     method = message.get("method")
     request_id = message.get("id")
 

@@ -71,7 +71,7 @@ part of the base adapter protocol rather than an optional capability.
 | Tool attempt budget | no | no | no | no |
 | Semantic stream events | yes | yes | yes | yes |
 | Native history processing | no | no | no | no |
-| Media input | no | no | no | no |
+| Media input | yes | yes | no | no |
 | Agent lifecycle hooks | yes | yes | yes | yes |
 <!-- END GENERATED ADAPTER CAPABILITIES -->
 

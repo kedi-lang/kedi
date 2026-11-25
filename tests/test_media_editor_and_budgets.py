@@ -121,7 +121,8 @@ def test_editor_treats_media_names_without_the_media_import_as_ordinary_types() 
 
 def test_editor_reports_media_prompts_on_adapters_without_media_input() -> None:
     source = """> import: media
-> agent: claude
+> agent: acp:
+    command: acp-server
 
 @pick() -> Image:
   = `image("cat.png")`
@@ -132,12 +133,18 @@ def test_editor_reports_media_prompts_on_adapters_without_media_input() -> None:
 > if: <<cat_image>> shows a cat
   [mode] = cat
 """
-    assert _codes(source) == [
-        ("K-ADAPTER-CAPABILITY", 7),
-        ("K-ADAPTER-CAPABILITY", 8),
-        ("K-ADAPTER-CAPABILITY", 8),
-        ("K-ADAPTER-CAPABILITY", 9),
+    media_lines = [
+        diagnostic.range.start.line
+        for diagnostic in diagnostics_for(source, "/tmp/media.kedi")
+        if str(diagnostic.code) == "K-ADAPTER-CAPABILITY" and "media input" in diagnostic.message
     ]
+    assert media_lines == [8, 9, 9, 10]
+    # Claude and Codex take prompt media, so the same prompts are not reported there.
+    for agent in ("claude", "codex"):
+        assert (
+            _codes(source.replace("> agent: acp:\n    command: acp-server", f"> agent: {agent}"))
+            == []
+        )
 
 
 def test_editor_hover_documents_the_loaders() -> None:
