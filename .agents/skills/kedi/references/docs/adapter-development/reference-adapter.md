@@ -173,6 +173,9 @@ so the adapter must refuse what it cannot honor. Settings named in
 `tool_reason`, `voice`) belong to Kedi and are never an error; see [Profiles, Models,
 and Settings](profiles.md). The profile's `> instructions:`
 need no handling here: Kedi already renders them into the `instructions` argument.
+A direct or native call made inside `profile_override` may pass none; send
+`profile.call_instructions(instructions)`, which falls back to the profile's
+instructions for `None` and keeps an explicit empty string.
 
 ### Tools
 

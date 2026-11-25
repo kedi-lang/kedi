@@ -524,7 +524,7 @@ class CodexAdapter(HookRegistrationMixin):
                 for tool in self.scoped_tools
             )
         system = append_codemode_instructions(
-            instructions if instructions is not None else profile.system,
+            profile.call_instructions(instructions),
             enabled=codemode_settings is not None,
             preloaded_tools=(
                 codemode_bridge.preloaded_tools if codemode_bridge is not None else ()

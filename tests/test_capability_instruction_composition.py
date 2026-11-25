@@ -188,7 +188,7 @@ def test_request_parts_preserve_capability_provenance_and_runtime_contracts():
         profile = AgentProfile(system="Base.").merge(contribution("citations", "Cite sources."))
         parts = runtime._agent_instruction_parts(profile, runtime.adapter)
         assert [(part.source, part.identity, part.content) for part in parts[:2]] == [
-            ("profile", "profile.system", "Base."),
+            ("profile", "profile.instructions", "Base."),
             ("capability", "capability:citations", "Cite sources."),
         ]
         reset_parts = runtime._agent_instruction_parts(

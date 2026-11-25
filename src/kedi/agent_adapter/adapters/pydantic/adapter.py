@@ -640,8 +640,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         return await speak(
             prompt,
             model=effective_model(agent, cast("Model | str | None", selected)),
-            instructions=cast("str | None", kwargs.get("instructions"))
-            or self.active_profile.system,
+            instructions=self.active_profile.call_instructions(kwargs.get("instructions")),
             voice=speech_voice(settings),
             timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
         )

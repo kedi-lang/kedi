@@ -24,7 +24,7 @@ and appears only when it applies:
 | Order | Identity | Source | Present when |
 |---|---|---|---|
 | 1 | `template.instructions` | runtime | the call is a template capture in completion mode; wrapped in `<TemplateInstructions>` |
-| 2 | `profile.system` | profile | the profile has `> instructions:` (the identity keeps the directive's former name) |
+| 2 | `profile.instructions` | profile | the profile has `> instructions:` |
 | 3 | `capability:<identity>` | capability | an active capability contributes instructions |
 | 4 | `grounding.instructions` | runtime | the profile has tools, MCP servers, or skills; wrapped in `<ToolCallInstructions>` |
 | 5 | `skills.instructions` | skills | skills are enabled |

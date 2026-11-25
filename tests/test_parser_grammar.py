@@ -1204,6 +1204,27 @@ def test_hyphenated_identifiers_have_specific_diagnostic(source: str, invalid_na
     )
 
 
+@pytest.mark.parametrize(
+    ("source", "token", "value"),
+    [
+        ("[x: Literal[01]] = `1`\n= `x`\n", "01", 1),
+        ("@f(a: Literal[007, 2]) -> str:\n  = ok\n", "007", 7),
+        # The error on a last line without a newline.
+        ("[x: Literal[01]] = `1`", "01", 1),
+    ],
+)
+def test_leading_zero_literal_values_have_specific_diagnostic(
+    source: str, token: str, value: int
+) -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program(source)
+
+    assert [diagnostic.message for diagnostic in info.value.diagnostics] == [
+        f"invalid integer {token!r}: Python does not allow leading zeros; write {value}, "
+        "or quote it as a string"
+    ]
+
+
 def test_parse_error_does_not_blame_hyphens_inside_recovered_directives() -> None:
     source = (
         "> import: profiles (module fixture)\n> profile: local:\n    > model: openai:gpt-4o-mini\n"

@@ -2,7 +2,8 @@
 
 Audio chat models speak their reply: Gemini TTS models (``audio_outputs`` in the model profile)
 read the prompt aloud, and OpenAI audio models (``gpt-audio``, ``gpt-4o-audio-preview``) answer
-with audio when asked for it.
+with audio when asked for it. The ``voice`` setting goes to OpenAI's audio request, or to the
+``voice`` field of a chat model that declares one.
 """
 
 from __future__ import annotations
@@ -30,10 +31,14 @@ def speech_model(model: Any, *, voice: str | None, label: str) -> Any:
             "google_genai:gemini-2.5-flash-preview-tts or openai:gpt-audio"
         )
     elif voice is not None:
-        raise MediaError(
-            f"Model {label} takes no voice setting through LangChain; remove the voice setting "
-            "or use Pydantic AI with a realtime model"
-        )
+        if "voice" not in (getattr(type(model), "model_fields", None) or {}):
+            raise MediaError(
+                f"Model {label} takes no voice setting through LangChain; remove the voice "
+                "setting, use a chat model with a voice field, or use Pydantic AI with a "
+                "realtime model"
+            )
+        # A speech chat model that declares a voice field, a local TTS wrapper for example.
+        updates["voice"] = voice
     return model.model_copy(update=updates)
 
 

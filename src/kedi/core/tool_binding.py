@@ -268,7 +268,7 @@ def _agent_instruction_parts(self: KediRuntime, profile: Any, adapter: Any) -> t
     if system:
         parts.append(
             InstructionPart(
-                identity="profile.system",
+                identity="profile.instructions",
                 source="profile",
                 content=system,
             )
