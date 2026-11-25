@@ -21,10 +21,13 @@ from kedi.agent_adapter.request.media import (
     check_media_support,
     download_image_urls,
     download_media,
+    gemini_media_resolution,
+    gemini_settings_key,
+    gemini_video_metadata,
     scan_sent_content,
     unsent_attachments,
 )
-from kedi.media import Media, MediaError, media_kind
+from kedi.media import Media, MediaError, Video, media_kind
 
 if TYPE_CHECKING:
     from langchain_core.messages import HumanMessage
@@ -183,6 +186,8 @@ async def _media_block(attachment: MediaAttachment, model: Any) -> dict[str, Any
     media = attachment.media
     if media.url is not None and not _sends_url(media, model):
         media = await download_media(media)
+    if isinstance(media, Video) and media.has_settings:
+        return _gemini_video_block(media)
     block: dict[str, Any] = {"type": _BLOCK_TYPES[media.kind]}
     if media.data is not None:
         block["base64"] = base64.b64encode(media.data).decode("ascii")
@@ -199,6 +204,26 @@ async def _media_block(attachment: MediaAttachment, model: Any) -> dict[str, Any
             "filename": f"{attachment.name}.pdf",
             "name": bedrock_document_name(attachment.name),
         }
+    return block
+
+
+def _gemini_video_block(media: Video) -> dict[str, Any]:
+    """langchain-google-genai reads clip settings only from its own ``media`` block.
+
+    check_media_support admits a video with settings only for Gemini models.
+    """
+
+    block: dict[str, Any] = {"type": "media", "mime_type": media.media_type or "video/mp4"}
+    if media.data is not None:
+        block["data"] = base64.b64encode(media.data).decode("ascii")
+    else:
+        block["file_uri"] = media.url if media.url is not None else media.file_id
+    metadata = gemini_video_metadata(media)
+    if metadata:
+        block["video_metadata"] = metadata
+    resolution = gemini_media_resolution(media)
+    if resolution is not None:
+        block["media_resolution"] = resolution
     return block
 
 
@@ -228,6 +253,8 @@ def _block_identity(block: Any) -> tuple[str, ...] | None:
     if not isinstance(block, Mapping):
         return None
     block_type = block.get("type")
+    if block_type == "media":
+        return _gemini_block_identity(block)
     kinds = {"image": "image", "audio": "audio", "video": "video", "file": "document"}
     kind = kinds.get(str(block_type))
     if kind is None:
@@ -246,6 +273,26 @@ def _block_identity(block: Any) -> tuple[str, ...] | None:
     if isinstance(block.get("file_id"), str):
         return (kind, "file_id", block["file_id"])
     return None
+
+
+def _gemini_block_identity(block: Mapping[str, Any]) -> tuple[str, ...] | None:
+    mime_type = block.get("mime_type")
+    kind = media_kind(mime_type) if isinstance(mime_type, str) else "video"
+    if isinstance(block.get("data"), str):
+        try:
+            source: tuple[str, ...] = (
+                "sha256",
+                _sha256(base64.b64decode(block["data"], validate=True)),
+            )
+        except ValueError:
+            return None
+    elif isinstance(block.get("file_uri"), str):
+        # A file id sent as a file_uri is mapped back through the message's source identities.
+        source = ("url", block["file_uri"])
+    else:
+        return None
+    settings = gemini_settings_key(block.get("video_metadata"), block.get("media_resolution"))
+    return (kind, *source, *settings)
 
 
 def _sha256(data: bytes) -> str:

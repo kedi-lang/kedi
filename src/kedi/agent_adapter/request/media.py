@@ -28,7 +28,16 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from kedi.media import Media, MediaError, MediaKind, Reference, format_size
+from kedi.media import (
+    Media,
+    MediaError,
+    MediaKind,
+    Reference,
+    Video,
+    format_seconds,
+    format_size,
+    video_settings_key,
+)
 
 MediaSource = Literal["data", "url", "file_id"]
 MediaProvider = Literal["openai", "anthropic", "google", "bedrock", "typesafe", "laya"]
@@ -342,6 +351,10 @@ def check_media_support(
         media = attachment.media
         if attachment.is_text:
             continue
+        if isinstance(media, Video) and media.has_settings:
+            # Above the unknown-provider exit: a model that ignores the settings would
+            # silently read the whole video instead of the clip.
+            _check_video_settings(attachment, media, provider=provider, model=model)
         if media.is_youtube and provider != "google":
             raise MediaError(
                 f"{attachment.name}: YouTube URLs are read only by Gemini models; "
@@ -482,6 +495,8 @@ async def download_media(media: Media) -> Media:
     )
     downloaded = await download_item(item, data_format="bytes")
     return type(media)(
+        # A downloaded clip keeps its settings: the bytes replace only the source.
+        **{name: getattr(media, name) for name in media._SETTINGS},
         media_type=downloaded["data_type"],
         data=downloaded["data"],
         name=media.name,
@@ -506,6 +521,80 @@ def load_text_documents(attachments: Sequence[MediaAttachment]) -> tuple[MediaAt
         return tuple(loaded)
 
     return run_sync(load())
+
+
+_GEMINI_BEFORE_3 = re.compile(r"(?:^|[/:])gemini-[12](?:[.-]|$)")
+_GEMINI_RESOLUTIONS = {
+    "low": "MEDIA_RESOLUTION_LOW",
+    "medium": "MEDIA_RESOLUTION_MEDIUM",
+    "high": "MEDIA_RESOLUTION_HIGH",
+}
+
+
+def _check_video_settings(
+    attachment: MediaAttachment,
+    media: Video,
+    *,
+    provider: MediaProvider | None,
+    model: str | None,
+) -> None:
+    if provider != "google":
+        raise MediaError(
+            f"{attachment.name}: video settings (start, end, fps, resolution) are read only by "
+            f"Gemini models; {_model_text(model)} cannot use them"
+        )
+    if media.resolution is not None and model and _GEMINI_BEFORE_3.search(model.lower()):
+        raise MediaError(
+            f"{attachment.name}: video resolution needs Gemini 3 or later; "
+            f"{_model_text(model)} ignores it"
+        )
+
+
+def gemini_video_metadata(media: Media) -> dict[str, Any]:
+    """Gemini's ``video_metadata`` for a video's clip settings; empty without them."""
+
+    if not isinstance(media, Video):
+        return {}
+    metadata: dict[str, Any] = {}
+    if media.start is not None:
+        metadata["start_offset"] = f"{format_seconds(media.start)}s"
+    if media.end is not None:
+        metadata["end_offset"] = f"{format_seconds(media.end)}s"
+    if media.fps is not None:
+        metadata["fps"] = media.fps
+    return metadata
+
+
+def gemini_media_resolution(media: Media) -> str | None:
+    """Gemini's per-part media resolution level for a video, when it sets one."""
+
+    if not isinstance(media, Video) or media.resolution is None:
+        return None
+    return _GEMINI_RESOLUTIONS[media.resolution]
+
+
+def gemini_settings_key(metadata: Any, resolution: Any) -> tuple[str, ...]:
+    """Rebuild a video's settings identity from the Gemini fields that carried it."""
+
+    def seconds(value: Any) -> float | None:
+        if isinstance(value, str) and value.endswith("s"):
+            try:
+                return float(value[:-1])
+            except ValueError:
+                return None
+        return None
+
+    fields = metadata if isinstance(metadata, Mapping) else {}
+    if isinstance(resolution, Mapping):
+        resolution = resolution.get("level")
+    names = {level: name for name, level in _GEMINI_RESOLUTIONS.items()}
+    fps = fields.get("fps")
+    return video_settings_key(
+        start=seconds(fields.get("start_offset")),
+        end=seconds(fields.get("end_offset")),
+        fps=float(fps) if isinstance(fps, (int, float)) and not isinstance(fps, bool) else None,
+        resolution=names.get(resolution) if isinstance(resolution, str) else None,
+    )
 
 
 def _provider_text(provider: MediaProvider) -> str:
@@ -533,6 +622,9 @@ __all__ = [
     "attachment_content",
     "check_media_support",
     "download_image_urls",
+    "gemini_media_resolution",
+    "gemini_settings_key",
+    "gemini_video_metadata",
     "image_size",
     "compose_prompt",
     "history_keeps_media",

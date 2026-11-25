@@ -26,7 +26,7 @@ for the rules every reference follows.
 | --- | --- |
 | `image(source)` | loads an `Image` |
 | `audio(source)` | loads an `Audio` value |
-| `video(source)` | loads a `Video` |
+| `video(source, start=, end=, fps=, resolution=)` | loads a `Video`; the settings are optional and Gemini-only |
 | `document(source)` | loads a `Document` |
 | `save(media, path)` | writes a media value to a file and returns the path |
 | `Media`, `Image`, `Audio`, `Video`, `Document` | types for annotations |
@@ -150,6 +150,36 @@ downloads them over `http(s)` only, with private and cloud-metadata addresses
 blocked. YouTube URLs are never downloaded, and only Gemini reads them.
 `s3://` and `gs://` URIs pass through unchanged. Do not build media URLs from
 untrusted input.
+
+### Video Settings
+
+Gemini reads a clip of a video: `start` and `end` offsets in seconds, `fps`
+(frames sampled per second, above 0 and at most 24) and `resolution` (`low`,
+`medium` or `high`, Gemini 3 and later). Pass them to `video()`:
+
+```kedi
+> import: media
+
+[intro: Video] = `video("talk.mp4", start=0, end=30, fps=2, resolution="low")`
+[talk: Video] = `video("https://youtu.be/abc123", start=60, end=90)`
+[reply] << Compare <<intro>> with <<talk>>.
+= <reply>
+```
+
+In Python, `Video.with_settings(start=..., end=..., fps=..., resolution=...)`
+returns a copy. A setting it omits is kept, and `None` clears one.
+
+- Settings are part of the value's identity. Two clips of one file are two
+  attachments; a different clip is sent again in history; a cached call with a
+  different clip calls the model again.
+- Only Gemini reads them. Kedi refuses a video with settings for any other
+  provider, including one it does not recognize, instead of sending the whole
+  video. `resolution` on Gemini 2.x is refused too, because those models ignore
+  it.
+- A clipped YouTube URL still goes to Gemini as a URL; a downloaded URL keeps
+  its settings.
+- JSON serialization of a `Video` keeps only its source, not its settings.
+
 
 ## Media Outside Prompts
 

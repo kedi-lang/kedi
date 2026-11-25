@@ -49,6 +49,11 @@ VIDEO_MEDIA_TYPES = frozenset(
 )
 PDF_MEDIA_TYPE = "application/pdf"
 
+VideoResolution = Literal["low", "medium", "high"]
+VIDEO_RESOLUTIONS: tuple[VideoResolution, ...] = ("low", "medium", "high")
+MAX_VIDEO_FPS = 24.0
+"""Gemini's highest video sampling rate; its range is (0, 24] frames per second."""
+
 _OFFICE_MEDIA_TYPES = frozenset(
     {
         "application/msword",
@@ -237,6 +242,7 @@ class Media:
 
     kind: ClassVar[MediaKind]
     _type_label: ClassVar[str]
+    _SETTINGS: ClassVar[tuple[str, ...]] = ()
     __slots__ = (*_FIELDS, "_sha256")
 
     media_type: str | None
@@ -272,7 +278,18 @@ class Media:
         raise AttributeError(f"{type(self).__name__} values are immutable")
 
     def __reduce__(self) -> tuple[Any, ...]:
-        return (_rebuild_media, (type(self), {name: getattr(self, name) for name in _FIELDS}))
+        return (_rebuild_media, (type(self), self._values()))
+
+    def _values(self) -> dict[str, Any]:
+        """Every constructor field, including a subclass's settings."""
+
+        return {name: getattr(self, name) for name in (*_FIELDS, *self._SETTINGS)}
+
+    def _settings_key(self) -> tuple[str, ...]:
+        return ()
+
+    def _settings_label(self) -> str | None:
+        return None
 
     def _validate(self) -> None:
         if type(self) is Media:
@@ -333,13 +350,18 @@ class Media:
 
     @property
     def content_key(self) -> tuple[str, ...]:
-        """Identity of the content, independent of its name."""
+        """Identity of what the model receives, independent of the name.
+
+        A video's settings are part of it: two clips of one file are different content.
+        """
 
         if self.data is not None:
-            return ("sha256", self.sha256 or "")
-        if self.url is not None:
-            return ("url", self.url)
-        return ("file_id", self.provider or "", self.file_id or "")
+            source: tuple[str, ...] = ("sha256", self.sha256 or "")
+        elif self.url is not None:
+            source = ("url", self.url)
+        else:
+            source = ("file_id", self.provider or "", self.file_id or "")
+        return (*source, *self._settings_key())
 
     @property
     def is_text(self) -> bool:
@@ -362,15 +384,9 @@ class Media:
     def with_name(self: MediaT, name: str | None) -> MediaT:
         """Return the same content under another model-facing name."""
 
-        return type(self)(
-            media_type=self.media_type,
-            data=self.data,
-            url=self.url,
-            file_id=self.file_id,
-            provider=self.provider,
-            name=name,
-            filename=self.filename,
-        )
+        values = self._values()
+        values["name"] = name
+        return type(self)(**values)
 
     def save(self, path: str | os.PathLike[str]) -> Path:
         """Write the media's bytes to a workspace path and return the resolved path.
@@ -402,6 +418,9 @@ class Media:
             parts.append(self.media_type)
         if self.size is not None:
             parts.append(format_size(self.size))
+        settings = self._settings_label()
+        if settings is not None:
+            parts.append(settings)
         return f"<{self.kind} {' · '.join(parts)}>"
 
     def _source_label(self) -> str:
@@ -423,7 +442,7 @@ class Media:
         fields = [f"media_type={self.media_type!r}"]
         if self.size is not None:
             fields.append(f"size={self.size}")
-        for attribute in ("url", "file_id", "provider", "name", "filename"):
+        for attribute in ("url", "file_id", "provider", "name", "filename", *self._SETTINGS):
             value = getattr(self, attribute)
             if value is not None:
                 fields.append(f"{attribute}={value!r}")
@@ -698,12 +717,58 @@ class Audio(Media):
             )
 
 
-class Video(Media):
-    """Video: MP4, MOV, WebM, MKV, FLV, MPEG, WMV or 3GP."""
+_VIDEO_SETTINGS = ("start", "end", "fps", "resolution")
+_KEEP: Any = object()
 
-    __slots__ = ()
+
+class Video(Media):
+    """Video: MP4, MOV, WebM, MKV, FLV, MPEG, WMV or 3GP.
+
+    Gemini also reads clip settings: ``start`` and ``end`` offsets in seconds, ``fps`` (frames
+    sampled per second, at most 24) and ``resolution`` (``low``, ``medium`` or ``high``; Gemini
+    3 and later). Set them with :meth:`with_settings`; other providers refuse a video that has them.
+    """
+
+    __slots__ = _VIDEO_SETTINGS
     kind: ClassVar[MediaKind] = "video"
     _type_label: ClassVar[str] = "a video"
+    _SETTINGS: ClassVar[tuple[str, ...]] = _VIDEO_SETTINGS
+
+    start: float | None
+    end: float | None
+    fps: float | None
+    resolution: VideoResolution | None
+
+    def __init__(
+        self,
+        *,
+        start: float | None = None,
+        end: float | None = None,
+        fps: float | None = None,
+        resolution: VideoResolution | None = None,
+        **fields: Any,
+    ) -> None:
+        for name, value in zip(_VIDEO_SETTINGS, (start, end, fps, resolution)):
+            object.__setattr__(self, name, value)
+        super().__init__(**fields)
+
+    def _validate(self) -> None:
+        super()._validate()
+        start = _seconds_setting("start", self.start)
+        end = _seconds_setting("end", self.end)
+        if start is not None and end is not None and start >= end:
+            raise MediaError(f"Video start ({start:g}s) must come before its end ({end:g}s)")
+        fps = _number_setting("fps", self.fps)
+        if fps is not None and not 0 < fps <= MAX_VIDEO_FPS:
+            raise MediaError(
+                f"Video fps must be above 0 and at most {MAX_VIDEO_FPS:g}, not {fps:g}"
+            )
+        if self.resolution is not None and self.resolution not in VIDEO_RESOLUTIONS:
+            raise MediaError(
+                f"Video resolution must be low, medium or high, not {self.resolution!r}"
+            )
+        for name, value in (("start", start), ("end", end), ("fps", fps)):
+            object.__setattr__(self, name, value)
 
     def _check_media_type(self, media_type: str) -> None:
         super()._check_media_type(media_type)
@@ -712,6 +777,95 @@ class Video(Media):
                 f"{self._describe()} is {media_type}; video must be MP4, MOV, WebM, MKV, FLV, "
                 "MPEG, WMV or 3GP"
             )
+
+    @property
+    def has_settings(self) -> bool:
+        return any(getattr(self, name) is not None for name in _VIDEO_SETTINGS)
+
+    def with_settings(
+        self,
+        *,
+        start: float | None = _KEEP,
+        end: float | None = _KEEP,
+        fps: float | None = _KEEP,
+        resolution: VideoResolution | None = _KEEP,
+    ) -> Video:
+        """Return the video with Gemini clip settings; an omitted setting is kept, ``None`` clears it."""
+
+        values = self._values()
+        for name, value in zip(_VIDEO_SETTINGS, (start, end, fps, resolution)):
+            if value is not _KEEP:
+                values[name] = value
+        return type(self)(**values)
+
+    def _settings_key(self) -> tuple[str, ...]:
+        return video_settings_key(
+            start=self.start, end=self.end, fps=self.fps, resolution=self.resolution
+        )
+
+    def _settings_label(self) -> str | None:
+        if not self.has_settings:
+            return None
+        parts: list[str] = []
+        if self.start is not None or self.end is not None:
+            start = "0s" if self.start is None else f"{format_seconds(self.start)}s"
+            end = "end" if self.end is None else f"{format_seconds(self.end)}s"
+            parts.append(f"{start}–{end}")
+        if self.fps is not None:
+            parts.append(f"{self.fps:g} fps")
+        if self.resolution is not None:
+            parts.append(f"{self.resolution} resolution")
+        return " · ".join(parts)
+
+
+def video_settings_key(
+    *,
+    start: float | None,
+    end: float | None,
+    fps: float | None,
+    resolution: str | None,
+) -> tuple[str, ...]:
+    """The canonical identity of video settings; empty when none are set.
+
+    Adapters rebuild it from their native history, so the same clip is recognized there.
+    """
+
+    parts: list[str] = []
+    if start is not None:
+        parts.append(f"start={format_seconds(start)}")
+    if end is not None:
+        parts.append(f"end={format_seconds(end)}")
+    if fps is not None:
+        parts.append(f"fps={float(fps)!r}")
+    if resolution is not None:
+        parts.append(f"resolution={resolution}")
+    return tuple(parts)
+
+
+def format_seconds(value: float) -> str:
+    """Seconds without exponent notation or a trailing ``.0``: ``10``, ``2.5``."""
+
+    value = float(value)
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.9f}".rstrip("0").rstrip(".")
+
+
+def _number_setting(name: str, value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        raise MediaError(f"Video {name} must be a number, not {value!r}")
+    if value in (float("inf"), float("-inf")):
+        raise MediaError(f"Video {name} must be finite")
+    return float(value)
+
+
+def _seconds_setting(name: str, value: Any) -> float | None:
+    seconds = _number_setting(name, value)
+    if seconds is not None and seconds < 0:
+        raise MediaError(f"Video {name} must not be negative, not {seconds:g}s")
+    return seconds
 
 
 class Document(Media):
@@ -942,7 +1096,7 @@ def bridge_type(name: str) -> type[Media] | None:
 def to_bridge(media: Media) -> dict[str, Any]:
     """Encode a media value as ``{BRIDGE_KEY: ...}`` for a JSON process bridge."""
 
-    fields: dict[str, Any] = {name: getattr(media, name) for name in _FIELDS}
+    fields: dict[str, Any] = media._values()
     if media.data is not None:
         fields["data"] = base64.b64encode(media.data).decode("ascii")
     kind = next(cls for cls in _BRIDGE_TYPES.values() if isinstance(media, cls))
@@ -962,6 +1116,8 @@ def from_bridge(payload: Any) -> Media:
     fields = {name: payload.get(name) for name in _FIELDS}
     if any(value is not None and not isinstance(value, str) for value in fields.values()):
         raise MediaError("Bridged media fields must be strings")
+    # Settings are numbers and names; the constructor validates each value.
+    fields.update({name: payload.get(name) for name in cls._SETTINGS})
     data = fields["data"]
     if data is not None:
         if len(data) > _MAX_BRIDGE_DATA_CHARS:
@@ -993,6 +1149,7 @@ __all__ = [
     "MediaError",
     "MediaKind",
     "Video",
+    "VideoResolution",
     "as_media",
     "reference",
     "is_text_media_type",

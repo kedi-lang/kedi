@@ -40,17 +40,30 @@ from kedi.media import Audio, Document, Image, Media, Video
     ###
     = `Audio.coerce(source)`
 
-@video(source: Any) -> Video:
+@video(source: Any, start: float | None = `None`, end: float | None = `None`, fps: float | None = `None`, resolution: str | None = `None`) -> Video:
     ###
     Load a video from a workspace path, an http(s) URL, a YouTube URL or a data: URI.
 
     Args:
         source (Any): A path relative to the working directory, a URL, a data URI or a video.
+        start (float | None): Gemini only: where the clip starts, in seconds.
+        end (float | None): Gemini only: where the clip ends, in seconds.
+        fps (float | None): Gemini only: frames sampled per second, above 0 and at most 24.
+        resolution (str | None): Gemini 3 and later only: low, medium or high.
 
     Returns:
         Video: A video for Gemini or Bedrock Nova models. YouTube URLs go to Gemini as URLs.
+            Settings that are not given keep the source video's own.
     ###
-    = `Video.coerce(source)`
+    = ```
+    video = Video.coerce(source)
+    settings = {
+        name: value
+        for name, value in (("start", start), ("end", end), ("fps", fps), ("resolution", resolution))
+        if value is not None
+    }
+    return video.with_settings(**settings) if settings else video
+    ```
 
 @document(source: Any) -> Document:
     ###

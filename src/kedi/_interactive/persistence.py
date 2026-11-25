@@ -144,6 +144,11 @@ class SessionValueEncoder:
                 "provider": value.provider,
                 "name": value.name,
                 "filename": value.filename,
+                **(
+                    {"settings": {name: getattr(value, name) for name in value._SETTINGS}}
+                    if value._SETTINGS
+                    else {}
+                ),
             }
         if isinstance(value, _PATTERN_TYPE):
             return {
@@ -278,7 +283,11 @@ class SessionValueDecoder:
                     "document": Document,
                 }[encoded["kind"]]
                 data = encoded["data"]
+                # Snapshots written before video settings existed have no "settings".
+                settings = encoded.get("settings")
+                settings = settings if isinstance(settings, dict) else {}
                 return media_class(
+                    **{name: settings.get(name) for name in media_class._SETTINGS},
                     media_type=encoded["media_type"],
                     data=None if data is None else self.decode(data, path=path, depth=next_depth),
                     url=encoded["url"],

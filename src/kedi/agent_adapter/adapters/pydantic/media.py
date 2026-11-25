@@ -15,6 +15,9 @@ from kedi.agent_adapter.request.media import (
     attachment_content,
     check_media_support,
     download_image_urls,
+    gemini_media_resolution,
+    gemini_settings_key,
+    gemini_video_metadata,
     media_provider,
     scan_sent_content,
     unsent_attachments,
@@ -89,15 +92,19 @@ def _content_identity(item: Any) -> tuple[str, ...] | None:
         VideoUrl,
     )
 
-    if isinstance(item, BinaryContent):
-        return (media_kind(item.media_type), "sha256", _sha256(item.data))
     url_kinds = {ImageUrl: "image", AudioUrl: "audio", VideoUrl: "video", DocumentUrl: "document"}
-    for url_type, kind in url_kinds.items():
-        if isinstance(item, url_type):
-            return (kind, "url", item.url)
-    if isinstance(item, UploadedFile):
-        return (media_kind(item.media_type), "file_id", item.provider_name, item.file_id)
-    return None
+    if isinstance(item, BinaryContent):
+        identity = (media_kind(item.media_type), "sha256", _sha256(item.data))
+    elif isinstance(item, UploadedFile):
+        identity = (media_kind(item.media_type), "file_id", item.provider_name, item.file_id)
+    elif isinstance(item, (ImageUrl, AudioUrl, VideoUrl, DocumentUrl)):
+        kind = next(kind for url_type, kind in url_kinds.items() if isinstance(item, url_type))
+        identity = (kind, "url", item.url)
+    else:
+        return None
+    metadata = dict(getattr(item, "vendor_metadata", None) or {})
+    resolution = metadata.pop("media_resolution", None)
+    return (*identity, *gemini_settings_key(metadata, resolution))
 
 
 def _native_content(attachment: MediaAttachment) -> Any:
@@ -111,9 +118,20 @@ def _native_content(attachment: MediaAttachment) -> Any:
     )
 
     media = attachment.media
+    # Gemini clip settings travel as vendor metadata; check_media_support admits them only
+    # for Gemini models.
+    vendor_metadata: dict[str, Any] | None = gemini_video_metadata(media) or None
+    resolution = gemini_media_resolution(media)
+    if resolution is not None:
+        vendor_metadata = {**(vendor_metadata or {}), "media_resolution": {"level": resolution}}
     if media.data is not None:
         return BinaryContent.narrow_type(
-            BinaryContent(media.data, media_type=media.media_type or "", identifier=attachment.name)
+            BinaryContent(
+                media.data,
+                media_type=media.media_type or "",
+                identifier=attachment.name,
+                vendor_metadata=vendor_metadata,
+            )
         )
     if media.url is not None:
         url_type: Any = {
@@ -123,14 +141,20 @@ def _native_content(attachment: MediaAttachment) -> Any:
             "document": DocumentUrl,
         }[media.kind]
         if media.media_type is None:
-            return url_type(media.url, identifier=attachment.name)
-        return url_type(media.url, media_type=media.media_type, identifier=attachment.name)
+            return url_type(media.url, identifier=attachment.name, vendor_metadata=vendor_metadata)
+        return url_type(
+            media.url,
+            media_type=media.media_type,
+            identifier=attachment.name,
+            vendor_metadata=vendor_metadata,
+        )
     assert media.file_id is not None
     return UploadedFile(
         media.file_id,
         cast(Any, media.provider),
         media_type=media.media_type,
         identifier=attachment.name,
+        vendor_metadata=vendor_metadata,
     )
 
 
