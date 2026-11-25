@@ -58,7 +58,10 @@ def text_form(value: Any, *, models: bool = False) -> tuple[str, bool]:
         value = value.value
     if isinstance(value, str):
         return str.__str__(value), False
-    text = to_json(value).decode("utf-8")
+    # Media inside a referenced value are written as placeholders (kedi.media.reference);
+    # anything else unknown still has no fallback.
+    fallback = _write_placeholder if _placeholders_active() else None
+    text = to_json(value, fallback=fallback).decode("utf-8")
     if text.startswith('"'):
         return json.loads(text), False
     return text, isinstance(value, _CONTAINERS) or _is_model(value)
@@ -102,7 +105,27 @@ def _check(value: Any, path: str, depth: int, active: set[int], models: bool) ->
     if models and _is_model(value):
         _check_model_data(value, path, depth, active)
         return
+    if depth and _placeholders_active():
+        from kedi.media import as_media
+
+        if as_media(value) is not None:
+            return
     raise NoTextForm(path, *_problem(value))
+
+
+def _placeholders_active() -> bool:
+    from kedi.media import media_placeholders_active
+
+    return media_placeholders_active()
+
+
+def _write_placeholder(value: Any) -> str:
+    from kedi.media import media_placeholder
+
+    placeholder = media_placeholder(value)
+    if placeholder is None:
+        raise NoTextForm("", *_problem(value))
+    return placeholder
 
 
 def _check_model_data(value: Any, path: str, depth: int, active: set[int]) -> None:

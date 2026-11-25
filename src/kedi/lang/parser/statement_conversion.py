@@ -1044,9 +1044,10 @@ def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt | Sen
         )
     template = self._walk_template_block_stmt(template_node)
     self._validate_template_block_scope(template.lines)
-    for line in template.lines:
-        self._reject_references(line.segments, template_node, "subagent tasks and messages")
     if node.type == "send_stmt":
+        # A task prompt is a model prompt and takes references; agent input is text only.
+        for line in template.lines:
+            self._reject_references(line.segments, template_node, "> send and > interrupt input")
         if any(contains_output_captures(line.segments) for line in template.lines):
             self._error(
                 node, "Agent input cannot declare output captures", code="kedi.send_capture"

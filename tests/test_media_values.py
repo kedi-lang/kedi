@@ -239,10 +239,13 @@ def test_references_attach_media_and_documents_for_other_values(workspace: Path)
     assert document(Owner(name="Ada")) == ("application/json", '{"name":"Ada"}')
     with pytest.raises(MediaError, match="<<x>> is None"):
         reference(None, binding="x")
-    with pytest.raises(MediaError, match=r"<<f\(...\)>>: media inside"):
-        reference({"photo": image}, call="f")
-    with pytest.raises(MediaError, match="media inside a dict, a model or a mixed list"):
-        reference([image, "caption"], binding="x")
+    # Media inside another value: each is an item under its path name, the value a layout.
+    nested = reference({"photo": image}, call="f")
+    assert nested.items == (image,) and nested.layout is not None
+    assert nested.layout.preferred == ("f_result_photo",)
+    assert nested.layout.skeleton == '{"photo":"<image f_result_photo>"}'
+    mixed = reference([image, "caption"], binding="x")
+    assert mixed.layout is not None and mixed.layout.skeleton == '["<image x_1>","caption"]'
     with pytest.raises(
         MediaError, match="<<x>> has no text form to attach: the value is of type object"
     ):
@@ -436,9 +439,12 @@ def test_nested_media_is_found_in_models_and_ignored_in_plain_values(workspace: 
         photo: Image | None
 
     image = Image.from_path("cat.png")
-    for value in (Report(title="cat", photo=image), {"photos": {image}}):
-        with pytest.raises(MediaError, match="media inside"):
-            reference(value, binding="r")
+    nested = reference(Report(title="cat", photo=image), binding="r")
+    assert nested.items == (image,)
+    assert nested.layout is not None and nested.layout.preferred == ("r_photo",)
+    # A set has no text form, with or without media in it.
+    with pytest.raises(MediaError, match="has no text form to attach"):
+        reference({"photos": {image}}, binding="r")
     (document,) = reference(Report(title="cat", photo=None), binding="r").items
     assert document.text == '{"title":"cat","photo":null}'
     assert Reference((image,), "1st").preferred_name(1) == "_1st"

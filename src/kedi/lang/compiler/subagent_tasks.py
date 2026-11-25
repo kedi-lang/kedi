@@ -10,12 +10,13 @@ from kedi.agent_adapter.output_schema import (
     _portable_output_json_schema,
     output_field_definition,
 )
+from kedi.agent_adapter.request.media import MediaAttachment, compose_prompt
 from kedi.agent_adapter.subagents import normalize_final_schema
 from kedi.dynamic_models import build_dynamic_model
 from kedi.errors import KediExecutionError
 from kedi.lang.ast import OutputSegment, TaskStmt, TextSegment
 
-from .evaluation import _stringify_segments, merge_template_block_lines
+from .evaluation import _segment_parts, merge_template_block_lines
 from .type_system import KediType
 
 
@@ -29,7 +30,8 @@ class _TaskOutputBase(BaseModel):
 
 def prepare_subagent_task(
     rt: Any, stmt: TaskStmt, env: dict[str, Any]
-) -> tuple[str, dict[str, Any] | None, TypeAdapter[Any] | None]:
+) -> tuple[str, tuple[MediaAttachment, ...], dict[str, Any] | None, TypeAdapter[Any] | None]:
+    """The child's task text and attachments, and the result schema its captures form."""
     merged = merge_template_block_lines(stmt.template.lines, loc=stmt.template.loc)
     prompt_segments = []
     field_types: dict[str, Any] = {}
@@ -47,7 +49,10 @@ def prepare_subagent_task(
         )
         prompt_segments.append(TextSegment(text=marker, loc=segment.loc))
 
-    prompt = _stringify_segments(rt, prompt_segments, env, context="task")
+    # A task prompt is a model prompt: ``<<x>>`` attaches media for the child to read.
+    prompt, media = compose_prompt(
+        _segment_parts(rt, prompt_segments, env, context="task", prompt=True)
+    )
     schema = None
     output_adapter = None
     if field_types:
@@ -66,4 +71,4 @@ def prepare_subagent_task(
             raise KediExecutionError(
                 f"Task captures cannot form a valid result schema: {exc}"
             ) from exc
-    return prompt, schema, output_adapter
+    return prompt, media, schema, output_adapter

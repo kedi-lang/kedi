@@ -250,10 +250,11 @@ class StatementCompiler:
             owner: NativeSubagentOwner | None = self.rt._native_subagent_owner.get()
             if owner is None:
                 raise RuntimeError("Subagent tasks require an active Kedi invocation")
-            prompt, schema, output_adapter = prepare_subagent_task(self.rt, stmt, env)
+            prompt, media, schema, output_adapter = prepare_subagent_task(self.rt, stmt, env)
             job = owner.start_sync(
                 stmt.subagent,
                 task=prompt,
+                media=media,
                 parent_profile=active,
                 final_schema=schema,
                 output_adapter=output_adapter,

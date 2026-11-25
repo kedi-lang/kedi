@@ -192,6 +192,17 @@ class MediaNamer:
         self._attachments: list[MediaAttachment] = []
 
     def render(self, ref: Reference) -> str:
+        if ref.layout is not None:
+            # Media inside a value: each is attached under its path name, then the value goes
+            # as JSON naming them (two mentions of one image share its first name).
+            names = [
+                self.name_for(item, preferred)
+                for item, preferred in zip(ref.items, ref.layout.preferred, strict=True)
+            ]
+            document = ref.layout.document(names)
+            return self.name_for(
+                document, ref.preferred_name(1), generated=ref.generated_base, stored=ref.stored
+            )
         names = [
             self.name_for(
                 item, ref.preferred_name(index), generated=ref.generated_base, stored=ref.stored
@@ -240,6 +251,17 @@ class MediaNamer:
             candidate = f"{kind}_{self._generated[kind]}"
             if candidate not in self._names:
                 return candidate
+
+
+def require_media_input(adapter: Any) -> None:
+    """Fail before any model I/O when ``adapter`` cannot take prompt media."""
+
+    if not adapter.capabilities.supports("media_input"):
+        raise MediaError(
+            f"Adapter {adapter.shortname!r} does not accept media input; "
+            "Pydantic AI, LangChain, the Claude Agent SDK, Codex, ACP and A2A take "
+            "prompts with media"
+        )
 
 
 def compose_prompt(parts: Iterable[Any]) -> tuple[str, tuple[MediaAttachment, ...]]:
@@ -631,6 +653,7 @@ __all__ = [
     "media_digest_material",
     "media_provider",
     "media_summaries",
+    "require_media_input",
     "scan_sent_content",
     "unsent_attachments",
 ]

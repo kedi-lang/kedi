@@ -63,6 +63,40 @@ The child receives only the rendered task and its own profile. Parent history,
 tools, and local bindings are not implicitly shared. Substitute every input the
 child needs, as with `<change>` above.
 
+### Media in a Task
+
+A task prompt is a model prompt, so `<<x>>` attaches media for the child to read:
+
+```kedi
+> import: media
+
+> profile: looker:
+    > adapter: pydantic
+
+> profile: coordinator:
+    > adapter: pydantic
+    > subagent: looker
+
+> use: coordinator
+
+[photo: Image] = `image("site.jpg")`
+> task [inspection]: looker:
+    >> List the safety issues visible in <<photo>> as [issues: list[str]].
+> await [result]: inspection
+= `result.output.issues`
+```
+
+- The attachments go to the child's first request. A child adapter without
+  media input fails at `> task`, before the child starts, and the editor
+  reports it.
+- A restarted or interrupted child keeps the media in its session.
+- A continued conversation on an adapter without native resume (LangChain,
+  Codex, ACP) replays earlier turns as text, without their media.
+- `> send` and `> interrupt` input stays text: references there are a parse
+  error.
+- Model-driven `delegate_task` passes only text; the parent prompt's media do
+  not reach the child.
+
 ## Await and Ownership
 
 Use `> await [result]: job` to bind the completed result, or `> await: job` to

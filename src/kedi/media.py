@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import hashlib
 import io
 import json
 import mimetypes
 import os
 import re
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, cast
@@ -900,7 +904,9 @@ class Reference:
     ``items`` are attached to the model context once each; the prompt text gets their names.
     ``binding`` is the referenced name, ``call`` the procedure of ``<<proc(...)>>``. ``stored`` is
     the artifact handle when the value is already stored as an artifact: the request then sends
-    its reference instead of its content when the model can read artifacts.
+    its reference instead of its content when the model can read artifacts. ``layout`` is set
+    when media sit inside another value: ``items`` are those media, and the value itself goes as
+    a JSON document whose placeholders name them.
     """
 
     items: tuple[Media, ...]
@@ -908,6 +914,7 @@ class Reference:
     call: str | None = None
     is_list: bool = False
     stored: Any = None
+    layout: NestedLayout | None = None
 
     def preferred_name(self, index: int) -> str | None:
         if self.binding is None:
@@ -925,13 +932,177 @@ class Reference:
         return None if self.call is None else f"{self.call}_result"
 
 
+@dataclass(frozen=True, slots=True)
+class NestedLayout:
+    """A value holding media: its media go as attachments, the value as JSON naming them.
+
+    ``preferred`` holds each media's path-derived name (``report_photo``), in the order the
+    value's serialization writes them. ``skeleton`` is the JSON with those names, the identity
+    of what is sent; :meth:`document` writes it again with the names the request assigned.
+    """
+
+    value: Any
+    preferred: tuple[str, ...]
+    skeleton: str
+    structured: bool
+
+    def document(self, names: Sequence[str]) -> Document:
+        def placeholder(index: int, media: Media, item: Any) -> str:
+            # A serializer that writes other media than on the first pass is caught below.
+            return f"<{media.kind} {names[index] if index < len(names) else '?'}>"
+
+        text, emitted, structured = _text_with_placeholders(self.value, placeholder)
+        if len(emitted) != len(names):
+            raise MediaError("a value holding media wrote other media on a second pass")
+        return Document(
+            media_type="application/json" if structured else "text/plain",
+            data=text.encode("utf-8"),
+        )
+
+
+_MEDIA_PLACEHOLDERS: ContextVar[Callable[[Any], str] | None] = ContextVar(
+    "kedi_media_placeholders", default=None
+)
+
+
+def media_placeholders_active() -> bool:
+    """Whether a value holding media is being written with placeholders for its media."""
+
+    return _MEDIA_PLACEHOLDERS.get() is not None
+
+
+def media_placeholder(value: Any) -> str | None:
+    """The placeholder for a media value inside a value being written, while one is active."""
+
+    write = _MEDIA_PLACEHOLDERS.get()
+    if write is None or as_media(value) is None:
+        return None
+    return write(value)
+
+
+def _text_with_placeholders(
+    value: Any, placeholder: Callable[[int, Media, Any], str]
+) -> tuple[str, tuple[Media, ...], bool]:
+    """Write ``value``'s text form with each media it holds replaced by ``placeholder``.
+
+    Returns the text, the media in the order they were written, and whether the text is
+    structured. Only what the serialization writes counts: media in an excluded field are
+    neither written nor attached.
+    """
+
+    from kedi.text_form import text_form
+
+    emitted: list[Media] = []
+
+    def write(item: Any) -> str:
+        media = cast(Media, as_media(item))
+        text = placeholder(len(emitted), media, item)
+        emitted.append(media)
+        return text
+
+    token = _MEDIA_PLACEHOLDERS.set(write)
+    try:
+        text, structured = text_form(value, models=True)
+    finally:
+        _MEDIA_PLACEHOLDERS.reset(token)
+    return text, tuple(emitted), structured
+
+
+def _media_paths(value: Any) -> dict[int, tuple[str, ...]]:
+    """Each media value's path inside ``value``, as name segments (``photos``, ``1``)."""
+
+    from pydantic import BaseModel
+
+    paths: dict[int, tuple[str, ...]] = {}
+    active: set[int] = set()
+
+    def walk(item: Any, path: tuple[str, ...]) -> None:
+        if len(path) > 64 or item is None or isinstance(item, (str, bytes, int, float, bool)):
+            return
+        if as_media(item) is not None:
+            paths.setdefault(id(item), path)
+            return
+        if id(item) in active:
+            return
+        if isinstance(item, dict):
+            children = [(str(key), child) for key, child in item.items()]
+        elif isinstance(item, (list, tuple)):
+            children = [(str(index), child) for index, child in enumerate(item, start=1)]
+        elif isinstance(item, BaseModel):
+            data = object.__getattribute__(item, "__dict__")
+            children = [*data.items(), *(item.__pydantic_extra__ or {}).items()]
+        elif dataclasses.is_dataclass(item) and not isinstance(item, type):
+            children = [
+                (field.name, object.__getattribute__(item, field.name))
+                for field in dataclasses.fields(item)
+            ]
+        else:
+            return
+        active.add(id(item))
+        for name, child in children:
+            walk(child, (*path, name))
+        active.discard(id(item))
+
+    walk(value, ())
+    return paths
+
+
+def _nested_reference(
+    value: Any, *, binding: str | None, call: str | None, subject: str
+) -> Reference:
+    probe = Reference(items=(), binding=binding, call=call)
+    base = probe.preferred_name(1) or cast(str, probe.generated_base)
+    paths = _media_paths(value)
+    preferred: list[str] = []
+
+    def placeholder(index: int, media: Media, item: Any) -> str:
+        segments = paths.get(id(item)) or (str(index + 1),)
+        name = "_".join([base, *(re.sub(r"\W", "_", segment) for segment in segments)])
+        preferred.append(name)
+        return f"<{media.kind} {name}>"
+
+    with _text_form_errors(subject, value, binding=binding, call=call):
+        skeleton, emitted, structured = _text_with_placeholders(value, placeholder)
+    return Reference(
+        items=emitted,
+        binding=binding,
+        call=call,
+        layout=NestedLayout(
+            value=value, preferred=tuple(preferred), skeleton=skeleton, structured=structured
+        ),
+    )
+
+
+@contextmanager
+def _text_form_errors(
+    subject: str, value: Any, *, binding: str | None, call: str | None
+) -> Generator[None, None, None]:
+    """Report a value without a text form, or without a JSON form, as a media error."""
+
+    from pydantic_core import PydanticSerializationError
+
+    from kedi.text_form import NoTextForm
+
+    try:
+        yield
+    except NoTextForm as exc:
+        name = binding or f"{call}(...)"
+        problem = exc.describe(name if exc.path else "the value")
+        raise MediaError(f"{subject} has no text form to attach: {problem}") from None
+    except PydanticSerializationError as exc:
+        raise MediaError(
+            f"{subject}: a {type(value).__name__} value has no JSON form to attach"
+        ) from exc
+
+
 def reference(value: Any, *, binding: str | None = None, call: str | None = None) -> Reference:
     """Build what ``<<value>>`` attaches: media natively, any other value as a text document.
 
     A list of media attaches each item. Any other value is attached as its text form, the text
     ``<value>`` would render (:mod:`kedi.text_form`): scalars as text, lists, tuples and dicts as
-    JSON; models and dataclasses are also accepted, as JSON. Media nested in other values cannot be
-    referenced.
+    JSON; models and dataclasses are also accepted, as JSON. Media nested in another value (a
+    dict, a model, a mixed list) are attached each under a name derived from its path, and the
+    value's JSON holds a placeholder naming it.
     """
 
     from kedi.artifacts import ArtifactHandle
@@ -957,24 +1128,11 @@ def reference(value: Any, *, binding: str | None = None, call: str | None = None
     if value is None:
         raise MediaError(f"{subject} is None; there is nothing to attach")
     if _contains_media(value):
-        raise MediaError(
-            f"{subject}: media inside a dict, a model or a mixed list cannot be referenced; "
-            "reference each media value directly"
-        )
-    from pydantic_core import PydanticSerializationError
+        return _nested_reference(value, binding=binding, call=call, subject=subject)
+    from kedi.text_form import text_form
 
-    from kedi.text_form import NoTextForm, text_form
-
-    try:
+    with _text_form_errors(subject, value, binding=binding, call=call):
         text, structured = text_form(value, models=True)
-    except NoTextForm as exc:
-        name = binding or f"{call}(...)"
-        problem = exc.describe(name if exc.path else "the value")
-        raise MediaError(f"{subject} has no text form to attach: {problem}") from None
-    except PydanticSerializationError as exc:
-        raise MediaError(
-            f"{subject}: a {type(value).__name__} value has no JSON form to attach"
-        ) from exc
     media_type = "application/json" if structured else "text/plain"
     document = Document(media_type=media_type, data=text.encode("utf-8"))
     return Reference(items=(document,), binding=binding, call=call)
@@ -1012,6 +1170,11 @@ def _contains_media(value: Any, *, _depth: int = 0) -> bool:
         return any(
             _contains_media(item, _depth=_depth + 1)
             for item in object.__getattribute__(value, "__dict__").values()
+        )
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(
+            _contains_media(object.__getattribute__(value, field.name), _depth=_depth + 1)
+            for field in dataclasses.fields(value)
         )
     return False
 
@@ -1133,6 +1296,9 @@ def _serialize(value: Media, info: core_schema.SerializationInfo) -> Any:
     """Keep the value in Python mode; JSON gets a data URI, the URL or the file id."""
     if info.mode != "json":
         return value
+    placeholder = media_placeholder(value)
+    if placeholder is not None:
+        return placeholder
     if value.data is not None:
         return f"data:{value.media_type};base64,{base64.b64encode(value.data).decode('ascii')}"
     if value.url is not None:

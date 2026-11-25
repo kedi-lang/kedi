@@ -104,14 +104,10 @@ def _execute_conversation_call(
     )
     assembler = RunRequestAssembler()
 
-    if prompt.media and not adapter.capabilities.supports("media_input"):
-        from kedi.media import MediaError
+    if prompt.media:
+        from kedi.agent_adapter.request.media import require_media_input
 
-        raise MediaError(
-            f"Adapter {adapter.shortname!r} does not accept media input; "
-            "Pydantic AI, LangChain, the Claude Agent SDK, Codex, ACP and A2A take "
-            "prompts with media"
-        )
+        require_media_input(adapter)
     runtime_adapter: Any = adapter
     if isinstance(runtime_adapter, HookRegistrationMixin):
         hook_context = prepared_agent_hook_run(
