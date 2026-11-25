@@ -327,8 +327,8 @@ Notebook.
 | LangChain | chat models whose profile sets `image_outputs`, such as Gemini image models |
 
 - Any other model names an image of its request instead: see
-  [Media in Outputs](#media-in-outputs). An OpenAI Responses model may either
-  draw or name one.
+  [Media in Outputs](#media-in-outputs). An OpenAI Responses model may draw or
+  name one when there is one to name.
 - A model that cannot draw fails before the call, with an error naming it, when
   nothing could be named: no image attached, and no tool, MCP server or
   archived history that could return one.
@@ -363,7 +363,8 @@ media, an attachment or a tool result, and Kedi binds that value:
   `photos_2`) or its placeholder (`<image satellite_result_1>`).
 - Any other string is refused, made-up URLs and data URIs included. The model
   reads the names it can use and answers again.
-- Requests whose output holds media get one instruction that says so.
+- Requests whose output holds media, and that attach media or offer tools,
+  get one instruction that says so.
 - Only media of the current request can be named. With `> history: enabled`,
   a later request may give an earlier name to other media.
 - Pydantic AI, LangChain, the Claude Agent SDK and Codex resolve names. The

@@ -77,7 +77,8 @@ from kedi.agent_adapter.output_schema import OutputCorrection, build_output_mode
 from kedi.agent_adapter.prefix_cache import langchain_cache_settings
 from kedi.agent_adapter.request.media import (
     media_validation_context,
-    require_image_to_name,
+    no_image_to_name,
+    request_attaches,
     tools_may_return_media,
 )
 from kedi.agent_adapter.responses_session import model_responses_session, model_responses_turn
@@ -407,8 +408,9 @@ class LangChainAdapter(HookRegistrationMixin):
                 not tools_may_return_media(self.scoped_tool_specs)
                 and not self.active_profile.mcp_servers
                 and self._history_archive is None
+                and not request_attaches("image")
             ):
-                require_image_to_name(
+                raise no_image_to_name(
                     _model_label(model), example="google_genai:gemini-2.5-flash-image"
                 )
 

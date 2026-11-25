@@ -519,18 +519,19 @@ def tools_may_return_media(tools: Iterable[Any]) -> bool:
     )
 
 
-def require_image_to_name(model: str, *, example: str) -> None:
-    """Fail before the request when ``model`` cannot draw and its request holds no image to name.
-
-    Called only when no tool could return one: the prompt's attachments are all it can name.
-    """
+def request_attaches(kind: MediaKind) -> bool:
+    """Whether the current request's prompt attaches media of ``kind``."""
 
     from .context import current_agent_run_request
 
     request = current_agent_run_request()
-    if request is not None and any(item.media.kind == "image" for item in request.prompt.media):
-        return
-    raise MediaError(
+    return request is not None and any(item.media.kind == kind for item in request.prompt.media)
+
+
+def no_image_to_name(model: str, *, example: str) -> MediaError:
+    """The error for a model that cannot draw and whose request holds no image to name."""
+
+    return MediaError(
         f"Model {model} cannot produce images; use an image model such as {example}, or give "
         "it images to choose from: attachments, or a tool that returns one"
     )
@@ -828,7 +829,6 @@ __all__ = [
     "image_size",
     "output_media_kind",
     "require_audio_to_name",
-    "require_image_to_name",
     "require_media_output",
     "tools_may_return_media",
     "tools_return",
@@ -838,6 +838,8 @@ __all__ = [
     "media_provider",
     "media_summaries",
     "media_validation_context",
+    "no_image_to_name",
+    "request_attaches",
     "request_media",
     "require_media_input",
     "scan_sent_content",

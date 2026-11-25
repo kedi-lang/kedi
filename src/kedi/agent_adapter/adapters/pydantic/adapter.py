@@ -109,7 +109,8 @@ from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.request.context import tool_media_scope
 from kedi.agent_adapter.request.media import (
     media_validation_context,
-    require_image_to_name,
+    no_image_to_name,
+    request_attaches,
     tools_may_return_media,
 )
 from kedi.agent_adapter.responses_session import model_responses_session as _model_responses_session
@@ -635,32 +636,31 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         """Set up ``[img: Image] << ...`` for ``model``; return whether the model may draw.
 
         An image model draws the image. A model that also takes tools (OpenAI Responses) may
-        instead name an image of its request, such as one a tool returned. Any other model
-        names one; it fails before the request when there is nothing it could name.
+        instead name an image of its request, such as one a tool returned, when there is one
+        to name. Any other model names one; it fails before the request when there is nothing
+        it could name.
         """
 
         from kedi.media import Image, MediaError
 
         label = f"{model.system}:{model.model_name}"
-        takes_tools = bool(model.profile.get("supports_tools", True))
+        returning = [spec.name for spec in tool_specs if tools_may_return_media((spec,))]
+        may_name = bool(returning) or self._may_return_media() or request_attaches("image")
         if not model.profile.get("supports_image_output", False):
-            if not tools_may_return_media(tool_specs) and not self._may_return_media():
-                require_image_to_name(
+            if not may_name:
+                raise no_image_to_name(
                     label, example="google:gemini-2.5-flash-image or an OpenAI Responses model"
                 )
             return False
-        if not takes_tools:
-            if tools_may_return_media(tool_specs):
-                names = ", ".join(
-                    spec.name for spec in tool_specs if tools_may_return_media((spec,))
-                )
+        if not model.profile.get("supports_tools", True):
+            if returning:
                 raise MediaError(
-                    f"Model {label} draws images and takes no tools, so it cannot call {names}; "
-                    "to return an image a tool gives, use a model that takes tools"
+                    f"Model {label} draws images and takes no tools, so it cannot call "
+                    f"{', '.join(returning)}; to return an image a tool gives, use a model that "
+                    "takes tools"
                 )
-            run_kwargs["output_type"] = BinaryImage
-            return True
-        run_kwargs["output_type"] = [BinaryImage, Image]
+            may_name = False
+        run_kwargs["output_type"] = [BinaryImage, Image] if may_name else BinaryImage
         return True
 
     def _may_return_media(self) -> bool:

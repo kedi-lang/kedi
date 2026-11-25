@@ -8,7 +8,7 @@ import dataclasses
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 import httpx
 import pytest
@@ -291,8 +291,9 @@ def test_a_model_that_draws_and_takes_tools_may_name_a_tool_image(workspace: Pat
     )
     source = TOOL + "[img: Image] << Fetch the satellite image of Ankara.\n= `img`\n"
     assert _run(source, PydanticAdapter(model=model)).data == SAT
-    tools = {tool["type"]: tool for tool in bodies[0]["tools"]}
-    assert "image_generation" in tools
+    tool_names = [tool.get("name", tool["type"]) for tool in bodies[0]["tools"]]
+    assert "image_generation" in tool_names and "final_result" in tool_names
+    assert "<MediaOutputInstructions>" in json.dumps(bodies[0])
 
     bodies.clear()
     drawn = {
@@ -305,6 +306,10 @@ def test_a_model_that_draws_and_takes_tools_may_name_a_tool_image(workspace: Pat
     model = _openai_responses([[drawn]], bodies)
     source = "> import: media\n[img: Image] << Draw a cat.\n= `img`\n"
     assert _run(source, PydanticAdapter(model=model)).data == DRAWN
+    # With nothing to name, the request is a drawing request only, as it always was.
+    (body,) = bodies
+    assert "final_result" not in [tool.get("name") for tool in body.get("tools", [])]
+    assert "MediaOutputInstructions" not in json.dumps(body)
 
 
 def test_an_image_model_that_takes_no_tools_is_refused_with_tools(workspace: Path) -> None:
@@ -440,9 +445,44 @@ def test_harness_adapters_name_attachments_only() -> None:
     # An adapter without structured output cannot have the model name one either.
     from kedi.agent_adapter.adapters.acp import ACPAdapter
 
+    acp = SimpleNamespace(shortname="acp", capabilities=ACPAdapter.capabilities)
     with pytest.raises(MediaError, match="Adapter 'acp' cannot produce images; Pydantic AI"):
-        acp = SimpleNamespace(shortname="acp", capabilities=ACPAdapter.capabilities)
         require_media_output(acp, "image", (red,))
+
+
+PICK = (
+    "> import: media\n"
+    '[cats: list[Image]] = `[image("red.png"), image("blue.png")]`\n'
+    "[blue: Image] << Which of <<cats>> is blue?\n= `blue`\n"
+)
+
+
+def test_the_claude_agent_sdk_resolves_names_of_attachments(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kedi.agent_adapter.adapters.claude import ClaudeAdapter
+    from tests.test_agent_adapters import _install_fake_claude_sdk
+
+    events = _install_fake_claude_sdk(monkeypatch)
+    events["structured_output"] = "cats_2"
+    assert _run(PICK, ClaudeAdapter(model="claude-sonnet-4")).data == BLUE
+
+
+def test_codex_resolves_names_of_attachments(workspace: Path) -> None:
+    from kedi.agent_adapter.adapters import CodexAdapter
+    from kedi.agent_adapter.adapters.codex.app_server import CodexTurnResult
+
+    class FakeClient:
+        def run_stateless_turn_sync(self, **kwargs: Any) -> CodexTurnResult:
+            return CodexTurnResult(text=json.dumps({"response": "cats_2"}), turn={})
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    assert _run(PICK, CodexAdapter(client=cast(Any, FakeClient()))).data == BLUE
 
 
 def test_the_editor_accepts_audio_outputs_that_name_an_attachment() -> None:

@@ -8,6 +8,7 @@ from typing import (
     Annotated,
     Any,
     Dict,
+    Iterable,
     List,
     Sequence,
     cast,
@@ -148,6 +149,19 @@ def _prepare_attachments(
     return tuple(prepared)
 
 
+def _may_name_media(
+    output_types: Iterable[Any], attachments: Sequence[Any], tools: Sequence[Any], profile: Any
+) -> bool:
+    """Whether the model's answer may name media of its request: the output holds media, and
+    an attachment, a tool or an MCP server could give some."""
+
+    from kedi.agent_adapter.request.media import tools_may_return_media
+
+    return any(type_holds_media(output_type) for output_type in output_types) and (
+        bool(attachments) or tools_may_return_media(tools) or bool(profile.mcp_servers)
+    )
+
+
 def _media_output_instruction() -> Any:
     """How a model gives media in its answer: by the name its request gives them."""
 
@@ -266,7 +280,7 @@ def _invoke_text_parts(
                 instruction_parts = tuple(
                     part for part in instruction_parts if part.source == "profile"
                 )
-            elif type_holds_media(output_type):
+            elif _may_name_media((output_type,), attachments, captured_tool_specs, profile):
                 instruction_parts = (*instruction_parts, _media_output_instruction())
             with override_ctx:
                 return self._run_conversation_call(
@@ -603,16 +617,15 @@ def _kedi_run(
                     else "completion"
                 ),
             )
-            prompt = prompt_builder.build().with_media(
-                _prepare_attachments(
-                    self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
-                )
+            attachments = _prepare_attachments(
+                self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
             )
+            prompt = prompt_builder.build().with_media(attachments)
             instruction_parts = (
                 *prompt_builder.instruction_parts(),
                 *self._agent_instruction_parts(profile, adapter),
             )
-            if any(type_holds_media(field_type) for field_type in typed_fields.values()):
+            if _may_name_media(typed_fields.values(), attachments, captured_tool_specs, profile):
                 instruction_parts = (*instruction_parts, _media_output_instruction())
 
             with override_ctx:
