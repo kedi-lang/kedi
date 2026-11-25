@@ -97,6 +97,7 @@ from kedi.agent_profile.settings import (
     tool_reason_enabled,
 )
 from kedi.artifacts.policy import warn_unmatched_tool_exclusions
+from kedi.media import Image, MediaError
 from kedi.model_normalization import normalize_for_langchain
 from kedi.resolved_types import ResolvedKediType
 from kedi.run_budget import assert_run_budget_supported, current_run_budget
@@ -105,6 +106,50 @@ if TYPE_CHECKING:
     from langchain_core.messages import HumanMessage
 
     from .runtime import LangChainRunState
+
+
+def _chat_model_instance(model: Any) -> Any:
+    """The chat model a run uses; a model id string is built as ``create_agent`` builds it."""
+
+    if not isinstance(model, str):
+        return model
+    from langchain.chat_models import init_chat_model
+
+    return init_chat_model(model)
+
+
+def _takes_tools(model: Any) -> bool:
+    """Whether a configured model accepts tools, from its LangChain profile."""
+
+    if model is None:
+        return True
+    try:
+        instance = _chat_model_instance(model)
+    except Exception:  # noqa: BLE001 - the run reports a model it cannot build
+        return True
+    return (getattr(instance, "profile", None) or {}).get("tool_calling") is not False
+
+
+def _model_label(model: Any) -> str:
+    return str(getattr(model, "model", None) or getattr(model, "model_name", None) or model)
+
+
+def _langchain_image_response(result: Any, model: Any) -> Image:
+    """The last image in the final message, as a media value."""
+
+    import base64
+
+    messages = result.get("messages") if isinstance(result, Mapping) else None
+    message = messages[-1] if isinstance(messages, (list, tuple)) and messages else result
+    for block in reversed(getattr(message, "content_blocks", None) or []):
+        if block.get("type") != "image":
+            continue
+        if block.get("base64"):
+            data = base64.b64decode(block["base64"])
+            return Image.from_bytes(data, block.get("mime_type") or "image/png")
+        if block.get("url"):
+            return Image.from_url(block["url"])
+    raise MediaError(f"Model {_model_label(model)} returned no image")
 
 
 class LangChainAdapter(HookRegistrationMixin):
@@ -140,6 +185,7 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_request_budget=True,
         supports_tool_attempt_budget=True,
         supports_media_input=True,
+        supports_image_output=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -148,11 +194,16 @@ class LangChainAdapter(HookRegistrationMixin):
     )
 
     def supports_artifact_contract(self, profile: AgentProfile) -> bool:
-        """Return whether the active model can receive artifact management tools."""
+        """Return whether the active model can receive artifact management tools.
+
+        Decision models and models that take no tools (image models, for example) cannot.
+        """
 
         if profile.model is not None:
-            return not is_decision_model_id(profile.model)
-        return model_template_prompt_mode(self._model) != "decision"
+            if is_decision_model_id(profile.model):
+                return False
+            return _takes_tools(self._resolve_model(profile.model))
+        return model_template_prompt_mode(self._model) != "decision" and _takes_tools(self._model)
 
     def template_prompt_mode(self, profile: AgentProfile) -> TemplatePromptMode:
         return model_template_prompt_mode(
@@ -331,6 +382,18 @@ class LangChainAdapter(HookRegistrationMixin):
             resolved_output_type = cast(type[OutputDataT], self.type_builder(output_schema))
         if resolved_output_type is None:
             raise ValueError("Output spec must be provided.")
+        from kedi.agent_adapter.request.media import produces_image
+
+        if produces_image(resolved_output_type):
+            # ``[img: Image] << Draw a cat.`` asks the model itself for an image.
+            model = _chat_model_instance(self._chat_model_for_run())
+            if (getattr(model, "profile", None) or {}).get("image_outputs") is not True:
+                raise MediaError(
+                    f"Model {_model_label(model)} cannot produce images; use an image model "
+                    "such as google_genai:gemini-2.5-flash-image"
+                )
+            result = await self._run_plain_agent(template, kwargs, model=model, emit_final=False)
+            return cast(OutputDataT, _langchain_image_response(result, model))
 
         output_model, unwrap_response = _langchain_typed_output(resolved_output_type)
         response_schema = output_model.model_json_schema()
@@ -435,8 +498,18 @@ class LangChainAdapter(HookRegistrationMixin):
 
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        return _langchain_text_response(
+            await self._run_plain_agent(
+                prompt, kwargs, model=self._chat_model_for_run(), emit_final=True
+            )
+        )
+
+    async def _run_plain_agent(
+        self, prompt: str, kwargs: dict[str, Any], *, model: Any, emit_final: bool
+    ) -> Any:
+        """Run the agent without a response format and return its raw result."""
+
         instructions = cast(str | None, kwargs.pop("instructions", None))
-        model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
                 append_codemode_instructions(
@@ -461,9 +534,7 @@ class LangChainAdapter(HookRegistrationMixin):
             content = await self._user_content(prompt, model)
             payload = {"messages": self._messages_for_prompt(content, model=model), **kwargs}
             async with model_responses_turn(model):
-                return _langchain_text_response(
-                    await self._invoke_agent(agent, payload, emit_final=True)
-                )
+                return await self._invoke_agent(agent, payload, emit_final=emit_final)
 
     @asynccontextmanager
     async def responses_session(self) -> AsyncGenerator[None, None]:

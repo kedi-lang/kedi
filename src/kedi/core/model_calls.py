@@ -185,6 +185,7 @@ def _invoke_text_parts(
             compose_prompt,
             lower_request_sync,
         )
+        from kedi.agent_adapter.request.media import produces_image, require_image_output
         from kedi.agent_adapter.tools.specs import SupportsToolRegistration
 
         prompt, media = compose_prompt(resolved_parts)
@@ -219,6 +220,8 @@ def _invoke_text_parts(
             attachments = _prepare_attachments(
                 self, media, profile=profile, adapter=adapter, tools=captured_tool_specs
             )
+            if produces_image(output_type):
+                require_image_output(adapter)
             with override_ctx:
                 return self._run_conversation_call(
                     adapter,

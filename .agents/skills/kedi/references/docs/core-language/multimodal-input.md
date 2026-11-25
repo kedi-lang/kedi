@@ -268,6 +268,36 @@ uploaded file has no bytes and cannot be saved.
 In Kedi Notebook (host mode), ``> show: `photo` `` displays an image inline and
 gives audio a player instead of printing the label.
 
+## Image Output
+
+A typed raw invoke with `Image` asks the model itself for an image:
+
+```kedi
+> import: media
+
+[img: Image] << Draw a cat in a spacesuit, flat colors.
+[path] = `save(img, "out/cat.png")`
+[caption] << Describe <<img>> in one sentence.
+= <caption>
+```
+
+`img` is an ordinary `Image`: reference it, save it, or show it in Kedi
+Notebook.
+
+| Adapter | Models |
+| --- | --- |
+| Pydantic AI | image models such as `google:gemini-2.5-flash-image`, and OpenAI Responses models, which get the image generation tool |
+| LangChain | chat models whose profile sets `image_outputs`, such as Gemini image models |
+
+- Any other model fails before the call, with an error naming it.
+- Adapters without image output (Claude Agent SDK, Codex, WebGPU, ACP, A2A)
+  fail before the call too, and the editor reports `[x: Image] <<` on them.
+- Image models take no tools, so Kedi leaves its artifact tools out for them.
+  A program that turns artifacts on explicitly gets an error instead.
+- Only `[x: Image] <<` produces an image. An `Image` field inside a template
+  capture or a model is still structured output, which the model writes as
+  text.
+
 ## History
 
 With `> history: enabled`, an attachment that the replayed history already

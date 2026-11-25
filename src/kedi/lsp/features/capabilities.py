@@ -453,7 +453,9 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, RawInvokeStmt):
             diagnostics.extend(_fallback_capability_diagnostics(active))
-            diagnostics.extend(_raw_invoke_capability_diagnostics(active, stmt, type_defs))
+            diagnostics.extend(
+                _raw_invoke_capability_diagnostics(active, stmt, type_defs, media_names)
+            )
             diagnostics.extend(_media_capability_diagnostics(active, stmt.segments, media_names))
             continue
         if isinstance(stmt, TaskGroupStmt):
@@ -1005,10 +1007,20 @@ def _raw_invoke_capability_diagnostics(
     state: _AdapterDiagnosticState,
     stmt: RawInvokeStmt,
     type_defs: dict[str, TypeDef],
+    media_names: MediaNames = _NO_MEDIA,
 ) -> list[lsp.Diagnostic]:
     if stmt.type_annotation in (None, "str"):
         return []
     span = stmt.type_expr.loc if stmt.type_expr is not None else stmt.loc
+    if stmt.type_annotation.strip() == "Image" and media_names.calls:
+        # ``[img: Image] << Draw a cat.`` asks the model for an image, not structured output.
+        return _unsupported_capability_diagnostics(
+            state,
+            "image_output",
+            [span],
+            "image output",
+            severity=lsp.DiagnosticSeverity.Error,
+        )
     return _structured_output_diagnostics(
         state, [(stmt.type_expr, span, span)], "typed raw invoke captures", type_defs
     )
