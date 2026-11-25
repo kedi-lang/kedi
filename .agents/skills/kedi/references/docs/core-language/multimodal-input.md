@@ -134,19 +134,24 @@ LangChain it also honors the model profile flags `image_inputs`, `pdf_inputs`,
 `audio_inputs` and `video_inputs`. Kedi never transcribes or describes media
 for a model that cannot read it.
 
-The Claude Agent SDK and Codex harnesses take part of this:
+Agent harnesses take part of this:
 
 | Harness | Media | Sent as |
 | --- | --- | --- |
 | Claude Agent SDK | images and PDFs | content blocks, from data or an http(s) URL |
 | Codex | images | data as a temporary local file for the turn, an http(s) URL or an OpenAI file id |
+| ACP | what the agent's `promptCapabilities` allow | image and audio blocks; PDFs and video as embedded resources; URLs are downloaded first |
+| A2A | the media types the agent card's `defaultInputModes` list | `raw` parts for data, `url` parts for http(s) URLs, each with its media type and file name |
 
-Text documents go inline on both, and other media fails before the call.
-Neither replays its history through Kedi, so each turn of a continued
-conversation sends the media it references.
+Text documents go inline on all four. Other media, and media the ACP agent or
+A2A card does not advertise, fails before the call. None replays its history
+through Kedi, so each turn of a continued conversation sends the media it
+references. Kedi's own A2A server lists only `text/plain`, so it is refused
+media.
 
-WebGPU, ACP and A2A do not accept media: a prompt with media fails before model
-I/O, and the editor reports it statically. See the
+WebGPU does not accept media: a prompt with media fails before model I/O. The
+editor reports media prompts on adapters without media input; it does not
+check which kinds a harness reads. See the
 [capability matrix](../reference/capability-matrix.md).
 
 Decision models read less. Jev (`typesafe/...`) reads images and text documents:

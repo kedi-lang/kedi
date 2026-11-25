@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 
+import pytest
 from lsprotocol import types as lsp
 
 from kedi._interactive.persistence import SessionValueDecoder, SessionValueEncoder
@@ -119,7 +120,12 @@ def test_editor_treats_media_names_without_the_media_import_as_ordinary_types() 
     )
 
 
-def test_editor_reports_media_prompts_on_adapters_without_media_input() -> None:
+def test_editor_reports_media_prompts_on_adapters_without_media_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kedi.agent_adapter import registry
+    from kedi.agent_adapter.meta import AdapterCapabilities
+
     source = """> import: media
 > agent: acp:
     command: acp-server
@@ -133,18 +139,23 @@ def test_editor_reports_media_prompts_on_adapters_without_media_input() -> None:
 > if: <<cat_image>> shows a cat
   [mode] = cat
 """
-    media_lines = [
-        diagnostic.range.start.line
-        for diagnostic in diagnostics_for(source, "/tmp/media.kedi")
-        if str(diagnostic.code) == "K-ADAPTER-CAPABILITY" and "media input" in diagnostic.message
-    ]
-    assert media_lines == [8, 9, 9, 10]
-    # Claude and Codex take prompt media, so the same prompts are not reported there.
-    for agent in ("claude", "codex"):
-        assert (
-            _codes(source.replace("> agent: acp:\n    command: acp-server", f"> agent: {agent}"))
-            == []
-        )
+
+    def media_lines(text: str) -> list[int]:
+        return [
+            diagnostic.range.start.line
+            for diagnostic in diagnostics_for(text, "/tmp/media.kedi")
+            if str(diagnostic.code) == "K-ADAPTER-CAPABILITY"
+            and "media input" in diagnostic.message
+        ]
+
+    # Every built-in adapter a program can select takes media, so the check is seen through
+    # an adapter that advertises none, as a custom adapter may.
+    assert media_lines(source) == []
+    with monkeypatch.context() as patch:
+        patch.setitem(registry._CAPABILITY_LOADERS, "acp", AdapterCapabilities)
+        assert media_lines(source) == [8, 9, 9, 10]
+    for agent in ("claude", "codex", "a2a:\n    endpoint: https://agent.example"):
+        assert media_lines(source.replace("acp:\n    command: acp-server", agent)) == []
 
 
 def test_editor_hover_documents_the_loaders() -> None:

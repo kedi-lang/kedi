@@ -20,13 +20,83 @@ from typing import Any, Generator, cast
 
 from ...agent_profile import AgentProfile
 from ...agent_profile.errors import AgentProfileOverrideUnsupported, AgentToolOverrideUnsupported
-from ...agent_profile.settings import ACP_AGENT_SETTING_KEYS, acp_agent_settings
+from ...agent_profile.settings import ACP_AGENT_SETTING_KEYS, acp_agent_settings, media_limit_bytes
+from ...media import MediaError
 from ...resolved_types import ResolvedKediType
 from ..events import AgentMessageResolver, agent_event_run
 from ..hooks import HookHandler, HookRegistrationMixin, hooked_agent_run
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
+from ..request import take_prompt_media
+from ..request.media import (
+    MediaAttachment,
+    attachment_content,
+    check_media_limit,
+    download_media,
+)
 
 JsonObject = dict[str, Any]
+
+
+_ACP_CAPABILITIES = {
+    "image": ("image", "images"),
+    "audio": ("audio", "audio"),
+    "document": ("embeddedContext", "embedded resources such as PDFs"),
+    "video": ("embeddedContext", "embedded resources such as video"),
+}
+
+
+async def acp_prompt_blocks(
+    prompt: str,
+    attachments: Sequence[MediaAttachment],
+    *,
+    capabilities: Mapping[str, Any],
+    media_limit: int | None,
+) -> list[JsonObject]:
+    """ACP ``session/prompt`` content for a prompt and its attachments.
+
+    Images and audio are ACP image and audio blocks; PDFs and video are embedded resources.
+    Each needs the matching ``promptCapabilities`` flag from the agent, checked before
+    anything is downloaded or sent. Text documents stay inline in the text.
+    """
+
+    for attachment in attachments:
+        if attachment.is_text:
+            continue
+        flag, what = _ACP_CAPABILITIES[attachment.media.kind]
+        if capabilities.get(flag) is not True:
+            raise MediaError(
+                f"{attachment.name}: the ACP agent does not accept {what} in prompts "
+                f"(promptCapabilities.{flag} is not set)"
+            )
+        if attachment.media.file_id is not None:
+            raise MediaError(
+                f"{attachment.name}: ACP agents take media as data or an http(s) URL, "
+                "not an uploaded file"
+            )
+    check_media_limit(attachments, media_limit)
+    blocks: list[JsonObject] = []
+    for piece in attachment_content(prompt, attachments):
+        if isinstance(piece, str):
+            blocks.append({"type": "text", "text": piece})
+        else:
+            blocks.append(await _acp_media_block(piece))
+    return blocks
+
+
+async def _acp_media_block(attachment: MediaAttachment) -> JsonObject:
+    import base64
+    from urllib.parse import quote
+
+    source = attachment.media
+    media = await download_media(source)
+    data = base64.b64encode(cast(bytes, media.data)).decode("ascii")
+    if media.kind in ("image", "audio"):
+        return {"type": media.kind, "mimeType": media.media_type, "data": data}
+    uri = source.url or f"kedi:attachment/{quote(attachment.name, safe='')}"
+    return {
+        "type": "resource",
+        "resource": {"uri": uri, "mimeType": media.media_type, "blob": data},
+    }
 
 
 class ACPProtocolError(RuntimeError):
@@ -72,6 +142,7 @@ class ACPClient:
         self._stderr_tail: deque[str] = deque(maxlen=40)
         self._next_request_id = 1
         self._initialized = False
+        self._prompt_capabilities: JsonObject = {}
         self._closed = False
 
     @property
@@ -82,7 +153,7 @@ class ACPClient:
     async def run_prompt(
         self,
         *,
-        prompt: str,
+        prompt: str | Sequence[JsonObject],
         cwd: str,
         timeout: float,
         event_resolver: AgentMessageResolver | None = None,
@@ -118,7 +189,7 @@ class ACPClient:
     def run_prompt_sync(
         self,
         *,
-        prompt: str,
+        prompt: str | Sequence[JsonObject],
         cwd: str,
         timeout: float,
         event_resolver: AgentMessageResolver | None = None,
@@ -138,7 +209,11 @@ class ACPClient:
                 "session/prompt",
                 {
                     "sessionId": session_id,
-                    "prompt": [{"type": "text", "text": prompt}],
+                    "prompt": (
+                        [{"type": "text", "text": prompt}]
+                        if isinstance(prompt, str)
+                        else list(prompt)
+                    ),
                 },
                 timeout=timeout,
                 **cancel_kwargs,
@@ -298,7 +373,22 @@ class ACPClient:
         )
         if not isinstance(response, dict):
             raise ACPProtocolError("ACP initialize response must be an object.")
+        agent_capabilities = response.get("agentCapabilities")
+        prompt_capabilities = (
+            agent_capabilities.get("promptCapabilities")
+            if isinstance(agent_capabilities, dict)
+            else None
+        )
+        self._prompt_capabilities = (
+            dict(prompt_capabilities) if isinstance(prompt_capabilities, dict) else {}
+        )
         self._initialized = True
+
+    def prompt_capabilities(self) -> Mapping[str, Any]:
+        """The agent's ``promptCapabilities`` from ``initialize``, starting the agent if needed."""
+
+        self._ensure_started()
+        return self._prompt_capabilities
 
     def _new_session(self, cwd: str) -> str:
         response = self.request("session/new", {"cwd": cwd, "mcpServers": []})
@@ -438,7 +528,7 @@ class ACPAdapter(HookRegistrationMixin):
         supports_history_processing=False,
         supports_history_replay=False,
         supports_stream_events=True,
-        supports_media_input=False,
+        supports_media_input=True,
         hooks=HookCapabilities.prompt_only(),
         settings=ACP_AGENT_SETTING_KEYS,
     )
@@ -520,12 +610,13 @@ class ACPAdapter(HookRegistrationMixin):
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
+        content = await self._prompt_content(client, prompt)
         with agent_event_run(self.shortname) as resolver:
             call_kwargs: dict[str, Any] = (
                 {"event_resolver": resolver} if resolver is not None else {}
             )
             result = await client.run_prompt(
-                prompt=prompt,
+                prompt=content,
                 cwd=cwd,
                 timeout=timeout,
                 **call_kwargs,
@@ -536,13 +627,16 @@ class ACPAdapter(HookRegistrationMixin):
 
     @hooked_agent_run("prompt")
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        from ..execution import run_sync
+
         client, cwd, timeout = self._client_for_run(kwargs)
+        content = run_sync(self._prompt_content(client, prompt))
         with agent_event_run(self.shortname) as resolver:
             call_kwargs: dict[str, Any] = (
                 {"event_resolver": resolver} if resolver is not None else {}
             )
             result = client.run_prompt_sync(
-                prompt=prompt,
+                prompt=content,
                 cwd=cwd,
                 timeout=timeout,
                 **call_kwargs,
@@ -553,6 +647,18 @@ class ACPAdapter(HookRegistrationMixin):
 
     def default_model(self) -> str | None:
         return self._model
+
+    async def _prompt_content(self, client: ACPClient, prompt: str) -> str | list[JsonObject]:
+        # The first native run in the request takes its attachments; nested runs get none.
+        attachments = take_prompt_media()
+        if not attachments:
+            return prompt
+        return await acp_prompt_blocks(
+            prompt,
+            attachments,
+            capabilities=client.prompt_capabilities(),
+            media_limit=media_limit_bytes(self.active_profile.settings),
+        )
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Generator[None, None, None]:

@@ -15,7 +15,7 @@ from contextlib import AbstractContextManager, asynccontextmanager, contextmanag
 from contextvars import ContextVar
 from threading import Lock
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlparse, urlsplit
 from uuid import uuid4
 
 from pydantic import TypeAdapter
@@ -42,6 +42,12 @@ from kedi.agent_adapter.hooks import HookRegistrationMixin, hooked_agent_run
 from kedi.agent_adapter.invocation import InvocationUsage, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.output_schema import build_output_model
+from kedi.agent_adapter.request import take_prompt_media
+from kedi.agent_adapter.request.media import (
+    MediaAttachment,
+    attachment_content,
+    check_media_limit,
+)
 from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
 from kedi.agent_profile import (
     A2AAuthConfig,
@@ -49,6 +55,8 @@ from kedi.agent_profile import (
     AgentProfile,
     AgentProfileOverrideUnsupported,
 )
+from kedi.agent_profile.settings import media_limit_bytes
+from kedi.media import MediaError
 from kedi.resolved_types import ResolvedKediType
 
 if TYPE_CHECKING:
@@ -88,7 +96,7 @@ class A2AAdapter(HookRegistrationMixin):
         supports_history_replay=False,
         supports_native_compaction=False,
         supports_stream_events=True,
-        supports_media_input=False,
+        supports_media_input=True,
         hooks=HookCapabilities.prompt_only(),
     )
     supports_native_subagent_resume = True
@@ -411,6 +419,9 @@ class A2AAdapter(HookRegistrationMixin):
                 output_schema=output_schema,
                 task_id=task_id,
                 context_id=resume.get("context_id"),
+                # The first native run in the request takes its attachments; nested runs
+                # and task continuations get none.
+                attachments=take_prompt_media(),
             )
         except A2AError as exc:
             _record_error_coordinates(conversation, connection.endpoint, exc)
@@ -435,6 +446,7 @@ class A2AAdapter(HookRegistrationMixin):
         output_schema: dict[str, Any] | None,
         task_id: str | None,
         context_id: str | None,
+        attachments: Sequence[MediaAttachment] = (),
     ) -> A2ARemoteResult:
         try:
             from a2a.client.errors import A2AClientError
@@ -449,7 +461,16 @@ class A2AAdapter(HookRegistrationMixin):
             raise _missing_a2a_dependency() from exc
 
         extension_requested = output_schema is not None
-        async with self._client_scope(connection, structured=extension_requested) as (
+        parts = a2a_prompt_parts(
+            prompt,
+            attachments,
+            media_limit=media_limit_bytes(self.active_profile.settings),
+        )
+        async with self._client_scope(
+            connection,
+            structured=extension_requested,
+            attachments=attachments,
+        ) as (
             client,
             call_context,
         ):
@@ -458,7 +479,7 @@ class A2AAdapter(HookRegistrationMixin):
                 context_id=context_id or "",
                 task_id=task_id or "",
                 role=Role.ROLE_USER,
-                parts=[Part(text=prompt)],
+                parts=[Part(**part) for part in parts],
                 extensions=([KEDI_STRUCTURED_OUTPUT_EXTENSION_URI] if extension_requested else []),
             )
             request = SendMessageRequest(
@@ -526,6 +547,7 @@ class A2AAdapter(HookRegistrationMixin):
         connection: A2AConnection,
         *,
         structured: bool,
+        attachments: Sequence[MediaAttachment] = (),
     ) -> AsyncGenerator[tuple[Any, Any], None]:
         try:
             import httpx
@@ -543,6 +565,7 @@ class A2AAdapter(HookRegistrationMixin):
             card = await self._agent_card(connection, http_client, A2ACardResolver)
             _validate_agent_card(connection.endpoint, card)
             _validate_card_auth(card, connection.auth)
+            _validate_card_input_modes(card, attachments)
             require_structured = (
                 structured or "structured_output" in self.active_profile.requirements
             )
@@ -778,6 +801,55 @@ def _supports_kedi_structured_output(card: Any) -> bool:
             "request-schema",
         }
     return False
+
+
+def a2a_prompt_parts(
+    prompt: str,
+    attachments: Sequence[MediaAttachment],
+    *,
+    media_limit: int | None,
+) -> list[dict[str, Any]]:
+    """A2A message part fields for a prompt and its attachments.
+
+    Media data goes as ``raw`` bytes and http(s) URLs as ``url`` parts, each with its media
+    type and file name; the remote agent fetches URLs itself. Text documents stay inline.
+    """
+
+    if not attachments:
+        return [{"text": prompt}]
+    check_media_limit(attachments, media_limit)
+    parts: list[dict[str, Any]] = []
+    for piece in attachment_content(prompt, attachments):
+        if isinstance(piece, str):
+            parts.append({"text": piece})
+            continue
+        media = piece.media
+        file_fields = {"media_type": media.media_type, "filename": media.filename or piece.name}
+        if media.data is not None:
+            parts.append({"raw": media.data, **file_fields})
+        elif media.url is not None and urlparse(media.url).scheme.lower() in {"http", "https"}:
+            parts.append({"url": media.url, **file_fields})
+        else:
+            held = "an uploaded file" if media.file_id is not None else media.url
+            raise MediaError(
+                f"{piece.name}: A2A agents take media as data or an http(s) URL, not {held}"
+            )
+    return parts
+
+
+def _validate_card_input_modes(card: Any, attachments: Sequence[MediaAttachment]) -> None:
+    modes = set(card.default_input_modes)
+    for attachment in attachments:
+        if attachment.is_text:
+            continue
+        media_type = attachment.media.media_type or ""
+        accepted = {media_type, f"{media_type.split('/', 1)[0]}/*", "*/*"}
+        if not modes & accepted:
+            listed = ", ".join(sorted(modes)) or "none"
+            raise MediaError(
+                f"{attachment.name}: the remote A2A agent does not accept {media_type} input "
+                f"(its card lists {listed})"
+            )
 
 
 def _validate_agent_card(endpoint: str, card: Any) -> None:
