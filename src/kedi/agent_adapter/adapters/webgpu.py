@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import urllib.request
 from contextlib import (
     AbstractContextManager,
     AsyncExitStack,
@@ -17,6 +18,7 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
+from typing_extensions import Self
 
 from ...agent_profile import AgentProfile, McpTransport
 from ...errors import KediExecutionError
@@ -61,6 +63,21 @@ class BrowserModelBridge(Protocol):
     """Synchronous transport used by WebGPUAdapter to reach a browser model."""
 
     def request(self, payload: Mapping[str, Any], *, timeout: float) -> Mapping[str, Any]: ...
+
+
+class HttpBridge:
+    """A bridge that posts each payload as JSON to ``url`` and returns the JSON reply."""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+    def request(self, payload: Mapping[str, Any], *, timeout: float) -> Mapping[str, Any]:
+        data = json.dumps(to_jsonable_python(payload)).encode()
+        request = urllib.request.Request(
+            self.url, data=data, headers={"content-type": "application/json"}
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read())
 
 
 class WebGPUInstrumentation(Protocol):
@@ -147,6 +164,12 @@ class WebGPUAdapter(HookRegistrationMixin):
     """Route Kedi agent calls to a browser-hosted model through a small bridge."""
 
     _SETTING_KEYS = WEBGPU_SETTING_KEYS
+
+    @classmethod
+    def for_conformance(cls, base_url: str) -> Self:
+        """An adapter whose bridge posts each payload to the conformance kit's endpoint."""
+
+        return cls(HttpBridge(f"{base_url}/kedi/webgpu"), model="conformance")
 
     def __init__(
         self,
@@ -561,4 +584,4 @@ def _final_action(data: Any) -> dict[str, Any]:
     }
 
 
-__all__ = ["BrowserModelBridge", "WebGPUAdapter", "WebGPUInstrumentation"]
+__all__ = ["BrowserModelBridge", "HttpBridge", "WebGPUAdapter", "WebGPUInstrumentation"]

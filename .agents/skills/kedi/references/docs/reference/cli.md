@@ -147,6 +147,10 @@ GitHub `git+https` URL. Package subcommands reject ordinary runtime options.
 running it. It accepts the same `--adapter` and `--adapter-model` selection as
 an ordinary run.
 
+`kedi adapter check MODULE:CLASS [--json]` runs the adapter conformance kit
+against `CLASS.for_conformance(base_url)` and exits 1 when a check fails. See
+[Testing an Adapter](../adapter-development/testing.md#conformance-check).
+
 `kedi audit` checks installed package receipts for yanked or revoked registry
 commits. It accepts no arguments.
 

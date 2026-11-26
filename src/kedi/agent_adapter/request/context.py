@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING, Callable, Generator
 
 from .models import AgentRunRequest
 
@@ -99,10 +99,33 @@ def tool_media_scope() -> Generator[None, None, None]:
         _TOOL_MEDIA_NAMER.reset(token)
 
 
+_REQUEST_OBSERVERS: ContextVar[tuple[Callable[[AgentRunRequest], None], ...]] = ContextVar(
+    "kedi_request_observers", default=()
+)
+
+
+@contextmanager
+def observe_requests(
+    callback: Callable[[AgentRunRequest], None],
+) -> Generator[None, None, None]:
+    """Call ``callback`` with each request Kedi hands an adapter inside this scope.
+
+    The conformance kit uses it to compare what Kedi rendered with what reached the wire.
+    """
+
+    token = _REQUEST_OBSERVERS.set((*_REQUEST_OBSERVERS.get(), callback))
+    try:
+        yield
+    finally:
+        _REQUEST_OBSERVERS.reset(token)
+
+
 @contextmanager
 def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, None]:
     """Expose one immutable semantic request while its adapter call is active."""
 
+    for observer in _REQUEST_OBSERVERS.get():
+        observer(request)
     token = _CURRENT_AGENT_RUN_REQUEST.set(request)
     # A request a subagent child makes through Kedi is a request of its own.
     entry_token = _SUBAGENT_ENTRY.set(False)
@@ -213,6 +236,7 @@ __all__ = [
     "current_agent_run_request",
     "current_request",
     "has_current_request",
+    "observe_requests",
     "prompt_media",
     "prompt_media_scope",
     "request_tool_media",
