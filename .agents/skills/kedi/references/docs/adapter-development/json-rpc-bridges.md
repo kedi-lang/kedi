@@ -57,6 +57,7 @@ it has not exited within the timeout.
 | `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
+| `history/process` | bridge → Kedi | `runId`, `messages` (the conversation so far, in Kedi's schema) | `messages`: what the program's history processor kept; see [History Processing](#history-processing) |
 | `media/get` | bridge → Kedi | `runId`, `ref` | `kind`, `mediaType`, and `data` (base64) or `url`; see [Transcript](#transcript) |
 | `artifact/admit` | bridge → Kedi | `runId`, `callId`, `tool`, `origin`, `result` | `result`: what the model sees, the result itself or Kedi's artifact reference; see [MCP Servers](#mcp-servers) |
 | `hook/invoke` | bridge → Kedi | `runId`, `event`, `callId`, `tool`, `origin`, `arguments`, optional `inputSchema`, `result`, `error` (`type`, `message`), `interrupted` | for `pre_tool_use`: `decision` (`continue`, `edit` with `arguments`, or `deny` with `reason`); otherwise `{}`; see [Hooks](#hooks) |
@@ -121,6 +122,7 @@ actions the bridge parses.
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
 | `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
 | `history` | in transcript mode, the conversation's earlier messages in Kedi's schema; absent otherwise |
+| `processHistory` | in transcript mode, whether the program has a history processor: ask `history/process` before each model request |
 | `subagent` | `null`, or the child Kedi runs: `id`, `parentRunId`, `conversationId`, `name`, `limits`; see [Subagents](#subagents) |
 
 Kedi validates every answer. When the data does not match the schema, a required
@@ -416,6 +418,23 @@ such as an encrypted reasoning block. Media is named by `ref` after the turn
 that attached it, so its bytes are not sent again with each `history`. A bridge
 that needs the bytes, for example after a restart, asks `media/get` with the
 `ref`.
+
+Kedi gives each recorded message an `id`, so two identical messages stay
+distinct; send messages back with the `id` they came with.
+
+### History Processing
+
+With a `> history:` processor, a transcript run carries `processHistory: true`.
+Before each model request, tool-loop turns included, send `history/process`
+with the conversation so far in Kedi's schema: `history` followed by this
+turn's messages. Kedi runs the program's processor, as the in-process adapters
+do before each request, and answers with the messages it kept. Send the model
+those instead, and continue the turn from them.
+
+The processor may drop or rewrite earlier messages, so such a run answers with
+`transcript`, the whole conversation as it stands after the turn, instead of
+the turn's `messages`. Kedi stores it as the conversation. A processor that
+fails fails the run, as in-process. `transcript` enables `history_processing`.
 
 A bridge may support both modes. Kedi uses `transcript` for an
 `agent-framework` bridge, and for an `agent-harness` only when the program

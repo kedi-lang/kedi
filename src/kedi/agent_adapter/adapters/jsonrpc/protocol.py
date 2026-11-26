@@ -14,8 +14,8 @@ Kedi to bridge:
   ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``). Kedi sends nothing else before
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
-  instructionParts, user, userContent, output, tools, continuation, session, subagent, hooks,
-  mcpServers, admitResults}``
+  instructionParts, user, userContent, output, tools, continuation, session, history?,
+  processHistory?, subagent, hooks, mcpServers, admitResults}``
   returns ``{text}``, ``{data}`` or ``{content}``, optionally
   with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
   toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
@@ -68,6 +68,12 @@ Bridge to Kedi:
   run's ``admitResults`` is true), for each result of a bridge tool, MCP tools included, before
   the model sees it: returns ``{result}``, the result itself or Kedi's artifact reference for a
   large one, which the bridge sends the model instead.
+- ``media/get`` ``{runId, ref}`` (with ``transcript``): the bytes of a conversation's media,
+  ``{kind, mediaType, data | url}``.
+- ``history/process`` ``{runId, messages}`` (when the run's ``processHistory`` is true), before
+  each model request: the conversation so far, in Kedi's transcript schema. It returns
+  ``{messages}``, what the program's history processor made of it; send that instead. Such a run
+  answers with ``transcript``, the whole conversation, rather than the turn's ``messages``.
 - ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
   totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
   it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
