@@ -128,8 +128,36 @@ class RunMetadata:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RenderedRequest:
+    """Everything a model sees for one request, as Kedi rendered it.
+
+    An adapter maps it onto its backend's messages: ``system`` (or ``instruction_parts``)
+    as system or developer text, ``user`` and ``media`` as the user turn, the output schema
+    as the backend's structured-output or output-tool contract, and ``tools`` as its tool
+    definitions. When the backend lacks native structured output or tool calling, the
+    ``protocol.output`` and ``protocol.tools`` parts carry them instead and are already in
+    ``system``.
+    """
+
+    system: str | None
+    instruction_parts: tuple[InstructionPart, ...]
+    user: str
+    media: tuple[MediaAttachment, ...]
+    output_json_schema: Mapping[str, Any] | None
+    output_tool_name: str | None
+    tools: tuple[ToolDefinition, ...]
+    prompt_kind: PromptKind
+    call_kind: CallKind
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AgentRunRequest:
-    """Resolved semantic request handed to adapter-native lowering."""
+    """Resolved semantic request handed to adapter-native lowering.
+
+    ``protocol`` names the protocol parts the adapter's backend needs (``output``, ``tools``);
+    :meth:`render` adds them. They stay out of ``instructions``, so hooks, telemetry and the
+    built-in adapters see the same instructions as before.
+    """
 
     prompt: PromptDraft
     instructions: tuple[InstructionPart, ...] = ()
@@ -137,15 +165,73 @@ class AgentRunRequest:
     tool_definitions: tuple[ToolDefinition, ...] = ()
     output: OutputContract = field(default_factory=TextOutput)
     metadata: RunMetadata
+    protocol: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instructions", tuple(self.instructions))
         object.__setattr__(self, "tool_definitions", tuple(self.tool_definitions))
+        object.__setattr__(self, "protocol", frozenset(self.protocol))
 
     @property
     def instruction_text(self) -> str | None:
         rendered = "\n\n".join(part.content for part in self.instructions if part.content)
         return rendered or None
+
+    def render(self, *, tools: tuple[ToolDefinition, ...] | None = None) -> RenderedRequest:
+        """The request as the model sees it.
+
+        ``tools`` replaces the request's tool definitions with the adapter's final set, for
+        an adapter that adds tools during the run (MCP servers, for example), so the tool
+        catalog names them too.
+        """
+
+        from .protocol import OUTPUT_TOOL_NAME, protocol_parts
+
+        definitions = self.tool_definitions if tools is None else tuple(tools)
+        schema = output_json_schema(self.output, request=self)
+        parts = (
+            *self.instructions,
+            *protocol_parts(
+                self.protocol,
+                output_json_schema=schema,
+                tools=definitions,
+            ),
+        )
+        system = "\n\n".join(part.content for part in parts if part.content)
+        return RenderedRequest(
+            system=system or None,
+            instruction_parts=parts,
+            user=self.prompt.content,
+            media=self.prompt.media,
+            output_json_schema=schema,
+            output_tool_name=None if schema is None else OUTPUT_TOOL_NAME,
+            tools=definitions,
+            prompt_kind=self.metadata.prompt_kind,
+            call_kind=self.metadata.call_kind,
+        )
+
+
+def output_json_schema(
+    output: OutputContract, *, request: AgentRunRequest | None = None
+) -> Mapping[str, Any] | None:
+    """The JSON Schema Kedi builds for an output contract, or ``None`` for text.
+
+    A template's fields go through ``build_output_model``, so the model docstring and field
+    descriptions are included.
+    """
+
+    if isinstance(output, TextOutput):
+        return None
+    from pydantic import BaseModel, TypeAdapter
+
+    from ..output_schema import build_output_model
+
+    if isinstance(output, SchemaOutput):
+        return build_output_model(dict(output.schema), request=request).model_json_schema()
+    output_type = output.output_type
+    if isinstance(output_type, type) and issubclass(output_type, BaseModel):
+        return output_type.model_json_schema()
+    return TypeAdapter(output_type).json_schema()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -187,9 +273,11 @@ __all__ = [
     "OutputContract",
     "PromptDraft",
     "PromptKind",
+    "RenderedRequest",
     "RunMetadata",
     "SchemaOutput",
     "TextOutput",
     "ToolDefinition",
     "TypedOutput",
+    "output_json_schema",
 ]

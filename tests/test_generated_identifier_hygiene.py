@@ -8,7 +8,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
-from kedi.agent_adapter.adapters.webgpu import _output_adapter
+from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
 from kedi.lang import compile_program, parse_program
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp.features.diagnostics import compute_diagnostics
@@ -139,7 +139,17 @@ def test_output_names_reserved_by_pydantic_reach_the_model_under_their_kedi_name
 
 
 def test_webgpu_output_models_alias_reserved_names() -> None:
-    adapter = _output_adapter({"_x": int, "copy": int}, None)
-    assert set(adapter.json_schema()["properties"]) == {"_x", "copy"}
-    value = adapter.validate_python({"_x": 1, "copy": 2})
+    class Bridge:
+        payloads: list[dict[str, object]] = []
+
+        def request(self, payload: dict[str, object], *, timeout: float) -> dict[str, object]:
+            self.payloads.append(payload)
+            return {"kind": "final", "data": {"_x": 1, "copy": 2}}
+
+    bridge = Bridge()
+    value = WebGPUAdapter(bridge, model="m").produce_sync(
+        template="answer", output_schema={"_x": int, "copy": int}
+    )
+    schema = bridge.payloads[0]["outputSchema"]
+    assert isinstance(schema, dict) and set(schema["properties"]) == {"_x", "copy"}
     assert type(value).model_validate(value.model_dump(by_alias=True)) == value

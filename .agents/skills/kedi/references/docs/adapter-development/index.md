@@ -66,8 +66,8 @@ a program needs a capability the adapter lacks.
 1. [Reference Adapter](reference-adapter.md): a complete, tested adapter that
    every later page extends.
 2. [Call Lifecycle](call-lifecycle.md), [Prompts and Instructions](prompt-contract.md),
-   and [Structured Output](structured-output.md): what each call receives and
-   must return.
+   [Rendered Request](rendered-request.md) and [Structured Output](structured-output.md):
+   what each call receives and must return.
 3. The pages for the protocols your backend can support.
 4. [Concurrency and Event Loops](concurrency.md) and [Testing an
    Adapter](testing.md) before you ship.

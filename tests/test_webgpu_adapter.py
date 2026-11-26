@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, Iterator
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 import kedi.agent_adapter.adapters.webgpu as webgpu_module
 from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
@@ -55,13 +55,12 @@ def test_webgpu_adapter_produces_schema_and_output_type() -> None:
     assert bridge.payloads[0]["outputSchema"]["properties"]["answer"]["description"] == (
         "Computed answer"
     )
-    output_prompt = bridge.payloads[0]["outputPrompt"]
-    assert "<name>answer</name>" in output_prompt
-    assert "<type>integer</type>" in output_prompt
-    assert "<answer>integer</answer>" not in output_prompt
-    assert "properties" not in output_prompt
-    assert "required" not in output_prompt
-    assert "title" not in output_prompt
+    # Kedi renders the output contract; the bridge forwards it and authors none.
+    instructions = bridge.payloads[0]["instructions"]
+    assert instructions.startswith("<OutputProtocol>\n")
+    assert '"description": "Computed answer"' in instructions
+    assert "outputPrompt" not in bridge.payloads[0]
+    assert "toolsPrompt" not in bridge.payloads[0]
 
 
 def test_webgpu_adapter_invoke_returns_text_response() -> None:
@@ -123,7 +122,7 @@ def test_webgpu_adapter_profile_scope_and_settings() -> None:
     assert bridge.timeouts == [12]
     payload = bridge.payloads[0]
     assert payload["model"] == "ternary"
-    assert payload["instructions"] == "Be exact."
+    assert payload["instructions"].startswith("Be exact.\n\n<OutputProtocol>")
     assert payload["effort"] == "high"
     assert payload["settings"] == {
         "temperature": 0.2,
@@ -174,7 +173,6 @@ def test_webgpu_adapter_profile_rejects_unknown_model_and_setting() -> None:
 @pytest.mark.parametrize(
     ("response", "message"),
     [
-        ({"kind": "final", "data": "nope"}, "Input should be a valid dictionary"),
         ({"kind": "error", "error": "browser failed"}, "browser failed"),
         ({"kind": "other"}, "Unknown browser model response kind"),
     ],
@@ -258,7 +256,7 @@ def test_webgpu_adapter_instruments_tool_execution() -> None:
     assert '"callId": "call-1"' in bridge.payloads[1]["messages"][-2]["content"]
 
 
-def test_webgpu_adapter_requires_explicitly_named_tool_before_final() -> None:
+def test_webgpu_adapter_requires_declared_tools_before_final() -> None:
     bridge = QueueBridge(
         {"kind": "final", "data": {"answer": "simulated"}},
         {"kind": "tool_call", "name": "say_hello", "arguments": {"name": "Mert"}},
@@ -273,80 +271,93 @@ def test_webgpu_adapter_requires_explicitly_named_tool_before_final() -> None:
             "properties": {"name": {"type": "string"}},
             "required": ["name"],
         },
+        metadata={"required_before_output": True},
     )
 
     with adapter.tool_scope((tool,)):
         result = adapter.produce_sync(
-            template="Call the say_hello tool for Mert and return [answer].",
-            output_schema={"answer": str},
+            template="Greet Mert as [answer].", output_schema={"answer": str}
         )
 
     assert result.answer == "done"
-    assert bridge.payloads[0]["requiredTools"] == ["say_hello"]
-    assert "Call the explicitly requested tool" in bridge.payloads[1]["messages"][-1]["content"]
-    assert bridge.payloads[2]["requiredTools"] == []
+    assert "requiredTools" not in bridge.payloads[0]
+    # Kedi's correction, as the Pydantic AI adapter sends it.
+    assert bridge.payloads[1]["messages"][-1]["content"] == (
+        "Call required tool say_hello and use its result before returning the parent response."
+    )
     assert '"result": "Hello, Mert!"' in bridge.payloads[2]["messages"][-1]["content"]
 
 
-def test_webgpu_adapter_retries_invalid_tool_protocol_and_requires_declared_tool() -> None:
+def test_webgpu_adapter_never_infers_required_tools_from_the_prompt() -> None:
+    bridge = QueueBridge({"kind": "final", "data": {"answer": "done"}})
+    adapter = WebGPUAdapter(bridge, model="bonsai")
+    with adapter.tool_scope((ToolSpec(fn=lambda: "hi", name="say_hello"),)):
+        result = adapter.produce_sync(
+            template="Call the say_hello tool and return [answer].", output_schema={"answer": str}
+        )
+    assert result.answer == "done"
+    assert len(bridge.payloads) == 1
+
+
+def test_webgpu_adapter_corrects_a_failed_required_tool() -> None:
+    def say_hello(name: str) -> str:
+        raise RuntimeError("greeter is down")
+
+    bridge = QueueBridge(
+        {"kind": "tool_call", "name": "say_hello", "arguments": {"name": "Mert"}},
+        {"kind": "final", "data": {"answer": "simulated"}},
+        {"kind": "tool_call", "name": "say_hello", "arguments": {"name": "Mert"}},
+        {"kind": "final", "data": {"answer": "simulated"}},
+    )
+    adapter = WebGPUAdapter(bridge, model="bonsai", max_tool_steps=4)
+    tool = ToolSpec(fn=say_hello, name="say_hello", metadata={"required_before_output": True})
+    with adapter.tool_scope((tool,)):
+        with pytest.raises(RuntimeError, match="4-step tool limit"):
+            adapter.produce_sync(template="Greet as [answer].", output_schema={"answer": str})
+    assert bridge.payloads[2]["messages"][-1]["content"].startswith(
+        "Required tool say_hello did not complete successfully."
+    )
+
+
+def test_webgpu_adapter_retries_invalid_tool_protocol_with_kedi_text() -> None:
     bridge = QueueBridge(
         {
             "kind": "retry",
             "requiredTool": "get_capital",
-            "error": "Call get_capital using tool_call JSON.",
-            "telemetry": {
-                "outputText": "We should use get_capital.",
-            },
+            "error": "Expected a JSON object.",
+            "telemetry": {"outputText": "We should use get_capital."},
         },
-        {
-            "kind": "tool_call",
-            "name": "get_capital",
-            "arguments": {"country": "Miyawland"},
-        },
+        {"kind": "tool_call", "name": "get_capital", "arguments": {"country": "Miyawland"}},
         {"kind": "final", "data": {"capital": "Miyawcity"}},
     )
     adapter = WebGPUAdapter(bridge, model="bonsai")
-
-    with adapter.tool_scope(
-        (
-            ToolSpec(
-                fn=lambda country: "Miyawcity",
-                name="get_capital",
-                json_schema={
-                    "type": "object",
-                    "properties": {"country": {"type": "string"}},
-                    "required": ["country"],
-                },
-            ),
-        )
-    ):
+    tool = ToolSpec(
+        fn=lambda country: "Miyawcity",
+        name="get_capital",
+        json_schema={
+            "type": "object",
+            "properties": {"country": {"type": "string"}},
+            "required": ["country"],
+        },
+    )
+    with adapter.tool_scope((tool,)):
         result = adapter.produce_sync(
-            template="What's the capital of Miyawland?",
-            output_schema={"capital": str},
+            template="What's the capital of Miyawland?", output_schema={"capital": str}
         )
 
     assert result.capital == "Miyawcity"
-    assert bridge.payloads[0]["requiredTools"] == []
-    assert bridge.payloads[1]["requiredTools"] == ["get_capital"]
+    # The bridge's parse error is quoted as detail; a requiredTool it names is ignored.
     assert bridge.payloads[1]["messages"][-2:] == [
         {"role": "assistant", "content": "We should use get_capital."},
         {
             "role": "user",
-            "content": ("Call get_capital using tool_call JSON."),
+            "content": (
+                "Return exactly one call_tool or final action JSON object.\n"
+                "<ParseError>Expected a JSON object.</ParseError>"
+            ),
         },
     ]
-    assert bridge.payloads[2]["requiredTools"] == []
     assert '"result": "Miyawcity"' in bridge.payloads[2]["messages"][-1]["content"]
-
-
-def test_webgpu_adapter_rejects_retry_for_unknown_tool() -> None:
-    adapter = WebGPUAdapter(
-        QueueBridge({"kind": "retry", "requiredTool": "missing"}),
-        model="bonsai",
-    )
-
-    with pytest.raises(ValueError, match="retry named unknown tool"):
-        adapter.produce_sync(template="answer", output_schema={"answer": str})
 
 
 def test_webgpu_adapter_retries_without_optional_tool_metadata() -> None:
@@ -416,10 +427,9 @@ def test_webgpu_adapter_returns_tool_failure_to_model() -> None:
     assert result.population == 2_000_000
     assert '"ok": false' in bridge.payloads[1]["messages"][-1]["content"]
     assert "unexpected keyword argument 'country'" in bridge.payloads[1]["messages"][-1]["content"]
-    assert bridge.payloads[1]["requiredTools"] == []
     assert len(bridge.payloads) == 2
     assert all(
-        "Call the explicitly requested tool" not in message.get("content", "")
+        "Call required tool" not in message.get("content", "")
         for payload in bridge.payloads
         for message in payload["messages"]
     )
@@ -430,17 +440,36 @@ def test_webgpu_adapter_validates_non_dict_final_data() -> None:  # 3.9
     adapter = WebGPUAdapter(bridge, model="bonsai")
     assert adapter.produce_sync(template="List two.", output_type=list[str]) == ["a", "b"]
 
-    failing = WebGPUAdapter(QueueBridge({"kind": "final", "data": "nope"}), model="bonsai")
-    with pytest.raises(ValidationError, match="Input should be a valid list"):
-        failing.produce_sync(template="List two.", output_type=list[str])
+    # Invalid data gets Kedi's correction turn, within the step limit.
+    corrected = QueueBridge({"kind": "final", "data": "nope"}, {"kind": "final", "data": ["c"]})
+    assert WebGPUAdapter(corrected, model="bonsai").produce_sync(
+        template="List one.", output_type=list[str]
+    ) == ["c"]
+    assert corrected.payloads[1]["messages"][-2:] == [
+        {"role": "assistant", "content": '{"action": "final", "data": "nope"}'},
+        {
+            "role": "user",
+            "content": (
+                "The structured output does not match the required schema:\n"
+                ": Input should be a valid list\n"
+                "Return a corrected response that matches the schema."
+            ),
+        },
+    ]
+    exhausted = QueueBridge({"kind": "final", "data": "nope"}, {"kind": "final", "data": "no"})
+    with pytest.raises(RuntimeError, match="2-step tool limit"):
+        WebGPUAdapter(exhausted, model="bonsai", max_tool_steps=2).produce_sync(
+            template="List two.", output_type=list[str]
+        )
 
 
-def test_webgpu_adapter_formats_tool_catalog_as_xml() -> None:
+def test_webgpu_adapter_sends_kedis_tool_catalog() -> None:
     bridge = QueueBridge({"kind": "final", "data": {"answer": "ok"}})
     adapter = WebGPUAdapter(bridge, model="bonsai")
     tool = ToolSpec(
         fn=lambda country: country,
         name="get_capital",
+        description="Look up a capital.",
         json_schema={
             "type": "object",
             "properties": {"country": {"title": "Country", "type": "string"}},
@@ -452,72 +481,15 @@ def test_webgpu_adapter_formats_tool_catalog_as_xml() -> None:
         result = adapter.produce_sync(template="answer", output_schema={"answer": str})
 
     assert result.answer == "ok"
-    catalog = bridge.payloads[0]["toolsPrompt"]
-    assert catalog.startswith("<Tools>\n  <Tool>")
-    assert "<name>get_capital</name>" in catalog
-    assert "<arguments>" in catalog
-    assert "<name>country</name>" in catalog
-    assert "<type>string</type>" in catalog
-    assert "<country>string</country>" not in catalog
-    assert "inputSchema" not in catalog
-    assert "properties" not in catalog
-    assert "required" not in catalog
-    assert "title" not in catalog
-    assert catalog.endswith("</Tool>\n</Tools>")
-
-
-def test_webgpu_adapter_formats_schema_variants_as_xml() -> None:
-    output = webgpu_module._format_output_contract(
-        {
-            "type": "object",
-            "properties": {
-                "item": {"$ref": "#/$defs/Item"},
-                "status": {"enum": ["ready", "pending"]},
-                "ignored": "invalid",
-            },
-            "required": ["item"],
-        }
-    )
-    catalog = webgpu_module._format_tool_catalog(
-        (
-            {
-                "name": "inspect",
-                "description": "Inspect values",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "values": {"type": "array", "items": {"type": "integer"}},
-                        "filter": {
-                            "anyOf": [{"type": "string"}, {"type": "null"}],
-                        },
-                        "payload": {"type": "object", "title": "Payload"},
-                    },
-                    "required": ["values"],
-                },
-                "returnSchema": {
-                    "oneOf": [{"type": "boolean"}, {"type": "null"}],
-                },
-            },
-        )
-    )
-
-    assert "<name>item</name>" in output
-    assert "<type>Item</type>" in output
-    assert "<name>status</name>" in output
-    assert "<type>ready | pending</type>" in output
-    assert "<name>values</name>" in catalog
-    assert "<type>list[integer]</type>" in catalog
-    assert "<name>filter</name>" in catalog
-    assert "<type>string | null</type>" in catalog
-    assert "<name>payload</name>" in catalog
-    assert "<type>Payload</type>" in catalog
-    assert "<returns>boolean | null</returns>" in catalog
-    assert webgpu_module._format_output_contract({"type": ["string", "null"]}) == (
-        "<Output>\n  <type>string | null</type>\n</Output>"
-    )
-    assert webgpu_module._schema_type_name({"type": "array"}, {}) == "list[value]"
-    assert webgpu_module._schema_type_name({"type": "object"}, {}) == "object"
-    assert webgpu_module._schema_type_name({"title": "Untyped"}, {}) == "Untyped"
+    instructions = bridge.payloads[0]["instructions"]
+    tools = instructions[instructions.index("<ToolProtocol>") :]
+    assert tools.startswith("<ToolProtocol>\nYou can call the tools below.")
+    assert '{"action": "final", "data": <a value matching the output schema>}' in tools
+    assert '<Tool name="get_capital">\n<Description>Look up a capital.</Description>' in tools
+    assert (
+        '<InputSchema>{"properties": {"country": {"title": "Country", "type": "string"}}, '
+        '"required": ["country"], "type": "object"}</InputSchema>'
+    ) in tools
 
 
 @pytest.mark.parametrize(
@@ -594,8 +566,10 @@ class McpWikiBridge:
 
     def __init__(self, tool: str) -> None:
         self.tool = tool
+        self.payloads: list[dict[str, Any]] = []
 
     def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        self.payloads.append(payload)
         results = [m for m in payload["messages"] if m.get("role") == "tool"]
         if not results:
             arguments = {"page": "Home"}
@@ -616,11 +590,15 @@ def test_webgpu_mcp_tools_follow_the_profile_approval(
 ) -> None:
     log = tmp_path / "wiki.log"
     server = McpServerSpec(command=sys.executable, args=(str(WIKI_SERVER), str(log)))
-    adapter = WebGPUAdapter(McpWikiBridge("delete_page"), model="bonsai")
+    bridge = McpWikiBridge("delete_page")
+    adapter = WebGPUAdapter(bridge, model="bonsai")
 
     with adapter.profile_override(AgentProfile(mcp_servers=(server,), approval=approval)):
         content = json.loads(adapter.invoke_sync(prompt="Delete the Home page."))
+    adapter_payloads = bridge.payloads
 
+    # The MCP tool is in the catalog Kedi rendered, though it exists only inside the run.
+    assert '<Tool name="delete_page">' in adapter_payloads[0]["instructions"]
     if deleted:
         assert content == {"ok": True, "result": {"result": "deleted Home"}}
         assert log.read_text(encoding="utf-8") == "deleted Home\n"

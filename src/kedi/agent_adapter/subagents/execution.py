@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from kedi.agent_adapter.events import bind_agent_run, current_agent_run_identity
 from kedi.agent_adapter.invocation import observe_invocations
 from kedi.agent_adapter.meta import AdapterCapabilities
+from kedi.agent_adapter.request.context import subagent_entry_scope
 from kedi.agent_adapter.subagents import (
     _NO_TYPED_OUTPUT,
     DelegationResult,
@@ -326,6 +327,8 @@ async def _run_child(
         self._deps.trace_frame(KediTraceFrame(kind="subagent", label=f"delegate {subagent}")),
         _subagent_execution_scope(execution_context),
         adapter.subagent_scope(request),
+        # The child runs inside the parent's request, which is not its own.
+        subagent_entry_scope(),
     ):
         if final_schema is None:
             task_summary = await adapter.invoke(prompt=effective_task, **run_kwargs)

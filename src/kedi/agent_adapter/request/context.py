@@ -104,6 +104,8 @@ def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, N
     """Expose one immutable semantic request while its adapter call is active."""
 
     token = _CURRENT_AGENT_RUN_REQUEST.set(request)
+    # A request a subagent child makes through Kedi is a request of its own.
+    entry_token = _SUBAGENT_ENTRY.set(False)
     media_token = _PROMPT_MEDIA.set(
         _PromptMediaClaim(request.prompt.media) if request.prompt.media else None
     )
@@ -121,6 +123,7 @@ def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, N
         _TOOL_MEDIA_START.reset(start_token)
         _TOOL_MEDIA_NAMER.reset(namer_token)
         _PROMPT_MEDIA.reset(media_token)
+        _SUBAGENT_ENTRY.reset(entry_token)
         _CURRENT_AGENT_RUN_REQUEST.reset(token)
 
 
@@ -128,6 +131,39 @@ def current_agent_run_request() -> AgentRunRequest | None:
     """Return the semantic request currently being lowered, when available."""
 
     return _CURRENT_AGENT_RUN_REQUEST.get()
+
+
+_SUBAGENT_ENTRY: ContextVar[bool] = ContextVar("kedi_subagent_entry", default=False)
+
+
+def current_request() -> AgentRunRequest:
+    """The request Kedi is making through the adapter, inside ``produce`` and ``invoke``.
+
+    ``current_request().render()`` gives everything the model sees. Raises outside a Kedi
+    call, and in subagent entry points, whose child has no request of its own yet: use the
+    ``template`` and ``output_schema`` arguments there.
+    """
+
+    if _SUBAGENT_ENTRY.get():
+        raise RuntimeError(
+            "current_request() is not available in subagent entry points; use their "
+            "template and output_schema arguments"
+        )
+    request = _CURRENT_AGENT_RUN_REQUEST.get()
+    if request is None:
+        raise RuntimeError("current_request() is only available inside an adapter call Kedi makes")
+    return request
+
+
+@contextmanager
+def subagent_entry_scope() -> Generator[None, None, None]:
+    """Mark a subagent entry point: the parent's request is not the child's."""
+
+    token = _SUBAGENT_ENTRY.set(True)
+    try:
+        yield
+    finally:
+        _SUBAGENT_ENTRY.reset(token)
 
 
 @contextmanager
@@ -164,9 +200,11 @@ __all__ = [
     "agent_run_request_scope",
     "conversation_media_scope",
     "current_agent_run_request",
+    "current_request",
     "prompt_media",
     "prompt_media_scope",
     "request_tool_media",
+    "subagent_entry_scope",
     "take_prompt_media",
     "tool_media_namer",
     "tool_media_scope",

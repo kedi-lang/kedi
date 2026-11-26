@@ -1,7 +1,8 @@
-from .assembler import RunRequestAssembler, conversation_lane_identity
+from .assembler import RunRequestAssembler, conversation_lane_identity, tool_definition
 from .context import (
     agent_run_request_scope,
     current_agent_run_request,
+    current_request,
     prompt_media_scope,
     take_prompt_media,
 )
@@ -23,6 +24,7 @@ from .models import (
     OutputContract,
     PromptDraft,
     PromptKind,
+    RenderedRequest,
     RunMetadata,
     SchemaOutput,
     TextOutput,
@@ -35,12 +37,14 @@ from .prompts import (
     KediTemplatePromptBuilder,
     RawPromptBuilder,
 )
+from .protocol import OUTPUT_TOOL_NAME, request_protocol
 
 __all__ = [
     "AdapterCallOptions",
     "AdapterRunOutcome",
     "AgentRunRequest",
     "CLAIM_INSTRUCTION",
+    "OUTPUT_TOOL_NAME",
     "CallKind",
     "ClaimPromptBuilder",
     "ConversationCoordinates",
@@ -52,6 +56,7 @@ __all__ = [
     "PromptDraft",
     "PromptKind",
     "RawPromptBuilder",
+    "RenderedRequest",
     "RequestDiagnostics",
     "RequestLoweringAdapter",
     "RunMetadata",
@@ -63,10 +68,13 @@ __all__ = [
     "agent_run_request_scope",
     "compose_prompt",
     "current_agent_run_request",
+    "current_request",
     "request_diagnostics",
     "conversation_lane_identity",
     "lower_request_sync",
     "media_summaries",
     "prompt_media_scope",
+    "request_protocol",
     "take_prompt_media",
+    "tool_definition",
 ]

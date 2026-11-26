@@ -30,6 +30,7 @@ and appears only when it applies:
 | 5 | `skills.instructions` | skills | skills are enabled |
 | 6 | `artifacts.instructions` | artifacts | the artifact contract is active for the call |
 | 7 | `runtime.claim` | runtime | the call is a claim |
+| 8 | `media_output.instructions` | runtime | the output or a tool's parameters take media, and the call attaches media or offers tools; wrapped in `<MediaOutputInstructions>` |
 
 Two consequences for adapters:
 
@@ -86,12 +87,16 @@ hooks again or keep a copy of the original prompt. See [Hooks](hooks.md).
 - template-filling or field-extraction rules, examples, or reminders;
 - output-format instructions such as "answer in JSON with fields ...": send
   the JSON Schema through the backend's structured-output feature instead (see
-  [Structured Output](structured-output.md));
-- tool-usage instructions or tool catalogs when the backend accepts tool
-  declarations;
+  [Structured Output](structured-output.md)). A backend without one declares
+  `supports_native_structured_output=False`, and Kedi renders the output
+  contract as the `protocol.output` part (see [Rendered Request](rendered-request.md));
+- tool-usage instructions or tool catalogs: declare
+  `supports_native_tool_calling=False` instead, and Kedi renders them as the
+  `protocol.tools` part;
 - a second copy of the profile instructions or of any part above;
-- correction turns of its own. Where Kedi supplies correction text, as
-  `accept_subagent_output` does for child results, send that text.
+- correction turns of its own. Send Kedi's: `output_correction`,
+  `required_tools_correction` and `protocol_correction`, or the text
+  `accept_subagent_output` gives for child results.
 
 Text that identifies a harness and does not depend on the request, such as an
 agent harness's own fixed system prompt, is not part of this contract.
