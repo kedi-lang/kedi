@@ -16,6 +16,9 @@ SCENARIO = sys.argv[1]
 CAPABILITIES = {"structuredOutput": True, "tools": True}
 _write = threading.Lock()
 _pending: dict[int, Any] = {}
+_live_lock = threading.Lock()
+_inputs: dict[str, list[tuple[int, list[dict[str, Any]]]]] = {}
+_interrupted: set[str] = set()
 _ids = iter(range(1, 1_000_000))
 
 
@@ -73,6 +76,16 @@ ADMISSION = {
     "subagents": {"governed": True, "subagents": True, "sessions": True, "nativeTools": True},
     "subagents-stateless": {"governed": True, "subagents": True},
     "subagents-die": {"governed": True, "subagents": True},
+    "live": {
+        "governed": True,
+        "subagents": True,
+        "sessions": True,
+        "liveInput": True,
+        "interrupt": True,
+        "usage": True,
+    },
+    "live-without-subagents": {"liveInput": True},
+    "interrupt-without-live": {"governed": True, "subagents": True, "interrupt": True},
     "subagents-ungoverned": {"subagents": True},
     # Claims governed, then retries a failed request without asking Kedi.
     "retries-unadmitted": {"governed": True},
@@ -158,6 +171,70 @@ def subagent_probe(request_id: int, params: dict[str, Any]) -> None:
     send({"id": request_id, "result": result})
 
 
+def until(condition: Any, seconds: float = 10) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def live_probe(request_id: int, params: dict[str, Any]) -> None:
+    """A parent sends input to, or interrupts, a background child that waits for it."""
+
+    run_id, user = params["runId"], params["user"]
+    if params["subagent"] is None:
+        call = lambda name, **arguments: call_kedi(  # noqa: E731
+            "tool/call", {"runId": run_id, "name": name, "arguments": arguments}
+        )
+        work = "Count tokens." if "Count" in user else "Wait for input."
+        if "Interrupt" in user:
+            work = "Wait for interrupt."
+        started = call("delegate_task", subagent="worker", task=work, background=True)
+        task_id = started["result"]["result"]["run_id"]
+        replies: dict[str, Any] = {}
+        if work != "Count tokens.":
+            replies["sent"] = call(
+                "send_subagent_input",
+                task_id=task_id,
+                message="Use the blue one.",
+                interrupt="Interrupt" in user,
+            )
+        replies["waited"] = call("wait_subagent", run_id=task_id)
+        send({"id": request_id, "result": {"text": json.dumps(replies)}})
+        return
+    call_kedi("budget/admit", {"runId": run_id, "dimension": "request"})
+    seen: dict[str, Any] = {"user": user, "session": params["session"]}
+    if user == "Wait for input.":
+        until(lambda: run_id in _inputs)
+        with _live_lock:
+            batches = _inputs.pop(run_id, [])
+        for input_id, _items in batches:
+            send({"id": input_id, "result": {"delivered": True}})
+        seen["inputs"] = [item["text"] for _, items in batches for item in items]
+    elif user == "Wait for interrupt.":
+        until(lambda: run_id in _interrupted)
+        error = {"code": -32006, "message": "interrupted", "data": {"state": {"partial": run_id}}}
+        send({"id": request_id, "error": error})
+        return
+    elif user == "Count tokens.":
+        call_kedi("budget/admit", {"runId": run_id, "dimension": "request"})
+        for _ in range(2):
+            send(
+                {
+                    "method": "run/usage",
+                    "params": {"runId": run_id, "inputTokens": 3, "outputTokens": 1},
+                }
+            )
+        # Usage for a run that is not in progress is dropped.
+        send({"method": "run/usage", "params": {"runId": "gone", "inputTokens": 50}})
+    result: dict[str, Any] = {"text": json.dumps(seen), "usage": {"requests": 9, "inputTokens": 99}}
+    if params["session"] is not None:
+        result["state"] = {"after": run_id}
+    send({"id": request_id, "result": result})
+
+
 def unadmitted_retry(request_id: int, params: dict[str, Any]) -> None:
     """Admit the first model request only, and retry it once when the endpoint fails it."""
 
@@ -190,6 +267,9 @@ def run(request_id: int, params: dict[str, Any]) -> None:
     user = params["user"]
     if SCENARIO == "retries-unadmitted":
         unadmitted_retry(request_id, params)
+        return
+    if SCENARIO == "live":
+        live_probe(request_id, params)
         return
     if SCENARIO in ("subagents", "subagents-stateless", "subagents-die"):
         subagent_probe(request_id, params)
@@ -388,6 +468,15 @@ def main() -> None:
             threading.Thread(
                 target=run, args=(message["id"], message["params"]), daemon=True
             ).start()
+        elif method == "run/input" and SCENARIO != "live":
+            send({"id": message["id"], "error": {"code": -32601, "message": "no live input"}})
+        elif method == "run/input":
+            with _live_lock:
+                runs = _inputs.setdefault(message["params"]["runId"], [])
+                runs.append((message["id"], message["params"]["items"]))
+        elif method == "run/interrupt":
+            with _live_lock:
+                _interrupted.add(message["params"]["runId"])
         elif method == "run/cancel":
             sys.stderr.write(f"cancel {message['params']['runId']}\n")
             sys.stderr.flush()

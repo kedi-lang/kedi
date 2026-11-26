@@ -48,6 +48,9 @@ it has not exited within the timeout.
 | `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds` |
 | `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
+| `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
+| `run/interrupt` | Kedi → bridge (notification) | `runId` | — ; the run answers with `-32006` |
+| `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
 | `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
@@ -72,11 +75,13 @@ backend name is refused, and the process is stopped.
 | `governed` | every model request the backend makes goes through `budget/admit` first; enables `request_limit` (see [Budgets](#budgets)) |
 | `nativeTools` | the backend runs tools of its own besides Kedi's, and asks `approval/request` before each call (see [Approval](#approval)) |
 | `subagents` | Kedi may run its children on the bridge (see [Subagents](#subagents)); needs `governed` |
+| `liveInput` | the bridge takes input for a running run with `run/input`; needs `subagents` |
+| `interrupt` | the bridge stops an attempt on `run/interrupt`; needs `liveInput` |
+| `usage` | the bridge sends `run/usage` for every model request; enables `token_usage`, so children can have token limits |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
-before sending anything. Version 1 has no live input: a bridge cannot enable
-it by advertising it.
+before sending anything.
 
 Without `nativeStructuredOutput` or `nativeToolCalling`, Kedi adds its
 `protocol.output` and `protocol.tools` parts to the system text (see
@@ -111,8 +116,13 @@ corrections.
 Report `usage` with the counts the backend measured: `requests`,
 `inputTokens`, `outputTokens`, `totalTokens`. A token count the bridge leaves
 out is unknown, not zero, and a run without `usage` has unknown counts; a
-missing `requests` is one. Bridges do not support `token_usage` yet: a run's
-usage arrives once, when it ends.
+missing `requests` is one.
+
+With `usage`, send `run/usage` as each model request completes, with that
+request's counts. Kedi checks a child's token limits as each report arrives, so a
+limit stops the child after the request that crosses it, as in-process. The
+run's `usage` is then ignored. A governed bridge's requests are counted at
+`budget/admit`, so `run/usage` carries tokens only.
 
 ### `tool/call`
 
@@ -208,8 +218,23 @@ correction as a `continuation`, as for any run.
 With `sessions`, `continue_subagent` sends the state the bridge returned for the
 child's last completed run, in `session` with the child's `conversationId`; Kedi
 commits it only after accepting the run. Without `sessions`, the new task
-carries the earlier turns as text. Version 1 has no live input or interrupts
-for a running child.
+carries the earlier turns as text.
+
+### Live Input and Interrupts
+
+With `liveInput`, a parent's `send_subagent_input` and a child's
+`send_parent_message` reach a run while it is running. Kedi sends `run/input`
+with each item's `text`, Kedi's rendering of the message. Add each text as a
+user turn before the next model request, and answer `{"delivered": true}` once a
+model request carries it. Answer `{"delivered": false}` if the run ends first:
+Kedi then starts another attempt of the same task with the input in its prompt,
+and counts that input delivered when the attempt's first request is admitted.
+
+With `interrupt`, `send_subagent_input` with `interrupt: true` stops the child's
+current attempt. Kedi sends `run/interrupt`; stop the backend's turn and answer
+the run with `-32006`. In a session, put the conversation so far in the error's
+`data` as `{"state": ...}`: the next attempt, with the new input, resumes from
+it. An interrupt is not a cancel: the task goes on.
 
 ### Events
 
@@ -281,6 +306,7 @@ by URL.
 | `-32003` | the run stopped after `run/cancel` |
 | `-32004` | overloaded: Kedi has no capacity for another request right now |
 | `-32005` | unknown run: the `runId` names no run in progress |
+| `-32006` | interrupted: the run stopped after `run/interrupt`; the task continues in another attempt |
 
 Kedi admits 64 bridge requests at a time (`max_inbound_requests`); more are
 answered with `-32004`.
@@ -305,7 +331,9 @@ adapter = JsonRpcAdapter(reference_bridge_command("http://localhost:11434/v1"), 
 `mode="protocol"` uses Kedi's protocol parts instead of native tools and
 response formats, for endpoints without them. It is `governed`: it asks
 `budget/admit` before every request and makes no retries. It advertises
-`subagents` and runs children as ordinary runs. Start a new bridge from it.
+`subagents`, `liveInput`, `interrupt` and `usage`: it runs children as ordinary
+runs, adds live input before its next request, stops a fetch on `run/interrupt`,
+and reports each request's token counts. Start a new bridge from it.
 
 ## Conformance
 

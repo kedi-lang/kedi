@@ -133,15 +133,8 @@ def _delegate(factory: Any) -> tuple[Any, list[dict[str, Any]], list[Any]]:
 def test_a_child_runs_on_the_bridge_as_it_runs_in_process() -> None:
     local, bridge = _delegate(PydanticAdapter.for_conformance), _delegate(_bridge)
     assert local[0] == bridge[0] == "The worker says: the Pacific."
-    # The parent's request is the same, but for live input to children, which the bridge
-    # protocol does not carry yet.
-    (local_parent,), (bridge_parent,) = local[1], bridge[1]
-    live_input = [tool for tool in local_parent["tools"] if tool not in bridge_parent["tools"]]
-    assert live_input == ["send_subagent_input"]
-    assert bridge_parent == {**local_parent, "tools": bridge_parent["tools"]}
-    assert bridge_parent["tools"] == [
-        tool for tool in local_parent["tools"] if tool not in live_input
-    ]
+    # Kedi rendered the same parent request for both stacks.
+    assert bridge[1] == local[1]
     # The parent's two requests and the child's one, through either stack.
     assert len(bridge[2]) == len(local[2]) == 3
     # Kedi renders the child's request; both stacks send its system text and task as given.
