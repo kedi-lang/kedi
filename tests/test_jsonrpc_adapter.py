@@ -7,6 +7,7 @@ import base64
 import contextvars
 import json
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -2095,3 +2096,70 @@ def test_kedi_refuses_the_handshakes_the_protocol_fixtures_name(case: dict[str, 
         return
     with pytest.raises(JsonRpcError, match=re.escape(case["kediSays"])):
         JsonRpcAdapter([*command, json.dumps(case["handshake"])])
+
+
+def test_a_model_request_kedi_answers_with_an_error_falls_back_in_test_mode() -> None:
+    # A model/complete error is the model failing, as a failed fetch is: the bridge tries the
+    # next model. (Kedi's own test model stops the run when it raises; this drives the bridge
+    # over the wire, as kedi-lang/json-rpc's model-fallback fixture does.)
+    command = reference_bridge_command("http://127.0.0.1:9/v1")
+    bridge = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert bridge.stdin is not None and bridge.stdout is not None
+
+    def send(message: dict[str, Any]) -> None:
+        bridge.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        bridge.stdin.flush()
+
+    try:
+        send(
+            {
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": 1, "client": {"name": "test"}, "testModel": True},
+            }
+        )
+        assert "result" in json.loads(bridge.stdout.readline())
+        run_params = {
+            "runId": "r",
+            "callKind": "invoke",
+            "promptKind": "raw",
+            "model": "primary",
+            "fallbackModels": ["backup"],
+            "system": None,
+            "instructionParts": [],
+            "user": "Hi.",
+            "userContent": None,
+            "output": None,
+            "tools": [],
+            "continuation": None,
+            "session": None,
+            "subagent": None,
+        }
+        send({"id": 2, "method": "run", "params": run_params})
+        models = []
+        while True:
+            message = json.loads(bridge.stdout.readline())
+            if message.get("method") == "budget/admit":
+                send({"id": message["id"], "result": {"admitted": True}})
+            elif message.get("method") == "model/complete":
+                models.append(message["params"]["model"])
+                if message["params"]["model"] == "primary":
+                    send(
+                        {
+                            "id": message["id"],
+                            "error": {"code": -32002, "message": "primary is down"},
+                        }
+                    )
+                else:
+                    reply = {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "text": "from backup"}],
+                    }
+                    send({"id": message["id"], "result": {"message": reply}})
+            elif message.get("id") == 2:
+                assert message.get("result", {}).get("text") == "from backup", message
+                break
+        assert models == ["primary", "backup"]
+    finally:
+        bridge.stdin.close()
+        bridge.wait(timeout=10)
