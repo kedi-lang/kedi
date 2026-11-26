@@ -60,7 +60,61 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = ["tools"]
     elif SCENARIO == "text-only":
         result["capabilities"] = {"media": True, "events": True}
+    elif SCENARIO in ADMISSION:
+        result["capabilities"] = {**CAPABILITIES, **ADMISSION[SCENARIO]}
     return result
+
+
+ADMISSION = {
+    "governed": {"governed": True, "nativeTools": True},
+    "governed-kedi-tools": {"governed": True},
+    "native-ungoverned": {"nativeTools": True},
+    "abandon-approval": {"nativeTools": True},
+    # Claims governed, then retries a failed request without asking Kedi.
+    "retries-unadmitted": {"governed": True},
+}
+
+
+def admission_probe(request_id: int, params: dict[str, Any]) -> None:
+    """Ask for each admission once, and report Kedi's answers as the run's text."""
+
+    run_id = params["runId"]
+    replies = {"request": call_kedi("budget/admit", {"runId": run_id, "dimension": "request"})}
+    if replies["request"].get("result", {}).get("admitted") is False:
+        send({"id": request_id, "error": {"code": -32002, "message": "the budget is exhausted"}})
+        return
+    shell = {"runId": run_id, "tool": "shell", "arguments": {"command": "ls"}}
+    replies |= {
+        "tool attempt": call_kedi("budget/admit", {"runId": run_id, "dimension": "toolAttempt"}),
+        "bad dimension": call_kedi("budget/admit", {"runId": run_id, "dimension": "tokens"}),
+        "approval": call_kedi("approval/request", {**shell, "risk": "mutating"}),
+        "bad risk": call_kedi("approval/request", {**shell, "risk": "harmless"}),
+    }
+    send({"id": request_id, "result": {"text": json.dumps(replies, sort_keys=True)}})
+
+
+def unadmitted_retry(request_id: int, params: dict[str, Any]) -> None:
+    """Admit the first model request only, and retry it once when the endpoint fails it."""
+
+    import urllib.error
+    import urllib.request
+
+    call_kedi("budget/admit", {"runId": params["runId"], "dimension": "request"})
+    body = {"model": "m", "messages": [{"role": "user", "content": params["user"]}]}
+    post = urllib.request.Request(
+        f"{sys.argv[2]}/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"content-type": "application/json"},
+    )
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(post, timeout=10) as response:
+                message = json.load(response)["choices"][0]["message"]
+            send({"id": request_id, "result": {"text": message["content"]}})
+            return
+        except urllib.error.HTTPError:
+            if attempt:
+                send({"id": request_id, "error": {"code": -32002, "message": "endpoint failed"}})
 
 
 def kedi_tools(params: dict[str, Any]) -> list[str]:
@@ -69,6 +123,24 @@ def kedi_tools(params: dict[str, Any]) -> list[str]:
 
 def run(request_id: int, params: dict[str, Any]) -> None:
     user = params["user"]
+    if SCENARIO == "retries-unadmitted":
+        unadmitted_retry(request_id, params)
+        return
+    if SCENARIO == "abandon-approval":
+        # Answer the run while Kedi is still deciding an approval: Kedi cancels the decision.
+        def wait_for_approval() -> None:
+            shell = {"tool": "shell", "arguments": {}, "risk": "mutating"}
+            reply = call_kedi("approval/request", {"runId": params["runId"], **shell})
+            sys.stderr.write(f"approval reply {reply.get('error', {}).get('code')}\n")
+            sys.stderr.flush()
+
+        threading.Thread(target=wait_for_approval, daemon=True).start()
+        time.sleep(0.2)
+        send({"id": request_id, "result": {"text": "answered early"}})
+        return
+    if SCENARIO in ADMISSION:
+        admission_probe(request_id, params)
+        return
     if SCENARIO == "garbage":
         sys.stdout.write("hello from a stray print\n")
         sys.stdout.flush()

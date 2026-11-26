@@ -1,5 +1,10 @@
 # JSON-RPC Bridges
 
+!!! warning "Experimental"
+    The protocol is still changing: version 1 gains the capabilities Kedi's
+    in-process adapters have, each in its own message. Until Kedi declares it
+    stable, a release may change it without a compatibility period.
+
 `JsonRpcAdapter` connects Kedi to a backend written in any language. The
 backend integration, a *bridge*, is a process that speaks Kedi's JSON-RPC
 protocol on its stdio. Kedi renders every piece of text the model reads; the
@@ -44,6 +49,8 @@ it has not exited within the timeout.
 | `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
+| `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension`, `limit`, `consumed`, `scopeDepth`; see [Budgets](#budgets) |
+| `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
 | `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
 | `shutdown` | Kedi → bridge | `{}` | `{}`; then Kedi closes stdin |
 
@@ -62,6 +69,8 @@ backend name is refused, and the process is stopped.
 | `events` | the bridge sends `run/event` notifications |
 | `mediaInput` | the bridge sends prompt media to its model; `mediaKinds` lists the kinds (`image`, `audio`, `video`, `document`) |
 | `sessions` | the bridge continues conversations from the `state` Kedi hands back; enables `> history: enabled` |
+| `governed` | every model request the backend makes goes through `budget/admit` first; enables `request_limit` (see [Budgets](#budgets)) |
+| `nativeTools` | the backend runs tools of its own besides Kedi's, and asks `approval/request` before each call (see [Approval](#approval)) |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
@@ -113,6 +122,52 @@ budget, stops the run: Kedi answers the call with `-32002`, sends
 with `-32003`. Calls run concurrently on
 the run's event loop, so a tool may itself start a nested run on the same
 bridge while the outer run waits.
+
+### Budgets
+
+A [run budget](../runtime/run-budgets.md) stops a step before it starts, so
+the bridge asks Kedi before each step it takes:
+
+- `dimension: "request"` before every request to its model;
+- `dimension: "toolAttempt"` before each attempt of one of its own tools, with
+  `nativeTools`.
+
+Kedi charges the step to the budget of the Kedi call that started the run and
+answers `{"admitted": true}`. When the budget is spent it answers
+`{"admitted": false, ...}`, sends `run/cancel`, and fails the run with
+`RunBudgetExceeded`. The bridge then skips the step and ends the run with an
+error; if it takes the step anyway, the run still fails. Kedi admits the
+attempts of its own tools at `tool/call`, so a bridge never asks for them.
+
+`governed` is a promise about the whole backend: every model request goes
+through `budget/admit`, including SDK retries, tool-loop turns, native
+subagents and internal calls such as summarization. A path the bridge cannot
+route that way must be disabled, or the bridge must not advertise `governed`.
+This is the bridge's form of [Provider Retries Must Be
+Observable](../runtime/run-budgets.md#provider-retries-must-be-observable).
+
+Without `governed`, Kedi refuses `request_limit` before the run. Without
+`governed`, a bridge with `nativeTools` also cannot enforce
+`tool_attempt_limit`, so Kedi refuses it.
+
+### Approval
+
+With `nativeTools`, the bridge asks before each call of one of its own tools:
+
+```json
+{"runId": "r1", "callId": "c1", "tool": "shell", "arguments": {"command": "ls"},
+ "risk": "mutating", "description": "Run a shell command."}
+```
+
+`risk` is `read_only`, `mutating` or `sensitive`, as for Kedi tools: Kedi
+allows `read_only` calls and applies the run's approval policy to the rest.
+Without a policy, the call is denied. The answer is `allow`, `deny` with a
+`reason` for the model, or `edit` with the `arguments` to run instead. When the
+edited arguments are riskier, ask again before running them. A cancelled
+approval prompt or a failing approval handler stops the run, as for Kedi tools.
+
+Kedi's own tools need no `approval/request`: Kedi applies the policy at
+`tool/call`.
 
 ### Events
 
@@ -206,7 +261,9 @@ adapter = JsonRpcAdapter(reference_bridge_command("http://localhost:11434/v1"), 
 ```
 
 `mode="protocol"` uses Kedi's protocol parts instead of native tools and
-response formats, for endpoints without them. Start a new bridge from it.
+response formats, for endpoints without them. It is `governed`: it asks
+`budget/admit` before every request and makes no retries. Start a new bridge
+from it.
 
 ## Conformance
 

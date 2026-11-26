@@ -11,14 +11,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
+import copy
 import inspect
 import shlex
-from collections.abc import Coroutine, Generator, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Self
+from types import MappingProxyType
+from typing import Any, Self, cast
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
@@ -27,7 +29,15 @@ from pydantic_core import to_jsonable_python
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
 from ....media import MediaError
-from ...approvals.policy import ToolApprovalDenied
+from ....run_budget import BudgetDimension, RunBudgetExceeded, admit_run_operation
+from ...approvals.policy import (
+    ApprovalDecision,
+    ApprovalPolicy,
+    ApprovalRequest,
+    ToolApprovalDenied,
+    ToolRisk,
+    resolve_tool_approval_async,
+)
 from ...conversation import AdapterConversationContext
 from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
@@ -50,13 +60,16 @@ from ...tools.execution import validate_tool_arguments
 from ...tools.specs import ToolSpec
 from .connection import Connection
 from .protocol import (
+    BUDGET_DIMENSIONS,
     CANCELLED,
     CAPABILITIES,
     INVALID_PARAMS,
     MEDIA_KINDS,
     METHOD_NOT_FOUND,
+    NATIVE_TOOLS,
     PROTOCOL_VERSION,
     RUN_FAILED,
+    TOOL_RISKS,
     UNKNOWN_RUN,
     UNSUPPORTED,
     JsonObject,
@@ -89,6 +102,16 @@ class _Run:
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
+    def stop(self, failure: BaseException) -> None:
+        """Kedi ends the run with ``failure``: a budget, a cancelled approval, a fatal tool."""
+
+        if self.failure is None:
+            self.failure = failure
+
+
+_Handler = Callable[[int | str, _Run], Coroutine[Any, Any, None]]
+"""Serves one bridge request for a run; started on the run's loop, in its context."""
+
 
 class JsonRpcAdapter:
     """An adapter whose backend is a bridge process speaking Kedi's JSON-RPC protocol."""
@@ -103,6 +126,8 @@ class JsonRpcAdapter:
         supports_stream_events=None,
         supports_media_input=None,
         supports_stateful_history=None,
+        supports_request_budget=None,
+        supports_tool_attempt_budget=None,
         negotiated_capabilities=frozenset(
             {
                 "structured_output",
@@ -111,6 +136,8 @@ class JsonRpcAdapter:
                 "stream_events",
                 "media_input",
                 "stateful_history",
+                "request_budget",
+                "tool_attempt_budget",
             }
         ),
         supports_profile_override=True,
@@ -166,10 +193,12 @@ class JsonRpcAdapter:
                 {"protocolVersion": PROTOCOL_VERSION, "client": {"name": "kedi"}},
                 timeout=initialize_timeout,
             )
-            self.kind, self.backend, self.capabilities, self.media_kinds = _negotiate(handshake)
+            peer = _negotiate(handshake)
         except BaseException:
             self._connection.close(timeout=1)
             raise
+        self.kind, self.backend, self.capabilities = peer.kind, peer.backend, peer.capabilities
+        self.media_kinds, self.native_tools = peer.media_kinds, peer.native_tools
 
     @classmethod
     async def launch(cls, command: Sequence[str], **options: Any) -> Self:
@@ -411,12 +440,36 @@ class JsonRpcAdapter:
         return result
 
     def _on_request(self, request_id: int | str, method: str, params: JsonObject) -> None:
-        """A bridge request, on the reader thread: start it as a task on the run's loop."""
+        """A bridge request, on the reader thread: start it as a task on the run's loop.
 
-        if method != "tool/call":
-            error = JsonRpcError(METHOD_NOT_FOUND, f"Kedi does not handle {method!r}")
+        The task runs in the run's context, so Kedi's run budget, approval policies and
+        observers are the ones of the Kedi call that started the run.
+        """
+
+        parse = {
+            "tool/call": self._parse_tool_call,
+            "budget/admit": self._parse_admission,
+            "approval/request": self._parse_approval,
+        }.get(method)
+        try:
+            if parse is None:
+                raise JsonRpcError(METHOD_NOT_FOUND, f"Kedi does not handle {method!r}")
+            handle = parse(params)
+            run = self._runs.get(params["runId"])
+            if run is None:
+                raise JsonRpcError(UNKNOWN_RUN, f"{method} names no run in progress")
+        except JsonRpcError as error:
             self._connection.respond(request_id, error=error)
             return
+        coroutine = handle(request_id, run)
+        try:
+            run.loop.call_soon_threadsafe(lambda: run.context.run(run.start, coroutine))
+        except RuntimeError:  # the run's loop closed: the run is over
+            coroutine.close()
+            error = JsonRpcError(UNKNOWN_RUN, f"{method} names a run that has ended")
+            self._connection.respond(request_id, error=error)
+
+    def _parse_tool_call(self, params: JsonObject) -> _Handler:
         run_id, name = params.get("runId"), params.get("name")
         arguments = params.get("arguments", {})
         if (
@@ -424,23 +477,54 @@ class JsonRpcAdapter:
             or not isinstance(name, str)
             or not isinstance(arguments, dict)
         ):
-            error = JsonRpcError(
+            raise JsonRpcError(
                 INVALID_PARAMS, "tool/call needs a string runId and name, and object arguments"
             )
-            self._connection.respond(request_id, error=error)
-            return
-        run = self._runs.get(run_id)
-        if run is None:
-            error = JsonRpcError(UNKNOWN_RUN, "tool/call names no run in progress")
-            self._connection.respond(request_id, error=error)
-            return
-        coroutine = self._call_tool(request_id, run, name, arguments)
-        try:
-            run.loop.call_soon_threadsafe(lambda: run.context.run(run.start, coroutine))
-        except RuntimeError:  # the run's loop closed: the run is over
-            coroutine.close()
-            error = JsonRpcError(UNKNOWN_RUN, "tool/call names a run that has ended")
-            self._connection.respond(request_id, error=error)
+        return lambda request_id, run: self._call_tool(request_id, run, name, arguments)
+
+    def _parse_admission(self, params: JsonObject) -> _Handler:
+        if not self.capabilities.supports_request_budget:
+            raise JsonRpcError(UNSUPPORTED, "budget/admit needs the governed capability")
+        dimension = params.get("dimension")
+        if not isinstance(params.get("runId"), str) or dimension not in BUDGET_DIMENSIONS:
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "budget/admit needs a string runId and a dimension: request or toolAttempt",
+            )
+        if dimension == "toolAttempt" and not self.native_tools:
+            raise JsonRpcError(
+                UNSUPPORTED,
+                "toolAttempt admission is for the bridge's own tools (nativeTools); "
+                "Kedi admits its tools at tool/call",
+            )
+        return lambda request_id, run: self._admit(request_id, run, dimension)
+
+    def _parse_approval(self, params: JsonObject) -> _Handler:
+        if not self.native_tools:
+            raise JsonRpcError(UNSUPPORTED, "approval/request needs the nativeTools capability")
+        tool, arguments = params.get("tool"), params.get("arguments")
+        risk, description = params.get("risk"), params.get("description")
+        if (
+            not isinstance(params.get("runId"), str)
+            or not isinstance(tool, str)
+            or not isinstance(arguments, dict)
+            or risk not in TOOL_RISKS
+            or not isinstance(description, str | None)
+        ):
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                "approval/request needs a string runId and tool, object arguments, a risk "
+                f"of {', '.join(sorted(TOOL_RISKS))}, and an optional string description",
+            )
+        request = ApprovalRequest.create(
+            tool_name=tool,
+            arguments=arguments,
+            risk=cast(ToolRisk, risk),
+            adapter_shortname=self.shortname,
+            description=description,
+            metadata={"source": "jsonrpc-bridge", "backend": self.backend["name"]},
+        )
+        return lambda request_id, run: self._approve(request_id, run, request)
 
     def _on_notification(self, method: str, params: JsonObject) -> None:
         """A bridge notification, on the reader thread: a run event, in stream order."""
@@ -491,23 +575,104 @@ class JsonRpcAdapter:
             message = correctable_tool_error(tool, exc)
             if message is None:
                 # Not the model's to correct (a budget, a bug): Kedi stops the run with it.
-                run.failure = exc
-                error = JsonRpcError(RUN_FAILED, f"Kedi stopped the run: {type(exc).__name__}")
-                self._connection.respond(request_id, error=error)
-                self._connection.notify("run/cancel", {"runId": run.run_id})
+                self._stop(request_id, run, exc)
                 return
             reply = {"ok": False, "error": message}
         self._connection.respond(request_id, result=reply)
+
+    async def _admit(self, request_id: int | str, run: _Run, dimension: str) -> None:
+        """Charge a step the bridge is about to take to the run's budget, as in-process."""
+
+        try:
+            admit_run_operation(cast(BudgetDimension, BUDGET_DIMENSIONS[dimension]))
+        except RunBudgetExceeded as exc:
+            run.stop(exc)
+            self._connection.respond(
+                request_id,
+                result={
+                    "admitted": False,
+                    "dimension": dimension,
+                    "limit": exc.limit,
+                    "consumed": exc.consumed,
+                    "scopeDepth": exc.scope_depth,
+                },
+            )
+            # The bridge must skip the step and end the run; cancel it in case it does not.
+            self._connection.notify("run/cancel", {"runId": run.run_id})
+            return
+        self._connection.respond(request_id, result={"admitted": True})
+
+    async def _approve(self, request_id: int | str, run: _Run, request: ApprovalRequest) -> None:
+        """Decide a call of the bridge's own tool with the policies Kedi's tools get."""
+
+        try:
+            decision = await _decide_approval(self._approval_policies(), request)
+            reply: JsonObject = {"decision": decision.decision}
+            if decision.reason is not None:
+                reply["reason"] = decision.reason
+            if decision.edit_arguments is not None:
+                reply["arguments"] = to_jsonable_python(dict(decision.edit_arguments), fallback=str)
+        except asyncio.CancelledError:
+            self._connection.respond(request_id, error=JsonRpcError(CANCELLED, "the run ended"))
+            raise
+        except Exception as exc:  # a cancelled approval or a failing handler ends the run
+            self._stop(request_id, run, exc)
+            return
+        self._connection.respond(request_id, result=reply)
+
+    def _approval_policies(self) -> tuple[ApprovalPolicy | None, ...]:
+        return (self.active_profile.approval,)
+
+    def _stop(self, request_id: int | str, run: _Run, failure: BaseException) -> None:
+        """End the run with Kedi's ``failure`` and tell the bridge why its request failed."""
+
+        run.stop(failure)
+        error = JsonRpcError(RUN_FAILED, f"Kedi stopped the run: {type(failure).__name__}")
+        self._connection.respond(request_id, error=error)
+        self._connection.notify("run/cancel", {"runId": run.run_id})
+
+
+async def _decide_approval(
+    policies: Sequence[ApprovalPolicy | None], request: ApprovalRequest
+) -> ApprovalDecision:
+    """Every policy decides in turn, as ``with_approval_policies`` chains Kedi's tools.
+
+    An edit passes the edited arguments to the next policy. The bridge declared the risk, so
+    a riskier edit is the bridge's to ask about again.
+    """
+
+    arguments = dict(request.arguments)
+    reasons: list[str] = []
+    for policy in policies:
+        current = replace(request, arguments=MappingProxyType(copy.deepcopy(arguments)))
+        decision = await resolve_tool_approval_async(policy, current)
+        if decision.decision == "deny":
+            return decision
+        if decision.reason is not None:
+            reasons.append(decision.reason)
+        if decision.edit_arguments is not None:
+            arguments = dict(decision.edit_arguments)
+    reason = "; ".join(reasons) or None
+    if arguments != dict(request.arguments):
+        return ApprovalDecision.edit(arguments, reason=reason)
+    return ApprovalDecision.allow(reason=reason)
 
 
 def _call(tool: ToolSpec, arguments: JsonObject) -> Any:
     return tool.fn(**validate_tool_arguments(tool, arguments))
 
 
-def _negotiate(
-    handshake: JsonObject,
-) -> tuple[AgentAdapterKind, JsonObject, AdapterCapabilities, frozenset[str]]:
-    """The bridge's kind, identity, capabilities and media kinds, or what is wrong."""
+@dataclass(frozen=True)
+class _Peer:
+    kind: AgentAdapterKind
+    backend: JsonObject
+    capabilities: AdapterCapabilities
+    media_kinds: frozenset[str]
+    native_tools: bool
+
+
+def _negotiate(handshake: JsonObject) -> _Peer:
+    """What the bridge is and what it does, from its ``initialize`` answer, or what is wrong."""
 
     version = handshake.get("protocolVersion")
     if version != PROTOCOL_VERSION:
@@ -531,6 +696,8 @@ def _negotiate(
     if flags["supports_media_input"] and not kinds:
         raise JsonRpcError(INVALID_PARAMS, "mediaInput needs mediaKinds")
     tools = flags["supports_tool_registration"]
+    governed = flags["supports_request_budget"]
+    native_tools = advertised.get(NATIVE_TOOLS) is True
     capabilities = AdapterCapabilities(
         supports_structured_output=flags["supports_structured_output"],
         supports_tool_registration=tools,
@@ -540,13 +707,17 @@ def _negotiate(
         supports_stream_events=flags["supports_stream_events"],
         supports_media_input=flags["supports_media_input"],
         supports_stateful_history=flags["supports_stateful_history"],
+        # Kedi admits each attempt of its own tools at tool/call; the bridge's own tools only
+        # count when it asks first.
+        supports_request_budget=governed,
+        supports_tool_attempt_budget=governed or not native_tools,
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,
         supports_settings=False,
         supports_mcp=False,
     )
-    return kind, backend, capabilities, frozenset(kinds)
+    return _Peer(kind, backend, capabilities, frozenset(kinds), native_tools)
 
 
 def _user_content(

@@ -172,6 +172,7 @@ def test_a_custom_adapter_that_forwards_render_passes(capabilities: AdapterCapab
         "tool-allow": "passed",
         "tool-deny": "passed",
         "media": "skipped",
+        "request-budget": "skipped",
     }
     assert report.harness_text == []
     assert report.as_dict()["not_covered"] == ["subagents"]
@@ -350,11 +351,14 @@ def test_built_in_adapters_conform(factory: Any) -> None:
 
 
 def test_pydantic_ai_on_anthropic_messages_conforms() -> None:
+    from anthropic import AsyncAnthropic
     from pydantic_ai.models.anthropic import AnthropicModel
     from pydantic_ai.providers.anthropic import AnthropicProvider
 
     def factory(base_url: str) -> PydanticAdapter:
-        provider = AnthropicProvider(base_url=base_url, api_key="conformance")
+        # A request budget counts every request: the client makes no hidden retries.
+        client = AsyncAnthropic(base_url=base_url, api_key="conformance", max_retries=0)
+        provider = AnthropicProvider(anthropic_client=client)
         return PydanticAdapter(AnthropicModel("conformance", provider=provider), request_retries=0)
 
     report = check_adapter(factory)

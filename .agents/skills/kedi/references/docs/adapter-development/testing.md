@@ -159,6 +159,11 @@ Each scenario runs one Kedi call in two variants with different text:
 | `claim` | a template condition |
 | `tool-allow`, `tool-deny` | a tool the model calls once, with `approval: allow` or `deny` |
 | `media` | an image prompt; runs only with `supports_media_input` |
+| `request-budget` | `request_limit: 1` with a tool call, then with a failing first request; runs only with `supports_request_budget` |
+
+Build the factory's client without SDK retries (`max_retries=0`). With retries
+on, Kedi cannot count every request, refuses `request_limit`, and the
+`request-budget` scenario fails.
 
 Subagents are not covered yet; the report says so. For every recorded request
 the kit checks that:
@@ -169,6 +174,9 @@ the kit checks that:
   unchanged;
 - the program returns the scripted value, and a tool's result reaches the model
   only when approval allows the call;
+- a request the budget refuses never reaches the endpoint: the second request of
+  the tool call fails with `RunBudgetExceeded`, and a failed first request is
+  not retried behind the budget's back;
 - text Kedi did not write is the same in both variants. A fixed harness prompt
   passes and the report lists it; text that depends on the request, such as
   "Fill these fields: …", fails.

@@ -15,7 +15,7 @@ import pytest
 
 from kedi.agent_adapter import JsonRpcAdapter, PydanticAdapter, RenderedRequest
 from kedi.agent_adapter.adapters.jsonrpc import reference_bridge_command
-from kedi.agent_adapter.conformance.check import SCENARIOS, Scenario, _run
+from kedi.agent_adapter.conformance.check import ANY_ERROR, SCENARIOS, Scenario, Variant, _run
 from kedi.agent_adapter.conformance.endpoint import RecordingEndpoint
 
 pytestmark = pytest.mark.skipif(
@@ -41,9 +41,12 @@ def _summary(rendered: RenderedRequest) -> dict[str, Any]:
     }
 
 
-def _outcome(run: Any) -> tuple[str | None, Any]:
+def _outcome(run: Any, variant: Variant) -> tuple[str | bool | None, Any]:
     error = run.error
     cause = getattr(error, "original", None) or error
+    if variant.error == ANY_ERROR:
+        # A failed model request: each stack reports it in its own error type.
+        return (cause is not None, run.value)
     return (type(cause).__name__ if cause is not None else None, run.value)
 
 
@@ -61,8 +64,10 @@ def test_the_bridge_and_pydantic_ai_agree(scenario: Scenario) -> None:
             name: [_run(endpoint, factory, variant) for variant in scenario.variants]
             for name, factory in FACTORIES.items()
         }
-    for local, bridge in zip(runs["pydantic"], runs["jsonrpc"], strict=True):
+    for variant, local, bridge in zip(
+        scenario.variants, runs["pydantic"], runs["jsonrpc"], strict=True
+    ):
         assert local.rendered and local.exchanges, "the scenario reached no model"
-        assert _outcome(bridge) == _outcome(local)
+        assert _outcome(bridge, variant) == _outcome(local, variant)
         assert [_summary(r) for r in bridge.rendered] == [_summary(r) for r in local.rendered]
         assert len(bridge.exchanges) == len(local.exchanges)

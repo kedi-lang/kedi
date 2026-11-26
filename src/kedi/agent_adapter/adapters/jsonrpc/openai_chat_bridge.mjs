@@ -6,6 +6,9 @@
 // or nothing extra (--mode protocol: Kedi's protocol parts are already in the system text),
 // and calls Kedi tools back with tool/call. It writes no instructions of its own.
 //
+// It is governed: it asks Kedi (budget/admit) before every request to the endpoint, and
+// makes no requests of its own besides those, retries included.
+//
 // Usage: node openai_chat_bridge.mjs --base-url URL [--mode native|protocol]
 //        [--api-key-env NAME] [--max-steps N]
 // stdout carries only protocol frames; diagnostics go to stderr.
@@ -53,7 +56,12 @@ function request(method, params) {
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
 }
 
-async function complete(body, signal) {
+async function complete(runId, body, signal) {
+  const admission = await request("budget/admit", { runId, dimension: "request" });
+  if (!admission.admitted) {
+    // Kedi fails the run with its RunBudgetExceeded; the request is never sent.
+    throw new RpcError(RUN_FAILED, `Kedi's ${admission.dimension} budget is exhausted`);
+  }
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
@@ -118,7 +126,7 @@ async function run(params, signal) {
     return { ...result, state: { messages: [...history, ...turn] } };
   };
   for (let step = 0; step < maxSteps; step++) {
-    const message = await complete(body, signal);
+    const message = await complete(params.runId, body, signal);
     if (native) {
       const calls = message.tool_calls ?? [];
       if (!calls.length) {
@@ -191,6 +199,7 @@ async function handle(message) {
           events: true,
           mediaInput: true,
           sessions: true,
+          governed: true,
         },
         mediaKinds: ["image"],
       },

@@ -26,6 +26,8 @@ class Script:
     kedi_tools: frozenset[str] = frozenset()
     tool: str | None = None
     arguments: dict[str, Any] = field(default_factory=dict)
+    fail_first: int = 0
+    """How many of the scenario's first requests get an HTTP 500, which an SDK may retry."""
 
 
 @dataclass(frozen=True)
@@ -65,7 +67,9 @@ class RecordingEndpoint:
                 if protocol is None:
                     self._send(404, {"error": f"unknown route {self.path}"})
                     return
-                endpoint._record(Exchange(protocol, body))
+                if endpoint._record(Exchange(protocol, body)):
+                    self._send(500, {"error": "conformance endpoint: scripted failure"})
+                    return
                 try:
                     answer = endpoint._answer(protocol, body)
                 except Exception as error:  # noqa: BLE001 - a failed answer reaches the adapter
@@ -104,9 +108,13 @@ class RecordingEndpoint:
             taken, self.exchanges = self.exchanges, []
         return taken
 
-    def _record(self, exchange: Exchange) -> None:
+    def _record(self, exchange: Exchange) -> bool:
+        """Record a request; true when the script fails it."""
+
         with self._lock:
             self.exchanges.append(exchange)
+            script = self.script
+            return script is not None and len(self.exchanges) <= script.fail_first
 
     def _answer(self, protocol: Protocol, body: dict[str, Any]) -> dict[str, Any]:
         script = self.script
