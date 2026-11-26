@@ -45,7 +45,7 @@ Without them, Cactus sends a usage event to its servers on each extraction.
 
 ```bash
 python examples/local_extraction/run.py              # Needle 3, offline, 3 runs over 8 requests
-python examples/local_extraction/run.py --cloud google:gemini-3.8-flash
+python examples/local_extraction/run.py --cloud google:gemini-3.5-flash-lite
 ```
 
 The second command runs the same program, inputs and scoring on a cloud model. It is a
@@ -100,8 +100,23 @@ The template instructions are written for capable models, and they confuse a mod
 small. A typed raw invoke sends just the message. Describing each reason value also helped.
 The wrapper still sends Kedi's text unchanged: the program, not the transport, was changed.
 
-**Cloud comparison.** The cloud leg could not be measured on 2026-11-26. The free-tier Gemini
-quota answered 429 after one request.
+**Cloud comparison.** The same program, inputs and scoring ran on `gemini-3.5-flash-lite`
+on 2026-11-26, through the free tier:
+
+- **Calls completed.** The quota allowed 21 calls: one full pass over the 8 requests, then 13
+  more. It answered 429 to the rest.
+- **Accuracy.** Every completed call was schema-valid, with every field and the route right,
+  including the reasons Needle gets wrong.
+- **Latency.** The median was 1.4 s per request, about nine times Needle's.
+
+Quota errors are a runtime failure, not a model error, so they are reported apart from field
+accuracy.
+
+**Typed decisions.** For booleans, choices and probabilities with decision evidence, Kedi's
+existing local path is [Local Laya](https://docs.kedi-lang.org/agent-adapters/laya/). The
+refund reason, the field Needle gets wrong most often, is a finite choice of the kind Laya
+evaluates; this example does not measure Laya. It covers open fields such as names and
+amounts.
 
 ## Files
 

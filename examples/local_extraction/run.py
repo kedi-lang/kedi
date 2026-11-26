@@ -1,7 +1,7 @@
 """Score the refund program on the fixed set with a local model, or explicitly a cloud one.
 
     python examples/local_extraction/run.py                          # Cactus Needle 3, offline
-    python examples/local_extraction/run.py --cloud google:gemini-3.8-flash   # the same program, online
+    python examples/local_extraction/run.py --cloud google:gemini-3.5-flash-lite   # the same program, online
 
 The cloud run is a separate, explicit comparison; it is never a fallback.
 """
