@@ -73,6 +73,10 @@ class EmaLightning(LocalSpeech):
         return "ema-lightning"
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+        if self.voice is not None:
+            raise ValueError(
+                f"EMA Lightning has one voice; remove the voice setting {self.voice!r}"
+            )
         speech = _ema().say(text, seed=self.seed)
         return speech.audio, speech.sample_rate
 

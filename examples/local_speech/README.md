@@ -50,6 +50,10 @@ python examples/local_speech/run.py --lang en     # six English sentences, twice
 python examples/local_speech/roundtrip.py         # speak English, then transcribe it back
 ```
 
+**Offline check.** On 2026-11-26 all three commands above also ran with outbound networking
+denied, under `sandbox-exec -p '(version 1)(allow default)(deny network*)'`. They passed, with
+the same results. Phonon also loads from its cache without `HF_HUB_OFFLINE`.
+
 `run.py` writes each recording to `examples/local_speech/out/<lang>/NN.wav`. Play one with
 `afplay` on macOS or any audio player. It also writes `measurements.json`:
 
@@ -87,7 +91,7 @@ with punctuation removed, so "9:30" and "9.30" count as the same word.
 |---|---|---|
 | The meeting starts tomorrow at 9:30 on the 3rd floor. | The meeting starts tomorrow at 9.30 on the third floor. | 0.10 (formatting: 3rd/third) |
 | A refund of $1,250.75 has been issued to your account. | A refund of $1,250 and $75 has been issued to your account. | 0.30 |
-| The four other sentences | word for word | 0.00 |
+| The four other sentences | match after normalization | 0.00 |
 
 The refund is a real error. Phonon reads "1 thousand 250 dollars and 75 cents", and Whistle
 writes the cents as dollars.
@@ -113,7 +117,8 @@ measure.
 WAV and a good transcription are evidence, not a substitute.
 
 **Voices.** `Phonon(voice=...)` passes a voice to Phonon. Only the default voice is loaded
-unless you add one with `ptts`. EMA Lightning has a single voice.
+unless you add one with `ptts`. EMA Lightning has a single voice, and a voice setting for it
+is an error rather than silently ignored.
 
 ## Files
 

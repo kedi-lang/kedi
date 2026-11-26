@@ -88,3 +88,23 @@ def test_round_trip_scores_words_without_punctuation() -> None:
     assert roundtrip.word_error_rate(
         reference, roundtrip.words("The meeting starts at 9.30 on the third floor.")
     ) == pytest.approx(1 / 9)
+
+
+def test_ema_lightning_refuses_a_voice_it_does_not_have(speech_models: Any) -> None:
+    with pytest.raises(ValueError, match="EMA Lightning has one voice"):
+        speech_models.EmaLightning(voice="zeynep").synthesize("Merhaba")
+
+
+def test_peak_memory_is_reported_in_megabytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sys.path.insert(0, str(EXAMPLE))
+    try:
+        import run as speech_run
+    finally:
+        sys.path.remove(str(EXAMPLE))
+    usage = SimpleNamespace(ru_maxrss=512 * 2**20)
+    monkeypatch.setattr(speech_run.resource, "getrusage", lambda who: usage)
+    monkeypatch.setattr(speech_run.sys, "platform", "darwin")
+    assert speech_run.peak_rss_mb() == 512
+    usage.ru_maxrss = 512 * 2**10
+    monkeypatch.setattr(speech_run.sys, "platform", "linux")
+    assert speech_run.peak_rss_mb() == 512

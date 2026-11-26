@@ -33,6 +33,13 @@ HERE = Path(__file__).parent
 def speak(sentence: str) -> Audio: ...
 
 
+def peak_rss_mb() -> float:
+    """Peak resident memory of this process: ru_maxrss is bytes on macOS and KiB on Linux."""
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak / 2**20 if sys.platform == "darwin" else peak / 2**10
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lang", choices=("tr", "en"), required=True)
@@ -78,7 +85,7 @@ def main() -> None:
         "model": type(model).__name__,
         "platform": f"{platform.system()} {platform.machine()}, Python {platform.python_version()}",
         "cold_load_s": round(cold_load, 2),
-        "peak_rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 1),
+        "peak_rss_mb": round(peak_rss_mb(), 1),
         "repeatable_with_seed": repeatable,
         "recordings": rows,
     }
