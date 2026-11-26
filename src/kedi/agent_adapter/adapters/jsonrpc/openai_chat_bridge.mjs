@@ -93,7 +93,7 @@ async function complete(runId, body, models, signal) {
       // Kedi fails the run with its own error; the request is never sent.
       throw new RpcError(RUN_FAILED, admission.reason);
     }
-    if (testMode) return reported(runId, await testCompletion(runId, { ...body, model }));
+    if (testMode) return reported(runId, await testCompletion(runId, { ...body, model }, signal));
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
@@ -107,11 +107,21 @@ async function complete(runId, body, models, signal) {
   throw failure;
 }
 
-async function testCompletion(runId, body) {
-  // One request answered by Kedi's test model, in Kedi's schema both ways.
+function abortion(signal) {
+  // Rejects when the run is cancelled or interrupted, as an aborted fetch does.
+  return new Promise((_, reject) => {
+    const abort = () => reject(new DOMException("the run was stopped", "AbortError"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function testCompletion(runId, body, signal) {
+  // One request answered by Kedi's test model, in Kedi's schema both ways. A cancel or an
+  // interrupt stops waiting for the answer, as it stops a fetch.
   const [system, ...rest] = body.messages[0]?.role === "system" ? body.messages : [null, ...body.messages];
   const format = body.response_format?.json_schema;
-  const answer = await request("model/complete", {
+  const asked = request("model/complete", {
     runId,
     model: body.model,
     system: system?.content ?? null,
@@ -123,6 +133,7 @@ async function testCompletion(runId, body) {
     })),
     output: format ? { schema: format.schema, toolName: format.name } : null,
   });
+  const answer = await Promise.race([asked, abortion(signal)]);
   const parts = answer.message.parts;
   const text = parts.filter((part) => part.type === "text").map((part) => part.text).join("");
   const calls = parts

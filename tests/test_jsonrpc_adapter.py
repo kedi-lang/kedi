@@ -2056,3 +2056,28 @@ def test_a_test_model_still_running_when_the_run_ends_is_cancelled(adapters: lis
     adapters.append(adapter)
     assert adapter.invoke_sync(prompt="Answer early.") == "answered early"
     wait_for_stderr(adapter, f"model reply {CANCELLED}")
+
+
+def test_an_interrupt_stops_a_test_model_request_the_bridge_waits_on(adapters: list) -> None:
+    started = threading.Event()
+
+    async def slow(call: Any) -> str:
+        started.set()
+        await asyncio.sleep(30)
+        raise AssertionError("the interrupt should have stopped the request")
+
+    adapter = JsonRpcAdapter(reference_bridge_command("http://127.0.0.1:9/v1"), test_model=slow)
+    adapters.append(adapter)
+    control = LiveInput("child")
+    control.configure(input=True, interrupt=True)
+
+    async def attempt() -> None:
+        with live_input_scope(control):
+            running = asyncio.ensure_future(adapter.invoke(prompt="Take your time."))
+            await asyncio.to_thread(started.wait, 10)
+            control.admit("Stop.", sender_id="parent", interrupt=True)
+            await running
+
+    # In test mode the bridge waits on model/complete, not a fetch; the interrupt still stops it.
+    with pytest.raises(RunInterrupted):
+        asyncio.run(attempt())
