@@ -126,12 +126,17 @@ model wrapper.
 ### Setup
 
 ```bash
-brew install llama.cpp      # or a release build from github.com/ggml-org/llama.cpp
-hf download Qwen/Qwen3-VL-2B-Instruct-GGUF Qwen3VL-2B-Instruct-Q4_K_M.gguf \
-    mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf --revision 52d6c8ffea26cc873ac5ad116f8631268d7eb503
+uv venv .venv-local && source .venv-local/bin/activate
+uv pip install -e .                    # compare.py needs only Kedi
+brew install llama.cpp                 # or a release build from github.com/ggml-org/llama.cpp
+uvx --from huggingface_hub hf download Qwen/Qwen3-VL-2B-Instruct-GGUF \
+    Qwen3VL-2B-Instruct-Q4_K_M.gguf mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf \
+    --revision 52d6c8ffea26cc873ac5ad116f8631268d7eb503
 ```
 
-`hf` comes with `huggingface_hub`. The files land in `~/.cache/huggingface/hub`.
+The files land in `~/.cache/huggingface/hub`. Homebrew installs the current llama.cpp, which
+is newer than build 6970, the one measured here. For the cloud comparison, also run
+`uv pip install "pydantic-ai-slim[google]"` and set `GOOGLE_API_KEY`.
 
 ### Run
 
