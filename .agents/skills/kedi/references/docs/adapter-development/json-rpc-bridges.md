@@ -50,7 +50,7 @@ it has not exited within the timeout.
 | Method | Direction | Params | Result |
 |---|---|---|---|
 | `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) |
-| `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"media": ...}`, optional `usage`, and `state` in a session |
+| `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"content": [...]}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
 | `run/interrupt` | Kedi → bridge (notification) | `runId` | — ; the run answers with `-32006` |
@@ -150,9 +150,11 @@ bridge while the outer run waits.
 ### Media Output
 
 With `imageOutput`, `[img: Image] << Draw a cat.` reaches the bridge with
-`output` `{"media": "image"}`. Have the model draw, and answer with
-`{"media": {"kind": "image", "mediaType": "image/png", "data": "<base64>"}}`,
-or with a `url` instead of `data`. When the request holds images, or a tool
+`output` `{"media": "image"}`. Have the model draw, and answer with its
+`content`: the parts it made, in the layout of `userContent`, such as
+`[{"type": "text", "text": "Here it is."}, {"type": "media", "kind": "image",
+"mediaType": "image/png", "data": "<base64>"}]`, or a `url` instead of `data`.
+Kedi takes the one image part. When the request holds images, or a tool
 may return one, `output` also has `schema` and `toolName`: the model may then
 name one of the request's images instead, and the bridge answers
 `{"data": "<name>"}`. Kedi resolves the name to that image, as it does for any
@@ -161,8 +163,10 @@ media-typed value a model writes.
 With `audioOutput`, `[speech: Audio] << Read this aloud.` reaches the bridge
 with `output` `{"media": "audio", "voice": ...}`: `voice` is the profile's
 `> settings: voice`, or `null` for the model's own. The run has no tools and
-no media. Answer with `{"media": {"kind": "audio", "mediaType": "audio/wav",
-"data": "<base64>"}}`. Kedi fails a run whose `media` is of another kind.
+no media. Answer with `content` holding one `audio` part, for example
+`{"type": "media", "kind": "audio", "mediaType": "audio/wav", "data":
+"<base64>"}`. Kedi fails a run whose `content` holds no part of the kind asked
+for, or more than one.
 
 Without the capability, Kedi has the model name a request image for
 `[img: Image] <<`, as for any adapter that cannot draw, and refuses

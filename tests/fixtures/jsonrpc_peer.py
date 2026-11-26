@@ -291,18 +291,26 @@ def drawing(request_id: int, params: dict[str, Any]) -> None:
         send({"id": request_id, "result": {"text": json.dumps(_drawn)}})
         return
     _drawn.update(output=output, tools=[tool["name"] for tool in params["tools"]])
+    sound = {"type": "media", "kind": "audio", "mediaType": "audio/wav", "data": WAV}
+    drawn = {"type": "media", "kind": "image", "mediaType": "image/png", "data": PNG}
     answers = {
         "Pick one.": {"data": "photo"},
-        "Answer with sound.": {"media": {"kind": "audio", "mediaType": "audio/wav", "data": WAV}},
-        "Answer with garbage.": {"media": {"kind": "image", "data": "not base64!"}},
-        "Link it.": {"media": {"kind": "image", "url": "https://example.com/cat.png"}},
+        "Answer with sound.": {"content": [sound]},
+        "Answer with garbage.": {"content": [{**drawn, "data": "not base64!"}]},
+        "Draw two.": {"content": [drawn, drawn]},
+        "Answer with parts.": {"content": "not a list"},
+        "Link it.": {
+            "content": [{"type": "media", "kind": "image", "url": "https://example.com/cat.png"}]
+        },
     }
-    media = {"kind": output.get("media"), "mediaType": "image/png", "data": PNG}
-    if output.get("media") == "audio":
-        media = {"kind": "audio", "mediaType": "audio/wav", "data": WAV}
+    # The model's text may come with what it made.
+    made = [
+        {"type": "text", "text": "Here it is."},
+        sound if output.get("media") == "audio" else drawn,
+    ]
     if user.startswith("Pick one."):
         user = "Pick one."
-    send({"id": request_id, "result": answers.get(user, {"media": media})})
+    send({"id": request_id, "result": answers.get(user, {"content": made})})
 
 
 def kedi_tools(params: dict[str, Any]) -> list[str]:

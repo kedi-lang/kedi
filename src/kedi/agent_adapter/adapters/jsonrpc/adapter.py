@@ -1110,8 +1110,8 @@ def _check_answer(
     missing = required - run.called
     if missing:
         return None, required_tools_correction(missing, attempted=bool(missing & run.attempted))
-    if run.media is not None and "media" in result:
-        return _media(result["media"], run.media), None
+    if run.media is not None and "content" in result:
+        return _produced(result["content"], run.media), None
     if validator is None and accept is None:
         text = result.get("text")
         if not isinstance(text, str):
@@ -1132,21 +1132,31 @@ def _check_answer(
         return None, output_correction(exc)
 
 
-def _media(value: Any, kind: OutputMediaKind) -> Media:
-    """The image or audio a run answered with, as Kedi media."""
+def _produced(content: Any, kind: OutputMediaKind) -> Media:
+    """The one image or audio among a run's ``content`` parts, as Kedi media."""
 
     from ....media import Audio, Image
 
-    if not isinstance(value, dict) or value.get("kind") != kind:
-        raise JsonRpcError(INVALID_PARAMS, f"the run asked for {kind}; 'media' must be {kind}")
-    media_type = value.get("mediaType")
+    if not isinstance(content, list):
+        raise JsonRpcError(INVALID_PARAMS, "'content' must list text and media parts")
+    parts = [
+        part
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "media" and part.get("kind") == kind
+    ]
+    if len(parts) != 1:
+        raise JsonRpcError(
+            INVALID_PARAMS, f"the run asked for one {kind}; its 'content' holds {len(parts)}"
+        )
+    (part,) = parts
+    media_type = part.get("mediaType")
     cls = Image if kind == "image" else Audio
-    if isinstance(value.get("url"), str):
-        return cls.from_url(value["url"], media_type=media_type)
+    if isinstance(part.get("url"), str):
+        return cls.from_url(part["url"], media_type=media_type)
     try:
-        data = base64.b64decode(value["data"], validate=True)
+        data = base64.b64decode(part["data"], validate=True)
     except (KeyError, TypeError, ValueError) as exc:
-        raise JsonRpcError(INVALID_PARAMS, "'media' needs base64 'data' or a 'url'") from exc
+        raise JsonRpcError(INVALID_PARAMS, "a media part needs base64 'data' or a 'url'") from exc
     return cls.from_bytes(data, media_type)
 
 

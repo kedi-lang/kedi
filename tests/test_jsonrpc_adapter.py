@@ -1351,8 +1351,10 @@ def test_a_bridge_answers_with_the_media_it_was_asked_for(adapters: list) -> Non
     linked = draw("Link it.")
     assert isinstance(linked, Image) and linked.url == "https://example.com/cat.png"
     for prompt, message in (
-        ("Answer with sound.", "the run asked for image; 'media' must be image"),
-        ("Answer with garbage.", "'media' needs base64 'data' or a 'url'"),
+        ("Answer with sound.", "the run asked for one image; its 'content' holds 0"),
+        ("Draw two.", "the run asked for one image; its 'content' holds 2"),
+        ("Answer with parts.", "'content' must list text and media parts"),
+        ("Answer with garbage.", "a media part needs base64 'data' or a 'url'"),
     ):
         with pytest.raises(JsonRpcError, match=re.escape(message)):
             draw(prompt)

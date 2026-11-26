@@ -242,14 +242,18 @@ async function run(params, state) {
 function produced(media, message, output) {
   // The run's answer for a media output: the image or speech the model made, or, for an image
   // that may name one of the request, the name it wrote.
+  const text = message.content ? [{ type: "text", text: message.content }] : [];
   if (media === "audio" && message.audio?.data) {
-    return { media: { kind: "audio", mediaType: "audio/wav", data: message.audio.data } };
+    const part = { type: "media", kind: "audio", mediaType: "audio/wav", data: message.audio.data };
+    return { content: [...text, part] };
   }
   const url = message.images?.[0]?.image_url?.url;
   if (media === "image" && url) {
     const found = /^data:([^;,]+);base64,(.*)$/s.exec(url);
-    if (!found) return { media: { kind: "image", url } };
-    return { media: { kind: "image", mediaType: found[1], data: found[2] } };
+    const part = found
+      ? { type: "media", kind: "image", mediaType: found[1], data: found[2] }
+      : { type: "media", kind: "image", url };
+    return { content: [...text, part] };
   }
   if (media === "image" && output.schema && message.content) {
     try {

@@ -14,12 +14,14 @@ Kedi to bridge:
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
   instructionParts, user, userContent, output, tools, continuation, session, subagent}``
-  returns ``{text}``, ``{data}`` or ``{media}``, optionally
+  returns ``{text}``, ``{data}`` or ``{content}``, optionally
   with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
   toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
   schema?, toolName?}`` (the model draws an image; with ``schema`` it may instead name an image
   of its request, as ``data``) or ``{media: "audio", voice}`` (the model speaks; the run has
-  no tools). ``media`` is ``{kind, mediaType, data | url}``, ``data`` in base64. ``subagent`` is ``null``, or, for a child Kedi
+  no tools). ``content`` lists the answer's parts, as ``userContent`` does: ``{type: "text",
+  text}`` and ``{type: "media", kind, mediaType, data | url}``; a media output takes its one
+  part of that kind. ``subagent`` is ``null``, or, for a child Kedi
   runs on the bridge, ``{id, parentRunId, conversationId, name, limits}``: Kedi's run id for
   the child, the bridge run whose tool call started it, the child conversation, the child
   profile and its remaining limits. ``session`` is ``null``, or ``{id, turn, state}``:
