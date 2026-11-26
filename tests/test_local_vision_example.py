@@ -96,3 +96,27 @@ def test_the_ground_truth_matches_the_images() -> None:
     truth = json.loads((EXAMPLE / "receipts" / "truth.json").read_text())
     assert set(truth) == {path.stem for path in (EXAMPLE / "receipts").glob("*.png")}
     assert [key for key, receipt in truth.items() if not receipt["adds_up"]] == ["bakery"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> import: media\n~Total(total: float)\n[t: Total] << Read <<photo>>.\n= `t`\n",
+        "> import: media\n@shout(text: str) -> str:\n  > tool:\n      risk: read_only\n"
+        "  = `text.upper()`\n> use: shout\n[w] << Read <<photo>>.\n= <w>\n",
+    ],
+    ids=["typed capture", "program tool"],
+)
+def test_the_reader_refuses_typed_output_and_tools(reader: Any, source: str) -> None:
+    photo = Image.from_bytes((EXAMPLE / "receipts" / "cafe.png").read_bytes(), "image/png")
+    runtime = compile_program(
+        parse_program(source),
+        adapter=LangChainAdapter(reader.MirageReader()),
+        runtime_globals={"photo": photo},
+    )
+    try:
+        with pytest.raises(Exception, match="no tools and no typed output"):
+            runtime.run_main()
+    finally:
+        asyncio.run(runtime.aclose())
+    assert reader.seen == []

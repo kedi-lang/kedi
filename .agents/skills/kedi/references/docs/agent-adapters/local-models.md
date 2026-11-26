@@ -21,7 +21,7 @@ example has a README with setup, commands, evaluation sets and results.
 
 | Task | Model | Kedi surface | Joins as | Download | Measured |
 | --- | --- | --- | --- | --- | --- |
-| Typed fields from text | Cactus Needle 3 | `[refund: Refund] << ...` | Pydantic AI model | 34 MB | schema-valid 24/24, every field right 12/24, 0.16 s, 195 MB peak |
+| Typed fields from text | Cactus Needle 3 | `[refund: Refund] << ...` | Pydantic AI model | 34 MB | schema-valid 24/24, every field right 15/24, 0.16 s, 193 MB peak |
 | Reading text in images | Cactus Mirage | `[writing] << Read the writing in <<photo>>.` | LangChain, `image_inputs` | 21 MB | character error rate 0.002, 0.15 s, 267 MB peak |
 | Turkish speech | EMA Lightning | `[speech: Audio] << <sentence>` | LangChain, `audio_outputs` | 34 MB, plus PyTorch | real-time factor 0.064, 481 MB peak |
 | English speech | Phonon 31m | `[speech: Audio] << <sentence>` | LangChain, `audio_outputs` | 65 MB | real-time factor 0.081, 347 MB peak |
@@ -43,12 +43,15 @@ such as names and amounts, text in images, and speech.
 Each wrapper does only what its model does and refuses the rest with a clear
 error:
 
-- **Needle 3** answers only with structured output. It does not call Kedi's
-  tools, and an untyped `<<` prompt fails with a clear error.
-- **Mirage** is used only to read text, and it reads Latin script only. Its
-  form fields did not read receipts.
-- **The speech models and transcribers** take no tools. EMA Lightning has a
-  single voice, so a `voice` setting for it is an error.
+- **Needle 3** answers only with structured output. An untyped `<<` prompt or a
+  program tool from `> use:` fails. Kedi's artifact tools, offered to every
+  model, go unused.
+- **Mirage and the transcribers** answer with text. Their LangChain profiles
+  declare `tool_calling: False`, so Kedi offers them no tools, and a typed
+  capture or a program tool fails. Mirage is used only to read text, in Latin
+  script, and its form fields did not read receipts.
+- **The speech models** produce audio only. EMA Lightning has a single voice,
+  so a `voice` setting for it is an error.
 
 ## Writing for a Small Model
 
@@ -61,10 +64,16 @@ measurements:
   template capture 16/32.
 - **Describe the allowed values.** A `Literal` whose description explains each
   value raised the reason field from 10/24 to 15/24.
+- **Send the model only Kedi's request.** A wrapper that passes text to a small
+  model should take it from `current_request().render()` (see
+  [Rendered Request](../adapter-development/rendered-request.md)), not from the
+  framework's messages. Pydantic AI's messages also carry a transport note from
+  Kedi's Pydantic adapter. With that note, Needle read "1,299.00 euros" as 1.299
+  on every run; without it, every amount was right.
 - **Let the program decide.** The model reads; Kedi or Python code checks and
-  routes. In the examples, a refund goes to a person when its amount does not
-  appear in the message, and a receipt fails when its items do not add up.
-  These checks catch misreads such as "1,299.00" read as 1.299.
+  routes. In the examples, a refund goes to a person when its amount is not one
+  the message states in euros, and a receipt fails when its items do not add
+  up. Schema validation alone cannot catch these misreads.
 - **Measure before relying on it.** A consistent answer can still be wrong:
   Needle gave the same wrong reason on every run.
 
