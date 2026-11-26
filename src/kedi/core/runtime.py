@@ -93,6 +93,9 @@ class KediRuntime:
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
         self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}
+        # Adapters whose connection the runtime launched for a profile command; closed with it.
+        self._connection_adapters: dict[tuple[Any, ...], AgentAdapter[Any]] = {}
+        self._connection_lock = Lock()
         # Outstanding produce Futures are owned by one outer invocation. Concurrent runs on the
         # same runtime must never drain or surface one another's work.
         self._outstanding: dict[object, list[Any]] = {}
@@ -281,6 +284,10 @@ class KediRuntime:
             if runtime.conversation_state is None:
                 cleanups.append(runtime.artifacts.close)
             cleanups.append(lambda runtime=runtime: _tracing.clear_python_origins(runtime))
+            for adapter in runtime._connection_adapters.values():
+                # Connection adapters own a process and close it (AdapterFactory.owns_connection).
+                cleanups.append(cast("Any", adapter).aclose)
+            runtime._connection_adapters.clear()
         await _run_cleanups(cleanups)
 
     # Decorators
@@ -662,6 +669,10 @@ class KediRuntime:
                 raise RuntimeError("No adapter provided to KediRuntime")
             return self.adapter
 
+        from kedi.agent_adapter.registry import adapter_factory, build_adapter, owns_connection
+
+        if owns_connection(shortname):
+            return self._connection_adapter(shortname, profile)
         adapter_shortname = (
             getattr(self.adapter, "shortname", None) if self.adapter is not None else None
         )
@@ -672,7 +683,6 @@ class KediRuntime:
         if model is None and getattr(self.adapter, "kind", None) == "agent-framework":
             from kedi.agent_adapter.adapters.lazy import LazyAdapter
             from kedi.agent_adapter.meta import SupportsProfileOverride
-            from kedi.agent_adapter.registry import adapter_factory
 
             if adapter_factory(shortname).kind == "agent-framework":
                 if isinstance(self.adapter, LazyAdapter):
@@ -682,10 +692,28 @@ class KediRuntime:
         cache_key = (shortname, model)
         selected = self._selected_adapters.get(cache_key)
         if selected is None:
-            from kedi.agent_adapter.registry import build_adapter
-
             selected = build_adapter(shortname, model)
             self._selected_adapters[cache_key] = selected
+        return selected
+
+    def _connection_adapter(self, shortname: str, profile: Any) -> AgentAdapter[Any]:
+        """The adapter for a profile's connection command, launched once and closed with us."""
+
+        import shlex
+
+        from kedi.agent_adapter.registry import build_adapter
+
+        command = getattr(profile, "agent_command", None)
+        if command is None:
+            raise KediExecutionError(f"> agent: {shortname}: needs a connection with 'command'")
+        parts = tuple(shlex.split(command) if isinstance(command, str) else command)
+        model = getattr(profile, "model", None)
+        cache_key = (shortname, model, parts)
+        with self._connection_lock:
+            selected = self._connection_adapters.get(cache_key)
+            if selected is None:
+                selected = build_adapter(shortname, model, command=parts)
+                self._connection_adapters[cache_key] = selected
         return selected
 
     @staticmethod

@@ -20,6 +20,9 @@ Bridge to Kedi:
 
 - ``tool/call`` ``{runId, callId, name, arguments}`` returns ``{ok: true, result}`` or
   ``{ok: false, error}``. Only tools of a run in progress are callable.
+- ``run/event`` (notification, with the ``events`` capability) ``{runId, type, ...}``:
+  ``message.delta`` ``{messageId, text, phase?}``, ``message.completed`` ``{messageId,
+  text?, phase?}`` or ``tool.boundary``. ``phase`` is ``commentary`` or ``final``.
 """
 
 from __future__ import annotations
@@ -54,11 +57,12 @@ CAPABILITIES: Final = {
     "tools": "supports_tool_registration",
     "nativeStructuredOutput": "supports_native_structured_output",
     "nativeToolCalling": "supports_native_tool_calling",
+    "events": "supports_stream_events",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
 
-Anything else, such as media, events, sessions or cancellation guarantees, is not part of
-version 1 and stays unavailable whatever the bridge says.
+Anything else, such as media, sessions or cancellation guarantees, is not part of version 1
+and stays unavailable whatever the bridge says.
 """
 
 

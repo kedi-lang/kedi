@@ -5,8 +5,9 @@
 | Directive | Scope and contract |
 | --- | --- |
 | `> adapter: pydantic` | Select framework adapter: `pydantic` or `langchain` |
-| `> agent: codex` | Select harness: `claude`, `codex`, `acp`, or `a2a` |
+| `> agent: codex` | Select harness: `claude`, `codex`, `acp`, `a2a`, or `rpc` |
 | `> agent: acp:` | Select ACP and bind its explicit stdio `command` |
+| `> agent: rpc:` | Launch a [JSON-RPC bridge](../adapter-development/json-rpc-bridges.md) from its `command` |
 | `> agent: a2a:` | Select a remote A2A endpoint, auth reference, and transport timeouts |
 | `> model: value` | Set plain or Python-evaluated model identifier |
 | `> fallback: value` | Replace ordered model alternatives; uses the effective primary (Pydantic AI/LangChain only) |

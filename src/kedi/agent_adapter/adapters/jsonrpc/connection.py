@@ -35,6 +35,9 @@ from .protocol import (
 RequestHandler = Callable[[int | str, str, JsonObject], None]
 """Handles one request from the bridge; must eventually call ``Connection.respond``."""
 
+NotificationHandler = Callable[[str, JsonObject], None]
+"""Handles one notification from the bridge, on the reader thread, in stream order."""
+
 _STDERR_LINES = 50
 
 
@@ -46,6 +49,7 @@ class Connection:
         command: Sequence[str],
         *,
         handler: RequestHandler,
+        notifications: NotificationHandler | None = None,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
         max_inbound_requests: int = 64,
@@ -53,6 +57,7 @@ class Connection:
         if not command:
             raise ValueError("JSON-RPC bridge command cannot be empty.")
         self._handler = handler
+        self._notifications = notifications
         self._write_lock = Lock()
         self._state_lock = Lock()
         self._pending: dict[int, Future[JsonObject]] = {}
@@ -256,9 +261,11 @@ class Connection:
         request_id = message.get("id")
         method = message.get("method")
         if isinstance(method, str):
-            if request_id is None:
-                return  # protocol version 1 defines no notifications to Kedi
-            self._admit(request_id, method, message.get("params"))
+            params = message.get("params")
+            if request_id is not None:
+                self._admit(request_id, method, params)
+            elif self._notifications is not None and isinstance(params, dict):
+                self._notifications(method, params)
             return
         with self._state_lock:
             future = self._pending.pop(request_id, None) if isinstance(request_id, int) else None
@@ -323,4 +330,4 @@ class Connection:
         return error
 
 
-__all__ = ["Connection", "RequestHandler"]
+__all__ = ["Connection", "NotificationHandler", "RequestHandler"]
