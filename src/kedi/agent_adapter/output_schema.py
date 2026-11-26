@@ -91,12 +91,16 @@ class _PortableOutputModel(BaseModel):
 
 def build_output_model(
     output_schema: dict[str, ResolvedKediType],
+    *,
+    request: Any = None,
 ) -> type[BaseModel]:
+    """The output model for template fields; ``request`` defaults to the current request."""
+
     if not output_schema:
         raise ValueError("Output schema cannot be empty.")
     from .request.context import current_agent_run_request
 
-    request = current_agent_run_request()
+    request = request if request is not None else current_agent_run_request()
     description = (
         "Return only the replacement values for the corresponding bracketed template "
         "fields, excluding fixed surrounding text. Preserve full sentences when a field "

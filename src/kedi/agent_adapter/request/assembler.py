@@ -37,7 +37,10 @@ class RunRequestAssembler:
         run_id: str,
         turn_sequence: int,
         call_kind: CallKind,
+        protocol: Iterable[str] = (),
     ) -> AgentRunRequest:
+        """``protocol`` names the protocol parts the adapter's backend needs; see
+        :func:`kedi.agent_adapter.request.protocol.request_protocol`."""
         if not run_id:
             raise ValueError("run_id must not be empty")
         if turn_sequence < 0:
@@ -56,8 +59,9 @@ class RunRequestAssembler:
             prompt=prompt,
             instructions=instruction_parts,
             conversation=conversation,
-            tool_definitions=tuple(_tool_definition(tool) for tool in tool_specs),
+            tool_definitions=tuple(tool_definition(tool) for tool in tool_specs),
             output=output,
+            protocol=frozenset(protocol),
             metadata=RunMetadata(
                 run_id=run_id,
                 turn_sequence=turn_sequence,
@@ -85,7 +89,7 @@ def conversation_lane_identity(
         "effort": getattr(profile, "effort", None),
         "settings": dict(getattr(profile, "settings", {})),
         "mcp": [_mcp_definition_payload(server) for server in getattr(profile, "mcp_servers", ())],
-        "tools": [_tool_definition_payload(_tool_definition(tool)) for tool in tools],
+        "tools": [_tool_definition_payload(tool_definition(tool)) for tool in tools],
     }
     material = json.dumps(
         payload,
@@ -98,7 +102,9 @@ def conversation_lane_identity(
     return f"{payload['shortname']}:{digest}"
 
 
-def _tool_definition(tool: ToolSpec) -> ToolDefinition:
+def tool_definition(tool: ToolSpec) -> ToolDefinition:
+    """The immutable contract Kedi renders for a tool spec."""
+
     metadata = tool.metadata or {}
     return ToolDefinition(
         name=tool.name,
@@ -143,4 +149,4 @@ def _plain_value(value: object) -> object:
     return value
 
 
-__all__ = ["RunRequestAssembler", "conversation_lane_identity"]
+__all__ = ["RunRequestAssembler", "conversation_lane_identity", "tool_definition"]

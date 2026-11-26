@@ -607,13 +607,9 @@ def _validate_required_tool_calls(output: Any) -> Any:
     if state is None or state.names <= state.returned:
         return output
 
+    from kedi.agent_adapter.request.prompts import required_tools_correction
+
     missing_names = state.names - state.returned
-    missing = ", ".join(sorted(missing_names))
-    if missing_names & state.attempted:
-        raise ModelRetry(
-            f"Required tool {missing} did not complete successfully. Correct its previous "
-            "error and call it again before returning the parent response."
-        )
     raise ModelRetry(
-        f"Call required tool {missing} and use its result before returning the parent response."
+        required_tools_correction(missing_names, attempted=bool(missing_names & state.attempted))
     )

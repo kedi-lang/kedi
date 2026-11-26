@@ -74,6 +74,8 @@ AdapterCapability = Literal[
     "media_input",
     "image_output",
     "audio_output",
+    "native_structured_output",
+    "native_tool_calling",
     "hooks",
 ]
 
@@ -180,6 +182,11 @@ class AdapterCapabilities:
     supports_media_input: bool | None = None
     supports_image_output: bool | None = None
     supports_audio_output: bool | None = None
+    # ``False``: the backend has no native structured output or tool calling, so Kedi renders
+    # the output contract (``protocol.output``) or the tool catalog and call format
+    # (``protocol.tools``) as instruction parts. ``None`` and ``True`` add nothing.
+    supports_native_structured_output: bool | None = None
+    supports_native_tool_calling: bool | None = None
     hooks: HookCapabilities | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
@@ -227,6 +234,8 @@ class AdapterCapabilities:
             "media_input": self.supports_media_input,
             "image_output": self.supports_image_output,
             "audio_output": self.supports_audio_output,
+            "native_structured_output": self.supports_native_structured_output,
+            "native_tool_calling": self.supports_native_tool_calling,
             "hooks": self.hooks is not None,
         }
         return values[feature]

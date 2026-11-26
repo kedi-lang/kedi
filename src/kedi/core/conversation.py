@@ -87,6 +87,7 @@ def _execute_conversation_call(
         RunRequestAssembler,
         media_summaries,
     )
+    from kedi.agent_adapter.request.protocol import request_protocol
     from kedi.agent_adapter.request_budget import ModelRequestBudget
     from kedi.core.request_execution import execute_request
 
@@ -141,6 +142,7 @@ def _execute_conversation_call(
                     run_id=run_id,
                     turn_sequence=0,
                     call_kind=call_kind,
+                    protocol=request_protocol(getattr(adapter, "capabilities", None)),
                 )
                 return execute(request)
 
@@ -178,6 +180,7 @@ def _execute_conversation_call(
                     run_id=run_id,
                     turn_sequence=conversation.turn_sequence,
                     call_kind=call_kind,
+                    protocol=request_protocol(getattr(adapter, "capabilities", None)),
                 )
                 adapter_scope = (
                     adapter.conversation_scope(conversation)

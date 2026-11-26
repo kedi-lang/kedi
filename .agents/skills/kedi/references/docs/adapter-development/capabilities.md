@@ -53,6 +53,8 @@ fails in ways Kedi cannot detect.
 | `supports_media_input` | accepts multimodal input: places prompt images, audio, video, and documents in the request | allows multimodal prompts | `MediaError: Adapter '<shortname>' does not accept media input` |
 | `supports_image_output` | returns an `Image` for `[img: Image] << ...`: one the model draws, or one of the request's media it names | allows image output | the model can only name an attached image; a request with none fails: `MediaError: Adapter '<shortname>' cannot produce images` |
 | `supports_audio_output` | returns an `Audio` for `[speech: Audio] << ...`, from a model that speaks; the request carries no media and no tools | allows speech output | `MediaError: Adapter '<shortname>' cannot produce speech` |
+| `supports_native_structured_output` | `False`: the backend cannot take an output schema natively | adds the `protocol.output` part to `render()` (see [Rendered Request](rendered-request.md)) | — |
+| `supports_native_tool_calling` | `False`: the backend cannot take tool definitions natively | adds the `protocol.tools` part to `render()`: the tool catalog and the call format | — |
 | `hooks` | dispatches the listed hook events (`HookCapabilities`) | runs profile hooks | `Agent hooks are not supported by adapter '<shortname>'`, or `Agent hook events <names> are not supported` |
 | `supported_json_schema_formats` | enforces these JSON Schema `format`s | the language server flags other formats for built-in adapters | — |
 | `negotiated_capabilities` | checks these `None` capabilities itself, before remote work | lets `> requires:` pass for them | — |

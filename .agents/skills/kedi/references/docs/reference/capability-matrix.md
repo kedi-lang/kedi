@@ -42,6 +42,8 @@ part of the base adapter protocol rather than an optional capability.
 | Media input | yes | yes |
 | Image output | yes | yes |
 | Speech output | yes | yes |
+| Native structured output | no | no |
+| Native tool calling | no | no |
 | Agent lifecycle hooks | yes | yes |
 
 ## Agent Harnesses
@@ -76,6 +78,8 @@ part of the base adapter protocol rather than an optional capability.
 | Media input | yes | yes | yes | yes |
 | Image output | no | no | no | no |
 | Speech output | no | no | no | no |
+| Native structured output | no | no | no | no |
+| Native tool calling | no | no | no | no |
 | Agent lifecycle hooks | yes | yes | yes | yes |
 <!-- END GENERATED ADAPTER CAPABILITIES -->
 

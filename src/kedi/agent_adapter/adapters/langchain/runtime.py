@@ -16,7 +16,6 @@ from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Overwrite
-from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai import UsageLimits
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.usage import RunUsage
@@ -432,19 +431,11 @@ def _structured_output_feedback(error: Exception) -> str:
 
 
 def structured_output_feedback(error: BaseException) -> str:
-    """Correction feedback for output that failed parsing or validation."""
-    if isinstance(error, PydanticValidationError):
-        detail = "\n".join(
-            f"{'.'.join(map(str, item['loc']))}: {item['msg'][:320]}"
-            for item in error.errors(include_input=False, include_url=False)[:8]
-        )
-    else:
-        detail = str(error)
-    return (
-        "The structured output does not match the required schema:\n"
-        f"{detail[:3600]}\n"
-        "Return a corrected response that matches the schema."
-    )
+    """Correction feedback for output that failed parsing or validation (Kedi's text)."""
+
+    from kedi.agent_adapter.request.prompts import output_correction
+
+    return output_correction(error)
 
 
 def _record_model_response(state: LangChainRunState | None, messages: Sequence[Any]) -> None:

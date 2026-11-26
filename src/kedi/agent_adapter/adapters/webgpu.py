@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import re
 from contextlib import (
     AbstractContextManager,
     AsyncExitStack,
@@ -12,17 +11,14 @@ from contextlib import (
 )
 from contextvars import ContextVar
 from dataclasses import dataclass
-from textwrap import indent
 from time import monotonic
 from typing import Any, Callable, Collection, Generator, Mapping, Protocol, Sequence
 from uuid import uuid4
 
-from pydantic import BaseModel, TypeAdapter
-from pydantic_ai import format_as_xml
+from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
 from ...agent_profile import AgentProfile, McpTransport
-from ...dynamic_models import build_dynamic_model
 from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
 from ..approvals.policy import ToolApprovalDenied
@@ -40,7 +36,21 @@ from ..hooks import (
     is_tool_execution_interrupted,
 )
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
-from ..output_schema import output_model_fields
+from ..output_schema import build_output_model
+from ..request import (
+    AgentRunRequest,
+    InstructionPart,
+    RawPromptBuilder,
+    RunRequestAssembler,
+    SchemaOutput,
+    TextOutput,
+    TypedOutput,
+    current_agent_run_request,
+    request_protocol,
+    tool_definition,
+)
+from ..request.models import OutputContract
+from ..request.prompts import output_correction, protocol_correction, required_tools_correction
 from ..tools.execution import with_approval
 from ..tools.media import refuse_tool_media
 from ..tools.scope import ToolScope
@@ -123,6 +133,10 @@ class WebGPUAdapter(HookRegistrationMixin):
         supports_media_input=False,
         supports_image_output=False,
         supports_audio_output=False,
+        # The browser model answers in text: Kedi renders the output schema and the tool
+        # catalog as protocol parts, and the bridge parses the model's JSON actions.
+        supports_native_structured_output=False,
+        supports_native_tool_calling=False,
         hooks=HookCapabilities.full(
             tool_bridge="kedi",
             tool_origins=frozenset({"kedi", "mcp"}),
@@ -205,15 +219,17 @@ class WebGPUAdapter(HookRegistrationMixin):
         instructions: str | None = None,
         **_: Any,
     ) -> Any:
-        return await self._run(
-            prompt=template,
-            output_adapter=_output_adapter(output_schema, output_type),
-            instructions=instructions,
-        )
+        if output_schema:
+            output: OutputContract = SchemaOutput(schema=output_schema)
+        elif output_type is not None:
+            output = TypedOutput(output_type=output_type)
+        else:
+            raise ValueError("Output spec must be provided.")
+        return await self._run(prompt=template, output=output, instructions=instructions)
 
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, instructions: str | None = None, **_: Any) -> str:
-        return await self._run(prompt=prompt, output_adapter=None, instructions=instructions)
+        return await self._run(prompt=prompt, output=TextOutput(), instructions=instructions)
 
     @hooked_agent_run("prompt")
     def invoke_sync(self, *, prompt: str, instructions: str | None = None, **kwargs: Any) -> str:
@@ -225,40 +241,38 @@ class WebGPUAdapter(HookRegistrationMixin):
         self,
         *,
         prompt: str,
-        output_adapter: TypeAdapter[Any] | None,
+        output: OutputContract,
         instructions: str | None,
     ) -> Any:
         profile = self.active_profile
         settings = self._settings(profile)
         timeout = float(settings.pop("timeout", self._timeout))
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ]
-        output_json_schema = output_adapter.json_schema() if output_adapter is not None else None
 
         async with AsyncExitStack() as stack:
             tools = await self._runtime_tools(stack, profile)
+            request = current_agent_run_request() or self._direct_request(
+                prompt, output, instructions
+            )
+            # Kedi renders the browser model's whole task text, MCP tools included.
+            rendered = request.render(tools=tuple(tool_definition(tool.spec) for tool in tools))
+            validator = _output_validator(request)
+            messages: list[dict[str, Any]] = [{"role": "user", "content": rendered.user}]
             tool_contracts = [_tool_contract(tool) for tool in tools]
-            required_tools = set(_mentioned_tools(prompt, tools))
-            called_tools: set[str] = set()
+            required = {tool.name for tool in rendered.tools if tool.required_before_output}
+            called: set[str] = set()
+            attempted: set[str] = set()
             for step in range(self._max_tool_steps):
-                payload = {
+                payload: dict[str, Any] = {
                     "model": profile.model or self._model,
                     "messages": [dict(message) for message in messages],
-                    "instructions": profile.call_instructions(instructions),
+                    "instructions": rendered.system,
                     "effort": profile.effort,
                     "settings": settings,
                     "tools": tool_contracts,
-                    "toolsPrompt": _format_tool_catalog(tool_contracts),
-                    "requiredTools": sorted(required_tools - called_tools),
                     "step": step,
                 }
-                if output_json_schema is not None:
-                    payload["outputSchema"] = output_json_schema
-                    payload["outputPrompt"] = _format_output_contract(output_json_schema)
+                if rendered.output_json_schema is not None:
+                    payload["outputSchema"] = rendered.output_json_schema
                 else:
                     payload["responseMode"] = "text"
                 response = await asyncio.to_thread(
@@ -268,44 +282,40 @@ class WebGPUAdapter(HookRegistrationMixin):
                 )
                 kind = response.get("kind", "final")
                 if kind == "final":
-                    missing_tools = required_tools - called_tools
-                    if missing_tools:
-                        names = ", ".join(sorted(missing_tools))
+                    missing = required - called
+                    if missing:
                         messages.append(
                             {
                                 "role": "user",
-                                "content": (
-                                    f"Call the explicitly requested tool(s) before answering: "
-                                    f"{names}. Return a tool call now; do not simulate the result."
+                                "content": required_tools_correction(
+                                    missing, attempted=bool(missing & attempted)
                                 ),
                             }
                         )
                         continue
-                    if output_adapter is None:
+                    if validator is None:
                         return _text_response(response)
                     data = response.get("data")
-                    return output_adapter.validate_python(data)
+                    try:
+                        return validator.validate_python(data)
+                    except ValidationError as exc:
+                        messages.append(_final_action(data))
+                        messages.append({"role": "user", "content": output_correction(exc)})
+                        continue
                 if kind == "error":
                     raise RuntimeError(str(response.get("error") or "Browser model request failed"))
                 if kind == "retry":
-                    required_tool = response.get("requiredTool")
-                    if isinstance(required_tool, str):
-                        if not any(tool.name == required_tool for tool in tools):
-                            raise ValueError(
-                                f"Browser model retry named unknown tool: {required_tool!r}"
-                            )
-                        required_tools.add(required_tool)
                     telemetry = response.get("telemetry")
                     if isinstance(telemetry, Mapping):
                         output_text = telemetry.get("outputText")
                         if isinstance(output_text, str) and output_text:
                             messages.append({"role": "assistant", "content": output_text})
+                    detail = response.get("error")
                     messages.append(
                         {
                             "role": "user",
-                            "content": str(
-                                response.get("error")
-                                or "Return exactly one call_tool or final action JSON object."
+                            "content": protocol_correction(
+                                detail if isinstance(detail, str) else None
                             ),
                         }
                     )
@@ -313,11 +323,32 @@ class WebGPUAdapter(HookRegistrationMixin):
                 if kind != "tool_call":
                     raise ValueError(f"Unknown browser model response kind: {kind!r}")
                 name, succeeded, tool_messages = await self._execute_tool_call(response, tools)
-                if succeeded:
-                    called_tools.add(name)
+                (called if succeeded else attempted).add(name)
                 messages.extend(tool_messages)
 
         raise RuntimeError(f"Browser model exceeded the {self._max_tool_steps}-step tool limit")
+
+    def _direct_request(
+        self, prompt: str, output: OutputContract, instructions: str | None
+    ) -> AgentRunRequest:
+        """The request for a call made outside a Kedi program, as Kedi would make it."""
+
+        text = self.active_profile.call_instructions(instructions)
+        return RunRequestAssembler().assemble(
+            prompt=RawPromptBuilder(content=prompt).build(),
+            instructions=(
+                (InstructionPart(identity="profile.instructions", source="profile", content=text),)
+                if text
+                else ()
+            ),
+            conversation=None,
+            tool_specs=(),
+            output=output,
+            run_id=f"webgpu_{uuid4().hex}",
+            turn_sequence=0,
+            call_kind="invoke" if isinstance(output, TextOutput) else "produce",
+            protocol=request_protocol(self.capabilities),
+        )
 
     def produce_sync(
         self,
@@ -501,126 +532,33 @@ def _text_response(response: Mapping[str, Any]) -> str:
     raise TypeError("Browser model final text response must be a string")
 
 
-def _format_tool_catalog(tools: Sequence[Mapping[str, Any]]) -> str:
-    if not tools:
-        return "<Tools />"
-    rendered = "\n".join(
-        format_as_xml(_tool_prompt_contract(tool), root_tag="Tool") for tool in tools
-    )
-    return f"<Tools>\n{indent(rendered, '  ')}\n</Tools>"
-
-
-def _format_output_contract(schema: Mapping[str, Any]) -> str:
-    return format_as_xml(_output_prompt_contract(schema), root_tag="Output")
-
-
-def _tool_prompt_contract(tool: Mapping[str, Any]) -> dict[str, Any]:
-    input_schema = tool.get("inputSchema")
-    schema = input_schema if isinstance(input_schema, Mapping) else {}
-    properties = schema.get("properties")
-    fields = properties if isinstance(properties, Mapping) else {}
-    required_value = schema.get("required")
-    required = set(required_value) if isinstance(required_value, list) else set()
-    arguments = [
-        {"name": name, "type": _schema_type_name(field_schema, schema)}
-        for name, field_schema in fields.items()
-        if isinstance(name, str) and name in required and isinstance(field_schema, Mapping)
-    ]
-    optional_arguments = [
-        {"name": name, "type": _schema_type_name(field_schema, schema)}
-        for name, field_schema in fields.items()
-        if isinstance(name, str) and name not in required and isinstance(field_schema, Mapping)
-    ]
-    result: dict[str, Any] = {
-        "name": tool.get("name", ""),
-        "arguments": arguments,
-    }
-    if optional_arguments:
-        result["optional_arguments"] = optional_arguments
-    description = tool.get("description")
-    if isinstance(description, str) and description:
-        result["description"] = description
-    return_schema = tool.get("returnSchema")
-    if isinstance(return_schema, Mapping):
-        result["returns"] = _schema_type_name(return_schema, return_schema)
-    return result
-
-
-def _output_prompt_contract(schema: Mapping[str, Any]) -> dict[str, Any]:
-    properties = schema.get("properties")
-    if not isinstance(properties, Mapping):
-        return {"type": _schema_type_name(schema, schema)}
-    required_value = schema.get("required")
-    required = set(required_value) if isinstance(required_value, list) else set()
-    fields = [
-        {"name": name, "type": _schema_type_name(field_schema, schema)}
-        for name, field_schema in properties.items()
-        if isinstance(name, str) and name in required and isinstance(field_schema, Mapping)
-    ]
-    optional_fields = [
-        {"name": name, "type": _schema_type_name(field_schema, schema)}
-        for name, field_schema in properties.items()
-        if isinstance(name, str) and name not in required and isinstance(field_schema, Mapping)
-    ]
-    result: dict[str, Any] = {"fields": fields}
-    if optional_fields:
-        result["optional_fields"] = optional_fields
-    return result
-
-
-def _schema_type_name(schema: Mapping[str, Any], root_schema: Mapping[str, Any]) -> str:
-    reference = schema.get("$ref")
-    if isinstance(reference, str):
-        return reference.rsplit("/", 1)[-1]
-    enum = schema.get("enum")
-    if isinstance(enum, list):
-        return " | ".join(map(str, enum))
-    for union_key in ("anyOf", "oneOf"):
-        variants = schema.get(union_key)
-        if isinstance(variants, list):
-            return " | ".join(
-                _schema_type_name(item, root_schema)
-                for item in variants
-                if isinstance(item, Mapping)
-            )
-    schema_type = schema.get("type")
-    if schema_type == "array":
-        items = schema.get("items")
-        item_type = _schema_type_name(items, root_schema) if isinstance(items, Mapping) else "value"
-        return f"list[{item_type}]"
-    if schema_type == "object":
-        title = schema.get("title")
-        return str(title) if title else "object"
-    if isinstance(schema_type, list):
-        return " | ".join(map(str, schema_type))
-    return str(schema_type or schema.get("title") or "value")
-
-
-def _mentioned_tools(template: str, tools: Sequence[_RuntimeTool]) -> tuple[str, ...]:
-    return tuple(
-        tool.name for tool in tools if re.search(rf"(?<!\w){re.escape(tool.name)}(?!\w)", template)
-    )
-
-
 def _tool_error(exc: BaseException) -> str:
     # str() of a KediExecutionError renders a Kedi stack trace; the model needs the message.
     message = exc.message if isinstance(exc, KediExecutionError) else str(exc)
     return f"{type(exc).__name__}: {message}"
 
 
-def _output_adapter(
-    output_schema: dict[str, ResolvedKediType] | None,
-    output_type: type[Any] | None,
-) -> TypeAdapter[Any]:
-    if output_schema:
-        output_type = build_dynamic_model(
-            "_WebGPUOutput",
-            BaseModel,
-            output_model_fields(output_schema),
-        )
-    if output_type is None:
-        raise ValueError("Output spec must be provided.")
-    return TypeAdapter(output_type)
+def _output_validator(request: AgentRunRequest) -> TypeAdapter[Any] | None:
+    """How Kedi reads the browser model's final data, or ``None`` for text."""
+
+    output = request.output
+    if isinstance(output, TextOutput):
+        return None
+    if isinstance(output, SchemaOutput):
+        return TypeAdapter(build_output_model(dict(output.schema), request=request))
+    return TypeAdapter(output.output_type)
+
+
+def _final_action(data: Any) -> dict[str, Any]:
+    """The model's rejected final answer, replayed before Kedi's correction."""
+
+    return {
+        "role": "assistant",
+        "content": json.dumps(
+            {"action": "final", "data": to_jsonable_python(data, fallback=str)},
+            ensure_ascii=False,
+        ),
+    }
 
 
 __all__ = ["BrowserModelBridge", "WebGPUAdapter", "WebGPUInstrumentation"]
