@@ -32,6 +32,10 @@ it has not exited within the timeout.
 ## Wire Format
 
 - JSON-RPC 2.0, one message per line, UTF-8, at most 8 MiB per line.
+- A line ends at LF (`\n`) only. Kedi writes U+2028 and U+2029 unescaped, and
+  a text may hold CR. Do not split frames with a reader that also ends lines
+  at those, such as Node's `readline` or Python's `str.splitlines()`: split on
+  `\n` yourself.
 - stdout carries only protocol frames. Write logs and diagnostics to stderr;
   Kedi drains it and quotes its last lines when the connection fails.
 - A line that is not a JSON-RPC 2.0 object, or a line over the limit, ends the
