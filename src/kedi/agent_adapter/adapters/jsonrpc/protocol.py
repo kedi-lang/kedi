@@ -9,9 +9,12 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
-  capabilities, mediaKinds?}``. Kedi sends nothing else before it completes.
-- ``run`` ``{runId, callKind, promptKind, model, system, instructionParts, user, userContent,
-  output, tools, continuation, session, subagent}`` returns ``{text}`` or ``{data}``, optionally
+  capabilities, mediaKinds?, settings?, effort?}``: ``settings`` names the ``> settings:`` the
+  backend applies, ``effort`` the ``> effort:`` levels it maps. Kedi sends nothing else before
+  it completes.
+- ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
+  instructionParts, user, userContent, output, tools, continuation, session, subagent}``
+  returns ``{text}`` or ``{data}``, optionally
   with ``usage`` and, in a session, ``state``. ``subagent`` is ``null``, or, for a child Kedi
   runs on the bridge, ``{id, parentRunId, conversationId, name, limits}``: Kedi's run id for
   the child, the bridge run whose tool call started it, the child conversation, the child
@@ -96,6 +99,7 @@ CAPABILITIES: Final = {
     "liveInput": "supports_live_subagent_input",
     "interrupt": "supports_subagent_interrupt",
     "usage": "supports_token_usage",
+    "modelFallback": "supports_model_fallback",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
 
@@ -103,7 +107,8 @@ CAPABILITIES: Final = {
 background; it needs ``governed``, because Kedi admits each of a child's requests against its
 limits before the bridge sends it. ``liveInput`` (``run/input``) needs ``subagents``, and
 ``interrupt`` (``run/interrupt``) needs ``liveInput``. ``usage`` promises a ``run/usage`` for
-every model request, so a child's token limits hold.
+every model request, so a child's token limits hold. ``modelFallback`` tries ``fallbackModels``
+in order when a model request fails, admitting each attempt.
 
 ``governed`` promises that every model request the bridge's backend makes goes through
 ``budget/admit`` first: SDK retries, tool-loop turns and internal calls too. A bridge that
