@@ -242,10 +242,13 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def for_conformance(cls, base_url: str) -> Self:
         """An adapter on the conformance kit's OpenAI-compatible endpoint (``kedi adapter check``)."""
 
+        from openai import AsyncOpenAI
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
-        provider = OpenAIProvider(base_url=f"{base_url}/v1", api_key="conformance")
+        # A request budget counts every request, so the client makes no hidden retries.
+        client = AsyncOpenAI(base_url=f"{base_url}/v1", api_key="conformance", max_retries=0)
+        provider = OpenAIProvider(openai_client=client)
         return cls(OpenAIChatModel("conformance", provider=provider), request_retries=0)
 
     def __init__(

@@ -8,7 +8,8 @@ checks the recorded wire requests against it:
 - the output schema's and the tools' descriptions arrive unchanged;
 - the returned value passes Kedi's validation;
 - text Kedi did not write does not change with the request (two variants of each scenario
-  are compared); request-independent harness text passes and is listed.
+  are compared); request-independent harness text passes and is listed;
+- a run budget stops a request before it reaches the endpoint, SDK retries included.
 """
 
 from __future__ import annotations
@@ -37,6 +38,13 @@ class Variant:
     source: str
     script: Script
     expected: Any
+    error: str | None = None
+    """The program must fail: with this exception type, or with any error for ``ANY_ERROR``."""
+    requests: int | None = None
+    """Exactly this many requests reach the endpoint."""
+
+
+ANY_ERROR = "*"
 
 
 @dataclass(frozen=True)
@@ -48,8 +56,14 @@ class Scenario:
     foreign_text: bool = True
 
 
-def _tool_program(head: str, prompt: str, approval: str) -> str:
-    return f"{head}\n> approval: {approval}\n> use: canary_tool\n[reply] << {prompt}\n= <reply>\n"
+def _tool_program(head: str, prompt: str, approval: str, budget: str = "") -> str:
+    return (
+        f"{head}\n{budget}> approval: {approval}\n> use: canary_tool\n"
+        f"[reply] << {prompt}\n= <reply>\n"
+    )
+
+
+ONE_REQUEST = "> budget:\n    request_limit: 1\n"
 
 
 def _tool(name_line: str, doc: str) -> str:
@@ -206,6 +220,39 @@ SCENARIOS: tuple[Scenario, ...] = (
         # Kedi's attachment framing is not in render().user, and its ids change per variant.
         foreign_text=False,
     ),
+    Scenario(
+        "request-budget",
+        (
+            # The tool call takes a second request, which the budget refuses before it is sent.
+            Variant(
+                _tool_program(
+                    _tool("city: str", "Weather forecast for one city."),
+                    "Use canary_tool for Ankara and report what it says.",
+                    "allow",
+                    ONE_REQUEST,
+                ),
+                Script(
+                    final="It is sunny.",
+                    text=True,
+                    tool="canary_tool",
+                    arguments={"city": "Ankara"},
+                ),
+                None,
+                error="RunBudgetExceeded",
+                requests=1,
+            ),
+            # The first request fails; a retry must be admitted too, so none reaches the wire.
+            Variant(
+                f"{ONE_REQUEST}[reply] << Name the largest ocean on Earth.\n= <reply>\n",
+                Script(final="The Pacific.", text=True, fail_first=1),
+                None,
+                error=ANY_ERROR,
+                requests=1,
+            ),
+        ),
+        requires="request_budget",
+        foreign_text=False,
+    ),
 )
 
 NOT_COVERED = ("subagents",)
@@ -336,11 +383,19 @@ def _close(adapter: Any) -> None:
 
 
 def _check_run(scenario: Scenario, variant: Variant, run: _Run) -> list[str]:
+    problems: list[str] = []
+    if variant.requests is not None and len(run.exchanges) != variant.requests:
+        problems.append(
+            f"{len(run.exchanges)} requests reached the model endpoint, expected {variant.requests}"
+        )
     if run.error is not None:
         error = getattr(run.error, "original", None) or run.error
+        if variant.error in (ANY_ERROR, type(error).__name__):
+            return problems
         message = getattr(run.error, "message", None) or str(error)
-        return [f"the program failed: {type(error).__name__}: {message.strip()[:600]}"]
-    problems: list[str] = []
+        return [*problems, f"the program failed: {type(error).__name__}: {message.strip()[:600]}"]
+    if variant.error is not None:
+        return [*problems, f"the program returned {run.value!r}; it must fail with {variant.error}"]
     if run.value != variant.expected:
         problems.append(f"the program returned {run.value!r}, expected {variant.expected!r}")
     if not run.exchanges:
@@ -455,4 +510,4 @@ def _escaped(text: str) -> str:
     return json.dumps(text, ensure_ascii=False)[1:-1]
 
 
-__all__ = ["ConformanceReport", "SCENARIOS", "ScenarioResult", "check_adapter"]
+__all__ = ["ANY_ERROR", "ConformanceReport", "SCENARIOS", "ScenarioResult", "check_adapter"]

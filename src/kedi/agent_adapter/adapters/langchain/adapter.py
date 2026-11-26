@@ -227,7 +227,10 @@ class LangChainAdapter(HookRegistrationMixin):
         from pydantic import SecretStr
 
         model = ChatOpenAI(
-            model="conformance", base_url=f"{base_url}/v1", api_key=SecretStr("conformance")
+            model="conformance",
+            base_url=f"{base_url}/v1",
+            api_key=SecretStr("conformance"),
+            max_retries=0,  # a request budget counts every request, so no hidden retries
         )
         return cls(model, request_retries=0)
 

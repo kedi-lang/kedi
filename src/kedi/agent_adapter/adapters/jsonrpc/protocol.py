@@ -23,6 +23,16 @@ Bridge to Kedi:
 
 - ``tool/call`` ``{runId, callId, name, arguments}`` returns ``{ok: true, result}`` or
   ``{ok: false, error}``. Only tools of a run in progress are callable.
+- ``budget/admit`` ``{runId, dimension}`` (with the ``governed`` capability), before the step
+  runs: ``dimension`` is ``request`` for every model request, retries included, and
+  ``toolAttempt`` for each attempt of a bridge tool. It returns ``{admitted: true}``, or
+  ``{admitted: false, dimension, limit, consumed, scopeDepth}``: the bridge then skips the
+  step and ends the run, which fails with Kedi's ``RunBudgetExceeded``.
+- ``approval/request`` ``{runId, callId?, tool, arguments, risk, description?}`` (with the
+  ``nativeTools`` capability), before each call of a bridge tool. ``risk`` is ``read_only``,
+  ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
+  reason}``, or ``{decision: "edit", arguments, reason}``: the bridge runs the edited
+  arguments, after another ``approval/request`` if their risk is higher.
 - ``run/event`` (notification, with the ``events`` capability) ``{runId, type, ...}``:
   ``message.delta`` ``{messageId, text, phase?}``, ``message.completed`` ``{messageId,
   text?, phase?}`` or ``tool.boundary``. ``phase`` is ``commentary`` or ``final``.
@@ -64,13 +74,25 @@ CAPABILITIES: Final = {
     "events": "supports_stream_events",
     "mediaInput": "supports_media_input",
     "sessions": "supports_stateful_history",
+    "governed": "supports_request_budget",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
+
+``governed`` promises that every model request the bridge's backend makes goes through
+``budget/admit`` first: SDK retries, tool-loop turns and internal calls too. A bridge that
+cannot route one of them must disable it or not advertise ``governed``. ``nativeTools``
+(``NATIVE_TOOLS``) says the backend runs tools of its own besides Kedi's; each call then
+needs ``approval/request``, and with ``governed`` also ``budget/admit``.
 
 Anything else, such as live input or cancellation guarantees, is not part of version 1 and
 stays unavailable whatever the bridge says. ``mediaInput`` needs ``mediaKinds``,
 the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
+
+NATIVE_TOOLS: Final = "nativeTools"
+BUDGET_DIMENSIONS: Final = {"request": "request", "toolAttempt": "tool_attempt"}
+"""``budget/admit`` dimensions and Kedi's run budget dimensions."""
+TOOL_RISKS: Final = frozenset({"read_only", "mutating", "sensitive"})
 
 
 class JsonRpcError(RuntimeError):
@@ -93,9 +115,12 @@ class JsonRpcDisconnected(JsonRpcError):
 
 
 __all__ = [
+    "BUDGET_DIMENSIONS",
     "CANCELLED",
     "CAPABILITIES",
     "MEDIA_KINDS",
+    "NATIVE_TOOLS",
+    "TOOL_RISKS",
     "INTERNAL_ERROR",
     "INVALID_PARAMS",
     "INVALID_REQUEST",

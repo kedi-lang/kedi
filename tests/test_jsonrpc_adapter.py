@@ -30,10 +30,19 @@ from kedi.agent_adapter.adapters.jsonrpc.protocol import (
     JsonRpcDisconnected,
     JsonRpcError,
 )
+from kedi.agent_adapter.approvals.policy import (
+    ApprovalCancelled,
+    ApprovalDecision,
+    ApprovalPolicy,
+)
 from kedi.agent_adapter.conformance import check_adapter
+from kedi.agent_adapter.conformance.check import SCENARIOS, _check_run, _run
+from kedi.agent_adapter.conformance.endpoint import RecordingEndpoint
 from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
+from kedi.agent_profile import AgentProfile
 from kedi.lang import compile_program, parse_program
+from kedi.run_budget import RunBudget, RunBudgetExceeded, run_budget_scope
 
 PEER = Path(__file__).parent / "fixtures" / "jsonrpc_peer.py"
 
@@ -671,3 +680,128 @@ def test_the_reference_bridge_replays_its_session_state() -> None:
         "Answer 1.",
         "Second.",
     ]
+
+
+ALLOW = "> approval: allow\n" + ECHO
+
+
+def test_governed_bridges_ask_kedi_before_each_step(adapters: list) -> None:
+    adapter = peer("governed")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_request_budget is True
+    assert adapter.capabilities.supports_tool_attempt_budget is True
+    replies = json.loads(run(ALLOW, adapter))
+    assert replies["request"]["result"] == {"admitted": True}
+    assert replies["tool attempt"]["result"] == {"admitted": True}
+    assert replies["bad dimension"]["error"]["code"] == INVALID_PARAMS
+    assert replies["approval"]["result"] == {"decision": "allow", "reason": "static allow policy"}
+    assert replies["bad risk"]["error"]["code"] == INVALID_PARAMS
+    denied = json.loads(run("> approval: deny\n" + ECHO, adapter))
+    assert denied["approval"]["result"] == {"decision": "deny", "reason": "static deny policy"}
+    # Without a policy, the bridge's tools are denied by default, as Kedi's tools are.
+    assert json.loads(run(ECHO, adapter))["approval"]["result"]["decision"] == "deny"
+
+
+def test_a_spent_budget_stops_the_bridge_before_the_step(adapters: list) -> None:
+    adapter = peer("governed")
+    adapters.append(adapter)
+    error = failure("> budget:\n    request_limit: 0\n" + ECHO, adapter)
+    assert isinstance(error, RunBudgetExceeded) and error.dimension == "request"
+    # A bridge that takes the denied step anyway still fails: Kedi has already decided.
+    error = failure("> budget:\n    tool_attempt_limit: 0\n" + ALLOW, adapter)
+    assert isinstance(error, RunBudgetExceeded) and error.dimension == "tool_attempt"
+    assert json.loads(run(ALLOW, adapter))["request"]["result"] == {"admitted": True}
+
+
+def test_admission_needs_the_capability_it_belongs_to(adapters: list) -> None:
+    kedi_tools, ungoverned, plain = (
+        peer("governed-kedi-tools"),
+        peer("native-ungoverned"),
+        peer("default"),
+    )
+    adapters += [kedi_tools, ungoverned, plain]
+    replies = json.loads(run(ALLOW, kedi_tools))
+    assert replies["request"]["result"] == {"admitted": True}
+    assert replies["tool attempt"]["error"]["code"] == UNSUPPORTED
+    assert replies["approval"]["error"]["code"] == UNSUPPORTED
+    replies = json.loads(run(ALLOW, ungoverned))
+    assert replies["request"]["error"]["code"] == UNSUPPORTED
+    assert replies["approval"]["result"]["decision"] == "allow"
+    # Kedi refuses a ceiling it cannot enforce before the run: an ungoverned bridge's model
+    # requests, and the attempts of tools of its own.
+    assert ungoverned.capabilities.supports_tool_attempt_budget is False
+    for adapter, budget in ((ungoverned, "tool_attempt"), (plain, "request")):
+        error = failure(f"> budget:\n    {budget}_limit: 3\n" + ECHO, adapter)
+        assert f"cannot enforce {budget} run budget" in str(error)
+    # Kedi's own tools are admitted at tool/call, so any bridge enforces tool attempts.
+    assert plain.capabilities.supports_tool_attempt_budget is True
+
+
+def test_approval_handlers_decide_the_bridges_tools(adapters: list) -> None:
+    adapter = peer("governed")
+    adapters.append(adapter)
+    seen: list[tuple[Any, ...]] = []
+
+    def safer(request: Any) -> ApprovalDecision:
+        seen.append((request.tool_name, dict(request.arguments), request.risk))
+        return ApprovalDecision.edit({"command": "pwd"}, reason="read only")
+
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.dynamic(safer))):
+        replies = json.loads(adapter.invoke_sync(prompt="Probe."))
+    assert replies["approval"]["result"] == {
+        "decision": "edit",
+        "reason": "read only",
+        "arguments": {"command": "pwd"},
+    }
+    assert seen == [("shell", {"command": "ls"}, "mutating")]
+
+    with adapter.profile_override(
+        AgentProfile(approval=ApprovalPolicy.dynamic(lambda _request: ApprovalDecision.allow()))
+    ):
+        replies = json.loads(adapter.invoke_sync(prompt="Probe."))
+    assert replies["approval"]["result"] == {"decision": "allow"}
+
+    def closed(_request: Any) -> ApprovalDecision:
+        raise ApprovalCancelled(message="the user closed the prompt")
+
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.dynamic(closed))):
+        with pytest.raises(ApprovalCancelled):
+            adapter.invoke_sync(prompt="Probe.")
+        # The run fails with the first reason Kedi stopped it: here the spent budget, before
+        # the bridge went on to ask for an approval the user then cancelled.
+        with run_budget_scope(RunBudget(tool_attempt_limit=0)):
+            with pytest.raises(RunBudgetExceeded):
+                adapter.invoke_sync(prompt="Probe.")
+
+
+def test_an_approval_still_pending_when_the_run_ends_is_cancelled() -> None:
+    adapter = peer("abandon-approval")
+
+    async def undecided(_request: Any) -> ApprovalDecision:
+        await asyncio.sleep(30)
+        raise AssertionError("the decision should have been cancelled")
+
+    try:
+        with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.dynamic(undecided))):
+            assert adapter.invoke_sync(prompt="Go.") == "answered early"
+        deadline = time.monotonic() + 10
+        while f"approval reply {CANCELLED}" not in adapter._connection.stderr_tail:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+    finally:
+        adapter.close()
+
+
+def test_the_conformance_kit_catches_a_retry_kedi_did_not_admit() -> None:
+    scenario = next(scenario for scenario in SCENARIOS if scenario.name == "request-budget")
+    variant = scenario.variants[1]  # the endpoint fails the first request
+    with RecordingEndpoint() as endpoint:
+        result = _run(
+            endpoint,
+            lambda url: JsonRpcAdapter(
+                [sys.executable, str(PEER), "retries-unadmitted", url], model="m"
+            ),
+            variant,
+        )
+    problems = _check_run(scenario, variant, result)
+    assert "2 requests reached the model endpoint, expected 1" in problems
