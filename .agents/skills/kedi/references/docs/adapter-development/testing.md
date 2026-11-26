@@ -189,10 +189,10 @@ transport, and the reference adapter passes:
 ```python title="http_backend.py"
 from __future__ import annotations
 
+import asyncio
 import json
+import urllib.request
 from typing import Any
-
-import httpx
 
 from backend import BackendRequest, Reply, ToolCall
 
@@ -228,9 +228,8 @@ class HttpBackend:
                 "type": "json_schema",
                 "json_schema": {"name": "output", "schema": request.output_schema},
             }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(self.url, json=body, timeout=30)
-        message = response.json()["choices"][0]["message"]
+        response = await asyncio.to_thread(self._post, body)
+        message = response["choices"][0]["message"]
         calls = tuple(
             ToolCall(call["id"], call["function"]["name"], json.loads(call["function"]["arguments"]))
             for call in message.get("tool_calls") or ()
@@ -238,6 +237,13 @@ class HttpBackend:
         if calls or request.output_schema is None:
             return Reply(text=message.get("content"), tool_calls=calls)
         return Reply(data=json.loads(message["content"]))
+
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+        post = urllib.request.Request(
+            self.url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(post, timeout=30) as response:
+            return json.load(response)
 ```
 
 ```python title="run_conformance.py"
