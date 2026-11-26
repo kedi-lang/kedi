@@ -39,6 +39,24 @@ rubrics and constrained extraction, with decision evidence, use
 [Local Laya](laya.md). The setups above cover what Laya does not: open fields
 such as names and amounts, text in images, and speech.
 
+## Capabilities
+
+Each cell comes from a run through Kedi. "Refused" means the wrapper or server fails
+with a clear error. "Not tested" makes no claim either way.
+
+| Model | Text answer | Typed output | Program tools | Image input | Audio input | Speech output |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cactus Needle 3 | refused | yes | refused | not tested | not tested | not tested |
+| Qwen3-VL-2B, `llama-server` | not tested | yes | not tested | yes | not tested | not tested |
+| Cactus Mirage | yes, the text it reads | refused | refused | yes | not tested | not tested |
+| EMA Lightning | not tested | not tested | not tested | not tested | not tested | yes, Turkish |
+| Phonon 31m | not tested | not tested | not tested | not tested | not tested | yes, English |
+| Cactus Whistle | yes, the transcript | refused | refused | not tested | yes, English | not tested |
+| Whisper small | yes, the transcript | refused | refused | not tested | yes, Turkish | not tested |
+
+For decisions (booleans, choices, probabilities and rubrics), see
+[Local Laya](laya.md).
+
 ## What These Models Do Not Do
 
 Each wrapper does only what its model does and refuses the rest with a clear

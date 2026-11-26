@@ -93,11 +93,23 @@ def test_whisper_hears_the_clip_after_leading_silence(speech_models: Any) -> Non
     assert len(samples) == silence + 1600 and not samples[:silence].any()
 
 
-def test_a_transcriber_refuses_a_typed_capture(speech_models: Any) -> None:
+@pytest.mark.parametrize("transcriber", ["Whisper", "Whistle"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> import: media\n[n: int] << Count the words in <<clip>>.\n= `n`\n",
+        "> import: media\n@shout(text: str) -> str:\n  > tool:\n      risk: read_only\n"
+        "  = `text.upper()`\n> use: shout\n[t] << Transcribe <<clip>>.\n= <t>\n",
+    ],
+    ids=["typed capture", "program tool"],
+)
+def test_a_transcriber_refuses_typed_output_and_tools(
+    speech_models: Any, transcriber: str, source: str
+) -> None:
     clip = run(EXAMPLE / "speak.kedi", LangChainAdapter(speech_models.EmaLightning()), sentence="x")
     runtime = compile_program(
-        parse_program("> import: media\n[n: int] << Count the words in <<clip>>.\n= `n`\n"),
-        adapter=LangChainAdapter(speech_models.Whisper(language="tr")),
+        parse_program(source),
+        adapter=LangChainAdapter(getattr(speech_models, transcriber)(language="en")),
         runtime_globals={"clip": clip},
     )
     try:
