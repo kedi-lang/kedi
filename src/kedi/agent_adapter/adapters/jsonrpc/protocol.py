@@ -9,11 +9,13 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
-  capabilities, mediaKinds?, settings?, effort?}``: ``settings`` names the ``> settings:`` the
-  backend applies, ``effort`` the ``> effort:`` levels it maps. Kedi sends nothing else before
+  capabilities, mediaKinds?, settings?, effort?, mcp?}``: ``settings`` names the
+  ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps, ``mcp``
+  ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``). Kedi sends nothing else before
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
-  instructionParts, user, userContent, output, tools, continuation, session, subagent, hooks}``
+  instructionParts, user, userContent, output, tools, continuation, session, subagent, hooks,
+  mcpServers, admitResults}``
   returns ``{text}``, ``{data}`` or ``{content}``, optionally
   with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
   toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
@@ -48,8 +50,9 @@ Bridge to Kedi:
   the step for a child's limits. It returns ``{admitted: true}``, or ``{admitted: false,
   dimension, reason}``, with ``limit``, ``consumed`` and ``scopeDepth`` for a run budget: the
   bridge then skips the step and ends the run, which fails with Kedi's error.
-- ``approval/request`` ``{runId, callId?, tool, arguments, risk, description?}`` (with the
-  ``nativeTools`` capability), before each call of a bridge tool. ``risk`` is ``read_only``,
+- ``approval/request`` ``{runId, callId?, tool, arguments, risk, description?, origin?}`` (with
+  the ``nativeTools`` capability), before each call of a bridge tool; ``origin`` is
+  ``adapter_native`` (the default), ``mcp`` or ``provider_builtin``. ``risk`` is ``read_only``,
   ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
   reason}``, or ``{decision: "edit", arguments, reason}``: the bridge runs the edited
   arguments, after another ``approval/request`` if their risk is higher.
@@ -61,6 +64,10 @@ Bridge to Kedi:
   message}``. ``pre_tool_use`` returns ``{decision: "continue"}``, ``{decision: "edit",
   arguments}`` or ``{decision: "deny", reason}``; the others return ``{}``. Kedi runs the
   program's hooks for Kedi tools itself, at ``tool/call``.
+- ``artifact/admit`` ``{runId, callId, tool, origin, result}`` (with ``nativeTools``, when the
+  run's ``admitResults`` is true), for each result of a bridge tool, MCP tools included, before
+  the model sees it: returns ``{result}``, the result itself or Kedi's artifact reference for a
+  large one, which the bridge sends the model instead.
 - ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
   totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
   it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
@@ -138,6 +145,8 @@ the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 NATIVE_TOOLS: Final = "nativeTools"
+MCP_TRANSPORTS: Final = frozenset({"stdio", "http", "sse"})
+"""The ``> mcp:`` transports; ``streamable-http`` normalizes to ``http``."""
 HOOK_EVENTS: Final = frozenset({"pre_tool_use", "post_tool_use", "post_tool_use_failure"})
 
 BUDGET_DIMENSIONS: Final = {"request": "request", "toolAttempt": "tool_attempt"}

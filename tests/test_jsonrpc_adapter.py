@@ -135,6 +135,8 @@ def test_the_handshake_sets_kind_identity_and_instance_capabilities(adapters: li
         ("interrupt-without-live", "interrupt needs liveInput"),
         ("settings-own", "settings lists Kedi's own settings: context_limit"),
         ("settings-not-names", "settings must list setting names"),
+        ("mcp-not-native", "mcp needs nativeTools: MCP tools are the bridge's own"),
+        ("mcp-unknown-transport", "mcp.transports must list transports of"),
         ("effort-unknown", "effort must list levels of"),
     ],
 )
@@ -1571,3 +1573,125 @@ def test_a_hook_still_running_when_the_run_ends_is_cancelled(adapters: list) -> 
     # Kedi only describes a bridge tool for its hooks; the bridge runs it.
     with pytest.raises(RuntimeError, match="a bridge tool runs in the bridge"):
         module._bridge_tool(command="ls")
+
+
+MCP_SERVER = Path(__file__).parent / "fixtures" / "mcp_tools_server.py"
+
+
+def mcp_program(prompt: str, *, profile: str = "> approval: allow\n") -> str:
+    server = f"    command: {sys.executable}\n    args: `[{str(MCP_SERVER)!r}]`\n"
+    return f"{profile}> mcp:\n{server}[r] << {prompt}\n= <r>\n"
+
+
+def mcp_bridge(endpoint: RecordingEndpoint, adapters: list) -> JsonRpcAdapter:
+    adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+    adapters.append(adapter)
+    return adapter
+
+
+def tool_results(exchange: Any) -> list[Any]:
+    messages = exchange.body["messages"]
+    return [json.loads(message["content"]) for message in messages if message["role"] == "tool"]
+
+
+def test_the_reference_bridge_runs_mcp_tools_under_kedis_controls(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="shout", arguments={"text": "hi"})
+        adapter = mcp_bridge(endpoint, adapters)
+        capabilities = adapter.capabilities
+        assert capabilities.supports_mcp and adapter.mcp_transports == {"stdio"}
+        assert capabilities.supports_native_artifacts
+        seen: list[Any] = []
+        adapter.on("pre_tool_use")(
+            lambda event: seen.append(("pre", event.origin, event.tool_name))
+        )
+        adapter.on("post_tool_use")(lambda event: seen.append(("post", event.result)))
+        assert run(mcp_program("Shout hi."), adapter) == "done"
+        first, second = endpoint.take()
+        assert "shout" in {tool["function"]["name"] for tool in first.body["tools"]}
+        assert tool_results(second) == [{"ok": True, "result": {"result": "HI"}}]
+        assert seen == [("pre", "mcp", "shout"), ("post", {"result": "HI"})]
+        # Without an approval policy, Kedi denies the mutating MCP call, as for Kedi tools.
+        assert run(mcp_program("Shout hi.", profile=""), adapter) == "done"
+        _, denied = endpoint.take()
+        (result,) = tool_results(denied)
+        assert result["ok"] is False
+
+
+def test_an_mcp_tools_large_result_reaches_the_model_as_an_artifact(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="dump", arguments={"lines": 400})
+        adapter = mcp_bridge(endpoint, adapters)
+        profile = "> approval: allow\n> artifacts:\n    threshold: 1kb\n"
+        assert run(mcp_program("Dump the log.", profile=profile), adapter) == "done"
+        _, second = endpoint.take()
+        ((result,),) = [[item["result"]] for item in tool_results(second)]
+        # Kedi kept the log and gave the model a reference to read it in pieces.
+        assert "ref_id" in result and "log line 399" not in json.dumps(result)
+
+
+def test_an_mcp_tool_failure_reaches_the_programs_failure_hook(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="broken")
+        adapter = mcp_bridge(endpoint, adapters)
+        failures: list[Any] = []
+        adapter.on("post_tool_use_failure")(lambda event: failures.append(event.error_message))
+        assert run(mcp_program("Break it."), adapter) == "done"
+        _, second = endpoint.take()
+        (result,) = tool_results(second)
+        assert result["ok"] is False and "the disk is full" in result["error"]
+        assert len(failures) == 1 and "the disk is full" in failures[0]
+
+
+def test_a_bridge_refuses_mcp_transports_it_did_not_list(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        adapter = mcp_bridge(endpoint, adapters)
+        source = "> mcp:\n    transport: http\n    url: https://tools.example.com/mcp\n[r] << Hi.\n= <r>\n"
+        error = failure(source, adapter)
+        assert "does not support profile fields: mcp (http)" in str(error)
+
+
+def test_artifact_admit_needs_native_tools_and_a_well_formed_result(adapters: list) -> None:
+    plain, native = peer("default"), peer("hooked")
+    adapters += [plain, native]
+    call = {"runId": "r", "callId": "c", "tool": "shell", "origin": "adapter_native"}
+    with pytest.raises(JsonRpcError, match="artifact/admit needs the nativeTools capability"):
+        plain._parse_artifact({**call, "result": "x"})
+    with pytest.raises(JsonRpcError, match="artifact/admit needs a string tool and callId"):
+        native._parse_artifact(call)
+    with pytest.raises(JsonRpcError, match="an origin of adapter_native, provider_builtin"):
+        native._parse_approval({**call, "arguments": {}, "risk": "mutating", "origin": "mcp"})
+
+
+def test_a_result_kedi_cannot_admit_stops_the_run(adapters: list, monkeypatch: Any) -> None:
+    import kedi.agent_adapter.adapters.jsonrpc.adapter as module
+
+    adapter = peer("hooked")
+    adapters.append(adapter)
+    # Outside a Kedi request there is no artifact scope: the result comes back as is.
+    assert json.loads(adapter.invoke_sync(prompt="Admit it."))["result"] == {"result": "a b"}
+
+    async def too_large(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("the result is too large to admit")
+
+    monkeypatch.setattr(module, "admit_current_artifact_result", too_large)
+    with pytest.raises(Exception, match="too large to admit"):
+        adapter.invoke_sync(prompt="Admit it.")
+
+
+def test_an_admission_still_running_when_the_run_ends_is_cancelled(
+    adapters: list, monkeypatch: Any
+) -> None:
+    import kedi.agent_adapter.adapters.jsonrpc.adapter as module
+
+    async def slow(*_: Any, **__: Any) -> Any:
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(module, "admit_current_artifact_result", slow)
+    adapter = peer("hooked")
+    adapters.append(adapter)
+    assert adapter.invoke_sync(prompt="Admit early.") == "answered early"
+    deadline = time.monotonic() + 10
+    while f"admit reply {CANCELLED}" not in adapter._connection.stderr_tail:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)

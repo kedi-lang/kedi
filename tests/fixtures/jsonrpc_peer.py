@@ -57,6 +57,11 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "sessions": True}
     elif SCENARIO == "hooked":
         result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
+    elif SCENARIO == "mcp-not-native":
+        result["mcp"] = {"transports": ["stdio"]}
+    elif SCENARIO == "mcp-unknown-transport":
+        result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
+        result["mcp"] = {"transports": ["carrier-pigeon"]}
     elif SCENARIO == "drawing":
         result["capabilities"] = {
             **CAPABILITIES,
@@ -320,6 +325,20 @@ def hooked(request_id: int, params: dict[str, Any]) -> None:
 
     run_id, user = params["runId"], params["user"]
     call = {"runId": run_id, "callId": "c1", "tool": "shell", "origin": "adapter_native"}
+    if user == "Admit it.":
+        admitted = call_kedi("artifact/admit", {**call, "result": "a b"})
+        send({"id": request_id, "result": {"text": json.dumps(admitted)}})
+        return
+    if user == "Admit early.":
+        threading.Thread(
+            target=lambda: sys.stderr.write(
+                f"admit reply {call_kedi('artifact/admit', {**call, 'result': 'x'}).get('error', {}).get('code')}\n"
+            ),
+            daemon=True,
+        ).start()
+        time.sleep(0.2)
+        send({"id": request_id, "result": {"text": "answered early"}})
+        return
     if user == "Answer early.":
         # Answer the run while Kedi still runs a hook: Kedi cancels it.
         def wait_for_hook() -> None:

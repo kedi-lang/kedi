@@ -16,8 +16,13 @@
 //
 // Usage: node openai_chat_bridge.mjs --base-url URL [--mode native|protocol]
 //        [--api-key-env NAME] [--max-steps N] [--image-output] [--audio-output]
+//
+// In native mode it connects stdio MCP servers (> mcp:) for each run and offers their tools,
+// each call going through Kedi's hooks, approval, tool-attempt budget and artifact admission.
 // stdout carries only protocol frames; diagnostics go to stderr.
 
+
+import { spawn } from "node:child_process";
 
 const PROTOCOL_VERSION = 1;
 const RUN_FAILED = -32002;
@@ -134,7 +139,128 @@ async function callTool(runId, id, name, args) {
   return JSON.stringify(reply);
 }
 
+class McpClient {
+  // One stdio MCP server for the run: JSON-RPC, one message per line.
+  constructor(server) {
+    this.child = spawn(server.command, server.args ?? [], {
+      env: { ...process.env, ...(server.env ?? {}) },
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    this.next = 1;
+    this.pending = new Map();
+    let buffered = "";
+    this.child.stdout.setEncoding("utf8");
+    this.child.stdout.on("data", (chunk) => {
+      buffered += chunk;
+      let end;
+      while ((end = buffered.indexOf("\n")) !== -1) {
+        const line = buffered.slice(0, end);
+        buffered = buffered.slice(end + 1);
+        if (!line.trim()) continue;
+        const message = JSON.parse(line);
+        const waiter = this.pending.get(message.id);
+        if (!waiter) continue;
+        this.pending.delete(message.id);
+        if (message.error) waiter.reject(new Error(message.error.message));
+        else waiter.resolve(message.result);
+      }
+    });
+    const fail = (error) => {
+      for (const waiter of this.pending.values()) waiter.reject(error);
+      this.pending.clear();
+    };
+    this.child.on("error", fail);
+    this.child.on("exit", () => fail(new Error(`MCP server ${server.command} exited`)));
+  }
+
+  write(message) {
+    this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+  }
+
+  request(method, params) {
+    const id = this.next++;
+    this.write({ id, method, params });
+    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+  }
+
+  async start() {
+    const client = { name: "openai-chat-bridge", version: "1" };
+    await this.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: client });
+    this.write({ method: "notifications/initialized", params: {} });
+    return (await this.request("tools/list", {})).tools ?? [];
+  }
+
+  async call(name, args) {
+    const reply = await this.request("tools/call", { name, arguments: args });
+    const text = (reply.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    if (reply.isError) throw new Error(text || `MCP tool ${name} failed`);
+    return reply.structuredContent ?? text;
+  }
+
+  close() {
+    this.child.kill();
+  }
+}
+
+async function mcpTool(params, call, args, client) {
+  // An MCP tool is this bridge's own: Kedi's hooks, approval, budget and artifacts apply.
+  const hooks = params.hooks ?? [];
+  const base = { runId: params.runId, callId: call.id, tool: call.function.name, origin: "mcp" };
+  if (hooks.includes("pre_tool_use")) {
+    const pre = await request("hook/invoke", { ...base, event: "pre_tool_use", arguments: args });
+    if (pre.decision === "deny") return JSON.stringify({ ok: false, error: pre.reason });
+    if (pre.decision === "edit") args = pre.arguments;
+  }
+  const approval = await request("approval/request", { ...base, arguments: args, risk: "mutating" });
+  if (approval.decision === "deny") return JSON.stringify({ ok: false, error: approval.reason });
+  if (approval.decision === "edit") args = approval.arguments;
+  const admission = await request("budget/admit", { runId: params.runId, dimension: "toolAttempt" });
+  if (!admission.admitted) throw new RpcError(RUN_FAILED, admission.reason);
+  let result;
+  try {
+    result = await client.call(call.function.name, args);
+  } catch (error) {
+    if (hooks.includes("post_tool_use_failure")) {
+      const failure = { type: error.name ?? "Error", message: String(error.message ?? error) };
+      await request("hook/invoke", { ...base, event: "post_tool_use_failure", arguments: args, error: failure });
+    }
+    return JSON.stringify({ ok: false, error: String(error.message ?? error) });
+  }
+  if (hooks.includes("post_tool_use")) {
+    await request("hook/invoke", { ...base, event: "post_tool_use", arguments: args, result });
+  }
+  // A large result reaches the model as Kedi's artifact reference.
+  if (params.admitResults) result = (await request("artifact/admit", { ...base, result })).result;
+  return JSON.stringify({ ok: true, result });
+}
+
 async function run(params, state) {
+  // Connects the run's MCP servers, converses, and closes them.
+  const clients = [];
+  const mcp = new Map();
+  const definitions = [];
+  try {
+    for (const server of params.mcpServers ?? []) {
+      const client = new McpClient(server);
+      clients.push(client);
+      for (const tool of await client.start()) {
+        if (mcp.has(tool.name) || params.tools.some((kedi) => kedi.name === tool.name)) {
+          throw new RpcError(RUN_FAILED, `MCP tool ${tool.name} has the name of another tool`);
+        }
+        mcp.set(tool.name, client);
+        definitions.push({
+          type: "function",
+          function: { name: tool.name, description: tool.description ?? "", parameters: tool.inputSchema },
+        });
+      }
+    }
+    return await converse(params, state, mcp, definitions);
+  } finally {
+    for (const client of clients) client.close();
+  }
+}
+
+async function converse(params, state, mcp, definitions) {
   const signal = state.controller.signal;
   const messages = [];
   if (params.system) messages.push({ role: "system", content: params.system });
@@ -151,11 +277,12 @@ async function run(params, state) {
   for (const [name, value] of Object.entries(params.settings ?? {})) body[SETTINGS[name]] = value;
   if (params.effort) body.reasoning_effort = params.effort;
   const models = [params.model ?? "default", ...(params.fallbackModels ?? [])];
-  if (native && params.tools.length) {
+  if (native && params.tools.length + definitions.length) {
     body.tools = params.tools.map((tool) => ({
       type: "function",
       function: { name: tool.name, description: tool.description ?? "", parameters: tool.inputSchema },
     }));
+    body.tools.push(...definitions);
   }
   const media = params.output?.media;
   if (media === "image") body.modalities = ["image", "text"];
@@ -209,12 +336,11 @@ async function run(params, state) {
       }
       messages.push({ role: "assistant", content: message.content ?? null, tool_calls: calls });
       for (const call of calls) {
-        const content = await callTool(
-          params.runId,
-          call.id,
-          call.function.name,
-          JSON.parse(call.function.arguments || "{}"),
-        );
+        const args = JSON.parse(call.function.arguments || "{}");
+        const client = mcp.get(call.function.name);
+        const content = client
+          ? await mcpTool(params, call, args, client)
+          : await callTool(params.runId, call.id, call.function.name, args);
         messages.push({ role: "tool", tool_call_id: call.id, content });
       }
       continue;
@@ -279,6 +405,8 @@ async function handle(message) {
           tools: true,
           nativeStructuredOutput: native,
           nativeToolCalling: native,
+          // Its MCP servers' tools are its own (native mode).
+          nativeTools: native,
           events: true,
           mediaInput: true,
           sessions: true,
@@ -295,6 +423,7 @@ async function handle(message) {
         settings: Object.keys(SETTINGS),
         effort: EFFORT,
         mediaKinds: ["image"],
+        mcp: { transports: native ? ["stdio"] : [] },
       },
     });
     return;
