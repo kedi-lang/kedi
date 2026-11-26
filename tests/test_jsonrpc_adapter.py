@@ -2081,3 +2081,17 @@ def test_an_interrupt_stops_a_test_model_request_the_bridge_waits_on(adapters: l
     # In test mode the bridge waits on model/complete, not a fetch; the interrupt still stops it.
     with pytest.raises(RunInterrupted):
         asyncio.run(attempt())
+
+
+HANDSHAKES = json.loads((Path(__file__).parent / "fixtures/jsonrpc_handshakes.json").read_text())
+"""kedi-lang/json-rpc's fixtures/handshake/v1.json: the handshakes Kedi refuses, and those it takes."""
+
+
+@pytest.mark.parametrize("case", HANDSHAKES["cases"], ids=lambda case: case["name"])
+def test_kedi_refuses_the_handshakes_the_protocol_fixtures_name(case: dict[str, Any]) -> None:
+    command = [sys.executable, str(Path(__file__).parent / "fixtures/jsonrpc_hello.py")]
+    if case["kediSays"] is None:
+        JsonRpcAdapter([*command, json.dumps(case["handshake"])]).close()
+        return
+    with pytest.raises(JsonRpcError, match=re.escape(case["kediSays"])):
+        JsonRpcAdapter([*command, json.dumps(case["handshake"])])
