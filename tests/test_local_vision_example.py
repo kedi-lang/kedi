@@ -120,3 +120,58 @@ def test_the_reader_refuses_typed_output_and_tools(reader: Any, source: str) -> 
     finally:
         asyncio.run(runtime.aclose())
     assert reader.seen == []
+
+
+RECORD = EXAMPLE / "receipt_record.kedi"
+
+
+def record(key: str, answer: dict[str, Any]) -> tuple[Any, list[Any]]:
+    """Run receipt_record.kedi on a scripted vision model; return the result and its requests."""
+
+    from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart, UserPromptPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from kedi.agent_adapter import PydanticAdapter
+
+    seen: list[Any] = []
+
+    def answer_with_the_receipt(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        images = [
+            item
+            for message in messages
+            for part in getattr(message, "parts", ())
+            if isinstance(part, UserPromptPart) and not isinstance(part.content, str)
+            for item in part.content
+            if isinstance(item, BinaryContent) and item.is_image
+        ]
+        seen.append({"images": images, "tools": [tool.name for tool in info.function_tools]})
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, answer)])
+
+    photo = Image.from_bytes((EXAMPLE / "receipts" / f"{key}.png").read_bytes(), "image/png")
+    runtime = compile_program(
+        parse_program(RECORD.read_text(), source_path=str(RECORD)),
+        adapter=PydanticAdapter(FunctionModel(answer_with_the_receipt)),
+        runtime_globals={"photo": photo},
+    )
+    try:
+        return runtime.run_main(), seen
+    finally:
+        asyncio.run(runtime.aclose())
+
+
+def test_the_shared_program_sends_the_image_and_types_the_receipt() -> None:
+    truth = json.loads((EXAMPLE / "receipts" / "truth.json").read_text())["cafe"]
+    answer = {key: truth[key] for key in ("merchant", "items", "total")}
+    result, (request,) = record("cafe", answer)
+    assert result["receipt"].model_dump() == answer and result["adds_up"] is True
+    (image,) = request["images"]
+    assert image.data == (EXAMPLE / "receipts" / "cafe.png").read_bytes()
+    # The program turns the artifact contract off: no tools for a small model to misuse.
+    assert request["tools"] == []
+
+
+def test_the_shared_program_flags_a_receipt_that_does_not_add_up() -> None:
+    truth = json.loads((EXAMPLE / "receipts" / "truth.json").read_text())["bakery"]
+    answer = {key: truth[key] for key in ("merchant", "items", "total")}
+    result, _ = record("bakery", answer)
+    assert result["adds_up"] is False

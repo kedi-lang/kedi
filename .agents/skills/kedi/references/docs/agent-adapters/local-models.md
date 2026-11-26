@@ -22,6 +22,7 @@ example has a README with setup, commands, evaluation sets and results.
 | Task | Model | Kedi surface | Joins as | Download | Measured |
 | --- | --- | --- | --- | --- | --- |
 | Typed fields from text | Cactus Needle 3 | `[refund: Refund] << ...` | Pydantic AI model | 34 MB | schema-valid 24/24, every field right 15/24, 0.16 s, 193 MB peak |
+| Typed records from images | Qwen3-VL-2B on llama.cpp's `llama-server` | `[receipt: Receipt] << Read the receipt in <<photo>>.` | Pydantic AI's OpenAI chat model on the local server | 1.5 GB | every field right 18/18, the same as `gemini-3.5-flash-lite` on the same program; 3.8 s, 2.4 GiB server peak |
 | Reading text in images | Cactus Mirage | `[writing] << Read the writing in <<photo>>.` | LangChain, `image_inputs` | 21 MB | character error rate 0.002, 0.15 s, 267 MB peak |
 | Turkish speech | EMA Lightning | `[speech: Audio] << <sentence>` | LangChain, `audio_outputs` | 34 MB, plus PyTorch | real-time factor 0.064, 481 MB peak |
 | English speech | Phonon 31m | `[speech: Audio] << <sentence>` | LangChain, `audio_outputs` | 65 MB | real-time factor 0.081, 347 MB peak |
@@ -37,6 +38,24 @@ Typed decisions are covered separately. For booleans, choices, probabilities,
 rubrics and constrained extraction, with decision evidence, use
 [Local Laya](laya.md). The setups above cover what Laya does not: open fields
 such as names and amounts, text in images, and speech.
+
+## Capabilities
+
+Each cell comes from a run through Kedi. "Refused" means the wrapper or server fails
+with a clear error. "Not tested" makes no claim either way.
+
+| Model | Text answer | Typed output | Program tools | Image input | Audio input | Speech output |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cactus Needle 3 | refused | yes | refused | not tested | not tested | not tested |
+| Qwen3-VL-2B, `llama-server` | not tested | yes | not tested | yes | not tested | not tested |
+| Cactus Mirage | yes, the text it reads | refused | refused | yes | not tested | not tested |
+| EMA Lightning | not tested | not tested | not tested | not tested | not tested | yes, Turkish |
+| Phonon 31m | not tested | not tested | not tested | not tested | not tested | yes, English |
+| Cactus Whistle | yes, the transcript | refused | refused | not tested | yes, English | not tested |
+| Whisper small | yes, the transcript | refused | refused | not tested | yes, Turkish | not tested |
+
+For decisions (booleans, choices, probabilities and rubrics), see
+[Local Laya](laya.md).
 
 ## What These Models Do Not Do
 
@@ -70,6 +89,10 @@ measurements:
   framework's messages. Pydantic AI's messages also carry a transport note from
   Kedi's Pydantic adapter. With that note, Needle read "1,299.00 euros" as 1.299
   on every run; without it, every amount was right.
+- **Drop the artifact tools when nothing is large.** Kedi offers its artifact
+  tools to every model by default. Qwen3-VL-2B called `read_artifact` until its
+  retries ran out, on every receipt. With `> artifacts:` and `enabled: false`,
+  it read 18 of 18.
 - **Let the program decide.** The model reads; Kedi or Python code checks and
   routes. In the examples, a refund goes to a person when its amount is not one
   the message states in euros, and a receipt fails when its items do not add
@@ -86,6 +109,10 @@ measurements:
   before Cactus loads.
 - **Check it with the network denied.** On macOS:
   `sandbox-exec -p '(version 1)(allow default)(deny network*)' python ...`.
+- **Turn off cloud handoff.** Some local runtimes forward requests to a cloud.
+  `cactus serve`, from Cactus Engine, hands low-confidence completions to Cactus's
+  cloud unless it gets `--no-cloud-handoff`. llama.cpp's `llama-server`, run
+  from local model files, worked with outbound networking denied.
 - **Keep model packages out of Kedi.** The model packages are not Kedi
   dependencies. Each example pins its own in `requirements.txt`, for a separate
   environment.

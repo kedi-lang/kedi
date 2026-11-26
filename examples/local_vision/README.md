@@ -1,7 +1,17 @@
 # Local vision
 
-Read receipt images with a 21 MB vision model that runs on your machine, then check them
-with ordinary Kedi and Python logic. After a one-time download, nothing leaves the machine.
+Read receipt images with models that run on your machine, then check them with ordinary
+Kedi and Python logic. After a one-time download, nothing leaves the machine.
+
+There are two programs:
+
+- **`receipts.kedi`** reads the writing with Cactus Mirage, a 21 MB text reader, and
+  parses it.
+- **`receipt_record.kedi`** asks a vision-language model for a typed `Receipt`. The same
+  program runs on Qwen3-VL-2B locally and on a cloud model; see
+  [One program, local and cloud](#one-program-local-and-cloud).
+
+## Reading text with Mirage
 
 [`receipts.kedi`](receipts.kedi) passes the image as a reference,
 `[writing] << Read the writing in <<photo>>.`, so the model gets the image itself. It then
@@ -29,7 +39,7 @@ The six receipts in [`receipts/`](receipts) are synthetic, and
 expected text, items and total for each one. The bakery receipt's printed total is wrong
 on purpose.
 
-## Setup
+### Setup
 
 ```bash
 uv venv .venv-local && source .venv-local/bin/activate
@@ -41,7 +51,7 @@ The last line downloads the engine and the weights once, into `~/.cache/cactus`.
 
 `vision_model.py` sets `CACTUS_TELEMETRY=0` and `DO_NOT_TRACK=1` before Cactus loads.
 
-## Run
+### Run
 
 ```bash
 python examples/local_vision/score.py
@@ -55,7 +65,7 @@ For each receipt, `score.py` reports:
 
 It writes `examples/local_vision/out/report.json`.
 
-## Results
+### Results
 
 Measured on 2026-11-26, on an Apple M1 with 8 GB of RAM and Python 3.12. Outbound
 networking was denied with `sandbox-exec -p '(version 1)(allow default)(deny network*)'`.
@@ -74,7 +84,7 @@ networking was denied with `sandbox-exec -p '(version 1)(allow default)(deny net
 The one item error is "Vitamin C", read as "VitaminC": Mirage dropped the space. The sum
 still matched, so the check passed.
 
-## What Mirage is, and is not
+### What Mirage is, and is not
 
 Mirage is a vision model with several outputs: scene, objects, text, masks, relations, and
 form fields (an enum choice, a bounded integer, a short string or a box). Three things we
@@ -92,13 +102,113 @@ found matter for this example:
 
 Mirage reads Latin script only.
 
+## One program, local and cloud
+
+[`receipt_record.kedi`](receipt_record.kedi) has three steps:
+
+1. **Read.** `[receipt: Receipt] << Read the receipt in <<photo>>.` asks for a typed record:
+   the merchant, every item with its price, and the printed total.
+2. **Check.** `adds_up` checks that the items add up to the total. A receipt that does not
+   goes to a person, whether the model misread it or the shop misprinted it.
+3. **No artifacts.** The program turns Kedi's artifact tools off with `> artifacts:` and
+   `enabled: false`, because nothing in it is large. When the tools were offered,
+   Qwen3-VL-2B called `read_artifact` until its retries ran out, on every receipt.
+
+The local model is [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF)
+(Apache 2.0), served by llama.cpp's `llama-server`, an OpenAI-compatible server. Kedi reaches
+it through its Pydantic adapter with Pydantic AI's OpenAI chat model, so the example adds no
+model wrapper.
+
+| Model | Runtime | License | Download |
+|---|---|---|---|
+| Qwen3-VL-2B-Instruct, Q4_K_M, pinned revision | llama.cpp `llama-server` (build 6970) | Apache 2.0 | 1,056 MB model + 424 MB image projector |
+
+### Setup
+
+```bash
+brew install llama.cpp      # or a release build from github.com/ggml-org/llama.cpp
+hf download Qwen/Qwen3-VL-2B-Instruct-GGUF Qwen3VL-2B-Instruct-Q4_K_M.gguf \
+    mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf --revision 52d6c8ffea26cc873ac5ad116f8631268d7eb503
+```
+
+`hf` comes with `huggingface_hub`. The files land in `~/.cache/huggingface/hub`.
+
+### Run
+
+```bash
+M=~/.cache/huggingface/hub/models--Qwen--Qwen3-VL-2B-Instruct-GGUF/snapshots/52d6c8ffea26cc873ac5ad116f8631268d7eb503
+llama-server -m $M/Qwen3VL-2B-Instruct-Q4_K_M.gguf --mmproj $M/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf \
+    --alias qwen3-vl-2b --host 127.0.0.1 --port 8092 -c 8192 --jinja
+python examples/local_vision/compare.py --local http://127.0.0.1:8092/v1
+python examples/local_vision/compare.py --cloud google:gemini-3.5-flash-lite --delay 5
+```
+
+`compare.py` reads every receipt 3 times and writes `out/compare_local.json` or
+`out/compare_cloud.json`. It reports:
+
+- runtime failures, apart from the model's answers;
+- schema validity, on the first attempt and after any retry;
+- per-field accuracy and task completion;
+- whether the add-up check agrees with the truth;
+- consistency across runs and latency.
+
+The cloud run is an explicit comparison, never a fallback.
+
+### Results
+
+Measured on 2026-11-26, on an Apple M1 with 8 GB of RAM. For the local leg, `llama-server`
+and `compare.py` both ran with outbound networking denied:
+
+```
+sandbox-exec -p '(version 1)(allow default)(deny network*)
+                 (allow network* (local ip "localhost:*"))
+                 (allow network* (remote ip "localhost:*"))'
+```
+
+| Measure | Qwen3-VL-2B, local | `gemini-3.5-flash-lite`, cloud |
+|---|---|---|
+| Runtime failures | 0/18 | 0/18 |
+| Schema-valid answers | 18/18, all on the first attempt | 18/18, 17 on the first attempt |
+| Merchant, items, total | 18/18 each | 18/18 each |
+| Add-up check agrees with the truth | 18/18, including the bakery's wrong total | 18/18 |
+| Identical answers across the 3 runs | 6/6 receipts | 6/6 receipts |
+| Latency per receipt (median) | 3.8 s | 3.6 s |
+| Model load from cache | 1.7 s | none |
+| Server memory | 2.4 GiB maximum resident, 1.5 GiB peak footprint | none |
+
+Qwen3-VL-2B read "Vitamin C" with its space, which Mirage dropped. Mirage is still about 25
+times faster (0.15 s) and peaks at 267 MB, so it suits plain text reading where a 2B model
+is too heavy.
+
+These are six clean, synthetic receipts. They show that the program, the type and the check
+carry over unchanged between backends. They do not show how either model handles photos of
+real receipts.
+
+### Cactus Engine
+
+We tried Cactus Engine first, the Cactus runtime for vision-language models, and it did
+not work here:
+
+- **It cannot load the published models.** `cactus-engine` 2.2.2, the only release, rejects
+  the vision-language bundles now published at huggingface.co/Cactus-Compute as "not a
+  valid v2 Cactus bundle". That covers both the `-cq` archives and the older `int4`
+  archives.
+- **It sends requests to the cloud by default.** `cactus serve` hands low-confidence
+  completions to Cactus's cloud unless it gets `--no-cloud-handoff`
+  (`CACTUS_DISABLE_CLOUD_HANDOFF=1`). It also sends telemetry unless it gets
+  `--no-cloud-tele` (`CACTUS_NO_CLOUD_TELE=1`). An offline setup with it needs both.
+- **It conflicts with `cactus-compute`.** Both packages install the `cactus` module, so they
+  need separate environments.
+
 ## Files
 
 | File | Purpose |
 |---|---|
-| `receipts.kedi` | the program: read, parse, check |
+| `receipts.kedi` | the Mirage program: read, parse, check |
 | `vision_model.py` | Mirage as a LangChain chat model that reads text |
-| `score.py` | score every receipt against the ground truth |
+| `score.py` | score the Mirage program against the ground truth |
+| `receipt_record.kedi` | the shared program: a typed `Receipt` from a vision-language model, then the check |
+| `compare.py` | run the shared program locally or on a cloud model, and score it |
 | `make_receipts.py` | draw the receipts and the ground truth |
 | `receipts/` | the images and `truth.json` |
-| `requirements.txt` | `cactus-compute`, pinned |
+| `requirements.txt` | `cactus-compute`, pinned, for Mirage |
