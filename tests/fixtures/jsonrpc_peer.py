@@ -413,7 +413,33 @@ def transcript_probe(request_id: int, params: dict[str, Any]) -> None:
         {"role": "user", "parts": [{"type": "text", "text": user}]},
         {"role": "assistant", "parts": [{"type": "text", "text": reply["text"]}]},
     ]
-    if user == "Forget it.":
+    if params.get("processHistory") and user == "Process early.":
+        # Answer the run while Kedi still runs the processor: Kedi cancels it.
+        def wait_for_processor() -> None:
+            current = {"runId": params["runId"], "messages": [*history, turn[0]]}
+            reply = call_kedi("history/process", current)
+            sys.stderr.write(f"process reply {reply.get('error', {}).get('code')}\n")
+            sys.stderr.flush()
+
+        threading.Thread(target=wait_for_processor, daemon=True).start()
+        time.sleep(0.2)
+        send({"id": request_id, "result": {"text": "answered early", "transcript": turn}})
+        return
+    if params.get("processHistory"):
+        # Kedi's processor sees the conversation so far; the run answers with all of it.
+        current = [*history, turn[0]]
+        processed = call_kedi("history/process", {"runId": params["runId"], "messages": current})
+        if user == "Forget it." or "error" in processed:
+            send({"id": request_id, "result": {"text": json.dumps(processed)}})
+            return
+        kept = processed["result"]["messages"]
+        reply["text"] = json.dumps([part["text"] for m in kept for part in m["parts"]])
+        reply["transcript"] = [*kept, turn[1]]
+    elif user == "Process anyway.":
+        refused = call_kedi("history/process", {"runId": params["runId"], "messages": []})
+        reply["text"] = json.dumps(refused)
+        reply["messages"] = turn
+    elif user == "Forget it.":
         pass
     elif user == "Break a part.":
         reply["messages"] = [{"role": "user", "parts": [{"type": "hologram"}]}]

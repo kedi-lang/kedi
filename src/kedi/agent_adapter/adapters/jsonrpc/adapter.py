@@ -45,6 +45,7 @@ from ...approvals.policy import (
 from ...conversation import AdapterConversationContext
 from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
+from ...history_processing import HistoryProcessorRunner
 from ...hooks import HookDeniedError, HookHandler, HookRegistrationMixin, hooked_agent_run
 from ...hooks.dispatcher import current_hook_dispatcher
 from ...hooks.models import HookEventName
@@ -88,6 +89,7 @@ from ...tools.execution import (
 )
 from ...tools.specs import ToolSpec
 from .connection import Connection
+from .history import TranscriptHistoryCodec
 from .protocol import (
     BUDGET_DIMENSIONS,
     CANCELLED,
@@ -132,6 +134,8 @@ class _Run:
     live: LiveInput | None = None
     """The live input of the Kedi call; the run's prompt may carry some of it."""
     prompt: str = ""
+    model: str | None = None
+    """The run's model, for history processors."""
     commit_key: str = "state"
     """What a run's result commits: the bridge's ``state``, or its transcript ``messages``."""
     transcript_media: Mapping[str, JsonObject] = field(default_factory=dict)
@@ -169,6 +173,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
         supports_media_input=None,
         supports_stateful_history=None,
         supports_history_replay=None,
+        supports_history_processing=None,
         supports_request_budget=None,
         supports_tool_attempt_budget=None,
         supports_subagents=None,
@@ -187,6 +192,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
                 "media_input",
                 "stateful_history",
                 "history_replay",
+                "history_processing",
                 "request_budget",
                 "tool_attempt_budget",
                 "subagents",
@@ -234,6 +240,9 @@ class JsonRpcAdapter(HookRegistrationMixin):
 
         self.command = tuple(shlex.split(command) if isinstance(command, str) else command)
         self._init_hook_registration(hook_handler)
+        self._history_runner: HistoryProcessorRunner[JsonObject] = HistoryProcessorRunner(
+            None, TranscriptHistoryCodec()
+        )
         self._model = model
         self._request_timeout = request_timeout
         self._output_retries = output_retries
@@ -300,6 +309,22 @@ class JsonRpcAdapter(HookRegistrationMixin):
 
     def telemetry_model_name(self) -> str | None:
         return self.active_profile.model or self._model
+
+    def _history_policy(self) -> tuple[Any, Any]:
+        """The profile's history processor and its condition, when Kedi holds the transcript."""
+
+        policy = self.active_profile.history_processing
+        return (None, None) if policy is None else policy.resolve(None)
+
+    def _commit_processed(
+        self, store: Any, media: Mapping[str, JsonObject], transcript: Any
+    ) -> None:
+        """Record a processed turn: the conversation is what the bridge answered with."""
+
+        _commit_transcript(store.result_state, [], media, transcript)
+        # The runner records the lineage of a program conversation's history; not a child's.
+        saved = store.result_state["transcript"]
+        self._history_runner.capture(saved, saved)
 
     def _uses_transcript(self) -> bool:
         """Kedi holds a framework's transcript, and a harness's when the program needs it."""
@@ -510,114 +535,128 @@ class JsonRpcAdapter(HookRegistrationMixin):
         validator = (
             None if accept is not None else output_validator(request.output, request=request)
         )
-        run_id = uuid4().hex
-        parent_run_id = self._calling_run.get()
-        calling = self._calling_run.set(run_id)
-        try:
-            context = contextvars.copy_context()
-        finally:
-            self._calling_run.reset(calling)
-        run = _Run(
-            run_id=run_id,
-            loop=asyncio.get_running_loop(),
-            context=context,
-            tools={tool.name: tool for tool in tools},
-            live=current_live_input(),
-            prompt=rendered.user,
-            media=media,
-        )
-        required = {tool.name for tool in rendered.tools if tool.required_before_output}
-        params: JsonObject = {
-            "runId": run_id,
-            "callKind": rendered.call_kind,
-            "promptKind": rendered.prompt_kind,
-            "model": self.active_profile.model or self._model,
-            "fallbackModels": list(self.active_profile.fallback_models or ()),
-            "settings": {
-                name: to_jsonable_python(value, fallback=str)
-                for name, value in self.active_profile.settings.items()
-                if name in self.capabilities.settings
-            },
-            "effort": self.active_profile.effort,
-            "system": rendered.system,
-            "instructionParts": [
-                {"identity": part.identity, "source": part.source, "content": part.content}
-                for part in rendered.instruction_parts
-            ],
-            "user": rendered.user,
-            "userContent": user_content,
-            "output": self._output(rendered, media, attachments, tools),
-            "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.parameters,
-                    "outputSchema": tool.returns,
-                    "requiredBeforeOutput": tool.required_before_output,
+        # The program's history processor runs before each of the bridge's model requests.
+        processing = self._uses_transcript() and (child is not None or conversation is not None)
+        processor, condition = self._history_policy() if processing else (None, None)
+        with self._history_runner.run_scope(
+            conversation if child is None else None, processor=processor, condition=condition
+        ):
+            run_id = uuid4().hex
+            parent_run_id = self._calling_run.get()
+            calling = self._calling_run.set(run_id)
+            try:
+                context = contextvars.copy_context()
+            finally:
+                self._calling_run.reset(calling)
+            run = _Run(
+                run_id=run_id,
+                loop=asyncio.get_running_loop(),
+                context=context,
+                tools={tool.name: tool for tool in tools},
+                live=current_live_input(),
+                prompt=rendered.user,
+                media=media,
+                model=self.active_profile.model or self._model,
+            )
+            required = {tool.name for tool in rendered.tools if tool.required_before_output}
+            params: JsonObject = {
+                "runId": run_id,
+                "callKind": rendered.call_kind,
+                "promptKind": rendered.prompt_kind,
+                "model": self.active_profile.model or self._model,
+                "fallbackModels": list(self.active_profile.fallback_models or ()),
+                "settings": {
+                    name: to_jsonable_python(value, fallback=str)
+                    for name, value in self.active_profile.settings.items()
+                    if name in self.capabilities.settings
+                },
+                "effort": self.active_profile.effort,
+                "system": rendered.system,
+                "instructionParts": [
+                    {"identity": part.identity, "source": part.source, "content": part.content}
+                    for part in rendered.instruction_parts
+                ],
+                "user": rendered.user,
+                "userContent": user_content,
+                "output": self._output(rendered, media, attachments, tools),
+                "tools": [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "inputSchema": tool.parameters,
+                        "outputSchema": tool.returns,
+                        "requiredBeforeOutput": tool.required_before_output,
+                    }
+                    for tool in rendered.tools
+                ],
+                "continuation": None,
+                "session": None,
+                "subagent": None if child is None else _lineage(child, parent_run_id, limits),
+                "hooks": self._hook_events(),
+                "mcpServers": [_mcp_server(server) for server in self.active_profile.mcp_servers],
+                # Results of the bridge's own tools go through artifact/admit before the model.
+                "admitResults": self.native_tools and current_artifact_admission() is not None,
+            }
+            commit: Callable[[Any], None] | None = None
+            store = child.conversation if child is not None else conversation
+            if store is not None and self._uses_transcript():
+                # Kedi holds the conversation: the run gets the earlier turns, and its new
+                # messages join them when Kedi commits the turn.
+                history = list(store.resume_state.get("transcript", ()))
+                media_table = {
+                    **store.resume_state.get("transcript_media", {}),
+                    **_media_table(user_content or ()),
                 }
-                for tool in rendered.tools
-            ],
-            "continuation": None,
-            "session": None,
-            "subagent": None if child is None else _lineage(child, parent_run_id, limits),
-            "hooks": self._hook_events(),
-            "mcpServers": [_mcp_server(server) for server in self.active_profile.mcp_servers],
-            # Results of the bridge's own tools go through artifact/admit before the model.
-            "admitResults": self.native_tools and current_artifact_admission() is not None,
-        }
-        commit: Callable[[Any], None] | None = None
-        store = child.conversation if child is not None else conversation
-        if store is not None and self._uses_transcript():
-            # Kedi holds the conversation: the run gets the earlier turns, and its new
-            # messages join them when Kedi commits the turn.
-            history = list(store.resume_state.get("transcript", ()))
-            media_table = {
-                **store.resume_state.get("transcript_media", {}),
-                **_media_table(user_content or ()),
-            }
-            params["history"] = history
-            run.commit_key, run.transcript_media = "messages", media_table
-            commit = partial(_commit_transcript, store.result_state, history, media_table)
-        elif child is not None and self.capabilities.supports_stateful_history:
-            # A continuation resumes from the bridge state of the child's last committed run.
-            history = child.conversation
-            params["session"] = {
-                "id": history.conversation_id,
-                "turn": len(history.turns),
-                "state": history.resume_state.get("bridge"),
-            }
-            commit = partial(history.result_state.__setitem__, "bridge")
-        elif conversation is not None:
-            params["session"] = {
-                "id": conversation.session_id,
-                "turn": conversation.turn_sequence,
-                "state": conversation.resume_state.get("bridge"),
-            }
-            commit = partial(conversation.result_state.__setitem__, "bridge")
-        self._runs[run_id] = run
-        try:
-            with self._quoting_bridge(), agent_event_run(self.shortname) as run.events:
-                attempt = self._attempts(run, params, validator, required, accept, commit)
-                control = current_live_input()
-                if control is None or not self.capabilities.supports_live_subagent_input:
-                    answer = await attempt
+                params["history"] = history
+                params["processHistory"] = processor is not None
+                run.transcript_media = media_table
+                if processor is None:
+                    run.commit_key = "messages"
+                    commit = partial(_commit_transcript, store.result_state, history, media_table)
                 else:
-                    # Input for this run goes to the bridge while it runs; an interrupt stops
-                    # the attempt, and Kedi's coordinator starts the next one.
-                    interrupt = self.capabilities.supports_subagent_interrupt
-                    answer = await controlled_attempt(
-                        control,
-                        attempt,
-                        deliver=partial(self._deliver, run_id),
-                        stop=partial(self._interrupt, run_id) if interrupt else None,
-                    )
-                if run.events is not None and isinstance(answer, str):
-                    run.events.complete_run(final_text=answer)
-                return answer
-        finally:
-            self._runs.pop(run_id, None)
-            for task in run.tasks:
-                task.cancel()
+                    # A processor may rewrite the conversation: the run answers with all of it.
+                    run.commit_key = "transcript"
+                    commit = partial(self._commit_processed, store, media_table)
+            elif child is not None and self.capabilities.supports_stateful_history:
+                # A continuation resumes from the bridge state of the child's last committed run.
+                history = child.conversation
+                params["session"] = {
+                    "id": history.conversation_id,
+                    "turn": len(history.turns),
+                    "state": history.resume_state.get("bridge"),
+                }
+                commit = partial(history.result_state.__setitem__, "bridge")
+            elif conversation is not None:
+                params["session"] = {
+                    "id": conversation.session_id,
+                    "turn": conversation.turn_sequence,
+                    "state": conversation.resume_state.get("bridge"),
+                }
+                commit = partial(conversation.result_state.__setitem__, "bridge")
+            self._runs[run_id] = run
+            try:
+                with self._quoting_bridge(), agent_event_run(self.shortname) as run.events:
+                    attempt = self._attempts(run, params, validator, required, accept, commit)
+                    control = current_live_input()
+                    if control is None or not self.capabilities.supports_live_subagent_input:
+                        answer = await attempt
+                    else:
+                        # Input for this run goes to the bridge while it runs; an interrupt stops
+                        # the attempt, and Kedi's coordinator starts the next one.
+                        interrupt = self.capabilities.supports_subagent_interrupt
+                        answer = await controlled_attempt(
+                            control,
+                            attempt,
+                            deliver=partial(self._deliver, run_id),
+                            stop=partial(self._interrupt, run_id) if interrupt else None,
+                        )
+                    if run.events is not None and isinstance(answer, str):
+                        run.events.complete_run(final_text=answer)
+                    return answer
+            finally:
+                self._runs.pop(run_id, None)
+                for task in run.tasks:
+                    task.cancel()
 
     async def _attempts(
         self,
@@ -653,9 +692,19 @@ class JsonRpcAdapter(HookRegistrationMixin):
                     raise run.failure
             answer, correction = _check_answer(result, validator, required, run, accept)
             if correction is None:
-                if commit is not None and run.commit_key == "messages" and "messages" not in result:
+                if (
+                    commit is not None
+                    and run.commit_key != "state"
+                    and run.commit_key not in result
+                ):
                     raise JsonRpcError(
-                        INVALID_PARAMS, "a transcript run must answer with this turn's 'messages'"
+                        INVALID_PARAMS,
+                        f"a transcript run must answer with {run.commit_key!r}: "
+                        + (
+                            "this turn's messages"
+                            if run.commit_key == "messages"
+                            else "the whole conversation, as history/process left it"
+                        ),
                     )
                 if commit is not None and run.commit_key in result:
                     # Kedi commits it only after accepting this turn's result.
@@ -772,6 +821,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "hook/invoke": self._parse_hook,
             "artifact/admit": self._parse_artifact,
             "media/get": self._parse_media,
+            "history/process": self._parse_history,
         }.get(method)
         try:
             if parse is None:
@@ -852,6 +902,30 @@ class JsonRpcAdapter(HookRegistrationMixin):
             metadata={"source": origin, "bridge": "jsonrpc", "backend": self.backend["name"]},
         )
         return lambda request_id, run: self._approve(request_id, run, request)
+
+    def _parse_history(self, params: JsonObject) -> _Handler:
+        messages = params.get("messages")
+        if not isinstance(messages, list):
+            raise JsonRpcError(INVALID_PARAMS, "history/process needs the list of messages")
+
+        async def process(request_id: int | str, run: _Run) -> None:
+            if run.commit_key != "transcript":
+                error = JsonRpcError(UNSUPPORTED, "history/process: the run processes no history")
+                self._connection.respond(request_id, error=error)
+                return
+            try:
+                current = _check_transcript(messages, run.transcript_media)
+                outcome = await self._history_runner.process(current, model_id=run.model)
+                processed = _check_transcript(list(outcome.messages), run.transcript_media)
+            except asyncio.CancelledError:
+                self._connection.respond(request_id, error=JsonRpcError(CANCELLED, "the run ended"))
+                raise
+            except Exception as exc:  # a failing processor fails the run, as in-process
+                self._stop(request_id, run, exc)
+                return
+            self._connection.respond(request_id, result={"messages": processed})
+
+        return process
 
     def _parse_media(self, params: JsonObject) -> _Handler:
         if not self.transcript:
@@ -1349,6 +1423,8 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         # Kedi holds the transcript, or the bridge its session state; either keeps history.
         supports_stateful_history=flags["supports_stateful_history"] or transcript,
         supports_history_replay=transcript,
+        # In transcript mode the bridge asks history/process before each model request.
+        supports_history_processing=transcript,
         # Kedi admits each attempt of its own tools at tool/call; the bridge's own tools only
         # count when it asks first.
         supports_request_budget=governed,
@@ -1419,6 +1495,13 @@ def _commit_transcript(
 ) -> None:
     """Record a turn: Kedi's transcript gains the turn's messages, checked against the schema."""
 
+    state["transcript"] = [*history, *_check_transcript(messages, media)]
+    state["transcript_media"] = dict(media)
+
+
+def _check_transcript(messages: Any, media: Mapping[str, JsonObject]) -> list[JsonObject]:
+    """``messages``, checked against Kedi's transcript schema."""
+
     if not isinstance(messages, list):
         raise JsonRpcError(INVALID_PARAMS, "'messages' must list the turn's messages")
     for index, message in enumerate(messages):
@@ -1445,8 +1528,8 @@ def _commit_transcript(
                     INVALID_PARAMS,
                     f"{where}.parts[{number}]: the conversation has no {part['ref']!r}",
                 )
-    state["transcript"] = [*history, *messages]
-    state["transcript_media"] = dict(media)
+    # Each message gets an id, so identical messages stay distinct for history processors.
+    return [message if "id" in message else {**message, "id": uuid4().hex} for message in messages]
 
 
 def _user_content(

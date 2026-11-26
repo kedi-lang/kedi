@@ -172,28 +172,29 @@ async function fromTranscript(runId, history) {
   return out;
 }
 
-function toTranscript(params, turn) {
-  // This turn's chat messages in Kedi's schema; the user turn names its media by ref.
-  const [, ...rest] = turn;
+function toTranscript(params, turn, withUser) {
+  // Chat messages in Kedi's schema. The turn's own user message names its media by ref.
+  const [first, ...rest] = turn;
   const user = params.userContent
     ? params.userContent.map((part) =>
         part.type === "text" ? { type: "text", text: part.text } : { type: "media", ref: part.name },
       )
     : [{ type: "text", text: params.user }];
-  return [
-    { role: "user", parts: user },
-    ...rest.map((message) => {
-      if (message.role === "tool") {
-        return { role: "tool", parts: [{ type: "toolResult", id: message.tool_call_id, result: message.content }] };
-      }
-      const parts = message.content ? [{ type: "text", text: String(message.content) }] : [];
-      for (const call of message.tool_calls ?? []) {
-        const args = JSON.parse(call.function.arguments || "{}");
-        parts.push({ type: "toolCall", id: call.id, name: call.function.name, arguments: args });
-      }
-      return { role: message.role, parts };
-    }),
-  ];
+  const head = withUser ? [{ role: "user", parts: user }] : first ? [first].map(toKedi) : [];
+  return [...head, ...rest.map(toKedi)];
+}
+
+function toKedi(message) {
+  // One chat message in Kedi's schema.
+  if (message.role === "tool") {
+    return { role: "tool", parts: [{ type: "toolResult", id: message.tool_call_id, result: message.content }] };
+  }
+  const parts = message.content ? [{ type: "text", text: String(message.content) }] : [];
+  for (const call of message.tool_calls ?? []) {
+    const args = JSON.parse(call.function.arguments || "{}");
+    parts.push({ type: "toolCall", id: call.id, name: call.function.name, arguments: args });
+  }
+  return { role: message.role, parts };
 }
 
 function answerText(answer) {
@@ -369,21 +370,39 @@ async function converse(params, state, mcp, definitions) {
       json_schema: { name: params.output.toolName, schema: params.output.schema },
     };
   }
+  // With a history processor, Kedi's processed conversation replaces ours before each request:
+  // base is the processed part in Kedi's schema, and messages from mark on follow it.
+  let base = transcript ? params.history : [];
+  let mark = turnStart;
+  let userPending = true;
+  const kediTurn = (turn) => toTranscript(params, turn, userPending);
   const finish = (result, content) => {
     const turn = [...messages.slice(turnStart), { role: "assistant", content }];
-    if (transcript) return { ...result, messages: toTranscript(params, turn) };
+    const since = [...messages.slice(mark), { role: "assistant", content }];
+    if (params.processHistory) return { ...result, transcript: [...base, ...kediTurn(since)] };
+    if (transcript) return { ...result, messages: toTranscript(params, turn, true) };
     if (!params.session) return result;
     return { ...result, state: { messages: [...history, ...turn] } };
   };
   // What an interrupted attempt hands Kedi: the conversation so far, for the next attempt.
   state.partial = () => {
-    if (transcript) return { messages: toTranscript(params, messages.slice(turnStart)) };
+    if (params.processHistory) return { transcript: [...base, ...kediTurn(messages.slice(mark))] };
+    if (transcript) return { messages: toTranscript(params, messages.slice(turnStart), true) };
     return params.session ? { state: { messages: [...history, ...messages.slice(turnStart)] } } : null;
+  };
+  const processHistory = async () => {
+    const current = [...base, ...kediTurn(messages.slice(mark))];
+    base = (await request("history/process", { runId: params.runId, messages: current })).messages;
+    userPending = false;
+    const system = params.system ? 1 : 0;
+    messages.splice(system, messages.length - system, ...(await fromTranscript(params.runId, base)));
+    mark = messages.length;
   };
   for (let step = 0; step < maxSteps; step++) {
     // Live input from Kedi joins the conversation before the next model request.
     const delivering = state.inputs.splice(0);
     for (const { texts } of delivering) for (const text of texts) messages.push({ role: "user", content: text });
+    if (params.processHistory) await processHistory();
     const message = await complete(params.runId, body, models, signal);
     for (const { id } of delivering) send({ id, result: { delivered: true } });
     if (native) {

@@ -1804,7 +1804,7 @@ def test_kedi_checks_the_messages_a_transcript_run_returns(adapters: list) -> No
     adapter = peer("transcript")
     adapters.append(adapter)
     for prompt, message in (
-        ("Forget it.", "a transcript run must answer with this turn's 'messages'"),
+        ("Forget it.", "a transcript run must answer with 'messages': this turn's messages"),
         ("Break a part.", "messages[0].parts[0] must be one of text, media, toolCall"),
         ("Name a stranger.", "messages[0].parts[0]: the conversation has no 'stranger'"),
         ("No role.", "messages[0] needs a role of user, assistant or tool, and parts"),
@@ -1857,3 +1857,121 @@ def test_the_reference_bridge_rebuilds_tool_turns_and_media_from_kedis_transcrip
         assert image == PIXEL
         assert replay[2]["tool_calls"][0]["function"]["name"] == "lookup"
         assert "found q" in replay[3]["content"]
+
+
+PROCESSED = """> history:
+    enabled: true
+    processor: `recent`
+[a] << First.
+[b] << Second.
+[c] << Third.
+= `[a, b, c]`
+"""
+
+
+def keep_recent(ctx: Any) -> list[Any]:
+    return ctx.keep_recent_groups(1)
+
+
+def test_kedi_runs_the_programs_history_processor_for_a_bridge(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_history_processing
+    first, second, third = run(PROCESSED, adapter, recent=keep_recent)
+    assert json.loads(first) == ["First."]
+    # The processor keeps the last finished exchange and the current turn.
+    assert json.loads(second) == ["First.", "First. after []", "Second."]
+    # Before the third request it drops the first exchange.
+    assert json.loads(third) == [
+        "Second.",
+        "Second. after ['First.', 'First. after []']",
+        "Third.",
+    ]
+
+
+def test_a_processing_run_answers_with_the_whole_conversation(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+    source = "> history:\n    enabled: true\n    processor: `recent`\n[r] << Forget it.\n= <r>\n"
+    with pytest.raises(Exception, match="a transcript run must answer with 'transcript'"):
+        run(source, adapter, recent=keep_recent)
+
+
+def test_a_failing_history_processor_stops_the_bridge_run(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+
+    def broken(ctx: Any) -> list[Any]:
+        raise RuntimeError("the processor is broken")
+
+    source = "> history:\n    enabled: true\n    processor: `recent`\n[r] << Hi.\n= <r>\n"
+    with pytest.raises(Exception) as caught:
+        run(source, adapter, recent=broken)
+    assert "the processor is broken" in str(caught.value) or "the processor is broken" in str(
+        caught.value.__cause__
+    )
+
+
+def test_history_process_needs_a_processing_run_and_a_message_list(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+    refused = json.loads(run("> history: enabled\n[r] << Process anyway.\n= <r>\n", adapter))
+    assert refused["error"]["code"] == UNSUPPORTED
+    assert "the run processes no history" in refused["error"]["message"]
+    with pytest.raises(JsonRpcError, match="history/process needs the list of messages"):
+        adapter._parse_history({"runId": "r", "messages": "all"})
+
+
+def test_the_reference_bridge_sends_the_model_what_the_processor_kept(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True)
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        assert run(PROCESSED, adapter, recent=keep_recent) == ["done", "done", "done"]
+        _, _, third = endpoint.take()
+        sent = _strings(third.body["messages"])
+        # The first exchange was dropped before the third request.
+        assert "First." not in sent and "Second." in sent and "Third." in sent
+
+
+def test_the_transcript_codec_pairs_tool_calls_and_marks_what_must_stay() -> None:
+    from kedi.agent_adapter.adapters.jsonrpc.history import TranscriptHistoryCodec
+
+    codec = TranscriptHistoryCodec()
+    messages = [
+        {"role": "user", "parts": [{"type": "text", "text": "Look it up."}]},
+        {
+            "role": "assistant",
+            "parts": [{"type": "toolCall", "id": "c1", "name": "f", "arguments": {}}],
+        },
+        {"role": "tool", "parts": [{"type": "toolResult", "id": "c1", "result": "found"}]},
+        {"role": "assistant", "parts": [{"type": "reasoning"}], "providerData": {"sealed": "x"}},
+        {"role": "assistant", "parts": [{"type": "text", "text": "Done."}]},
+        {"role": "robot"},
+    ]
+    snapshot = codec.inspect(messages)
+    kinds = [entry.kind for entry in snapshot.entries]
+    assert kinds == ["user", "tool-call", "tool-result", "reasoning", "assistant", "unknown"]
+    call, result, sealed = snapshot.entries[1], snapshot.entries[2], snapshot.entries[3]
+    assert call.lifecycle_ids == ("c1",) and result.closes_lifecycle_ids == ("c1",)
+    # A backend's sealed reasoning goes back as it was.
+    assert sealed.provider_required and snapshot.storage_format == "native"
+    copied = codec.clone(messages)
+    assert copied == messages and copied[0] is not messages[0]
+    with pytest.raises(TypeError, match="all values must be transcript messages"):
+        codec.clone(["text"])  # type: ignore[list-item]
+
+
+def test_a_processor_still_running_when_the_run_ends_is_cancelled(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+
+    async def slow(ctx: Any) -> list[Any]:
+        await asyncio.sleep(30)
+        raise AssertionError("the processor should have been cancelled")
+
+    source = (
+        "> history:\n    enabled: true\n    processor: `recent`\n[r] << Process early.\n= <r>\n"
+    )
+    assert run(source, adapter, recent=slow) == "answered early"
+    wait_for_stderr(adapter, f"process reply {CANCELLED}")
