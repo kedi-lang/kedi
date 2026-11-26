@@ -3,6 +3,10 @@
 Kedi talks to a backend integration (a "bridge") over JSON-RPC 2.0 on the bridge's stdio.
 Kedi renders every model-visible text; the bridge transports it (#232, #197).
 
+The protocol's home is kedi-lang/json-rpc: ``spec/protocol.md`` says what each message means,
+and ``schema/v1/protocol.json`` defines its shape. ``protocol.schema.json`` next to this module
+is a copy of that schema; Kedi's tests check the traffic of its runs against it.
+
 Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 ``MAX_FRAME_BYTES`` per line. stdout carries only protocol frames; diagnostics go to stderr.
 
