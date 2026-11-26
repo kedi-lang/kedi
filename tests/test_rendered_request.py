@@ -28,6 +28,7 @@ from kedi.agent_adapter.request import (
 from kedi.agent_adapter.request.context import subagent_entry_scope
 from kedi.agent_adapter.request.prompts import PROTOCOL_VERSION
 from kedi.agent_adapter.request.protocol import protocol_parts, tool_catalog
+from kedi.agent_profile import AgentProfile
 from kedi.lang import compile_program, parse_program
 
 
@@ -231,3 +232,39 @@ def test_a_text_subagent_child_falls_back_to_its_arguments() -> None:
     with subagent_entry_scope():
         assert adapter.invoke_sync(prompt="Summarize the report.") == "child answer"
     assert adapter.fallbacks == ["Summarize the report."] and adapter.rendered == []
+
+
+def test_a_json_schema_output_reaches_the_model_as_given_and_is_checked() -> None:
+    from pydantic import ValidationError
+
+    from kedi.agent_adapter.request import JsonSchemaOutput, call_request, output_validator
+    from kedi.agent_adapter.request.diagnostics import request_diagnostics
+
+    schema = {
+        "type": "object",
+        "title": "KediSubagentResult",
+        "properties": {"ocean": {"type": "string", "description": "An ocean's name."}},
+        "required": ["ocean"],
+        "additionalProperties": False,
+    }
+    output = JsonSchemaOutput(schema=schema)
+    request = call_request(
+        prompt="Name an ocean.",
+        output=output,
+        instructions=None,
+        profile=AgentProfile.empty(),
+        capabilities=AdapterCapabilities(supports_native_structured_output=False),
+        tools=(),
+    )
+    rendered = request.render()
+    assert rendered.call_kind == "produce"
+    assert rendered.output_json_schema == schema
+    # A backend without native structured output gets the schema in Kedi's protocol part.
+    assert "An ocean's name." in (rendered.system or "")
+    validator = output_validator(output)
+    assert validator is not None
+    assert validator.validate_python({"ocean": "Pacific"}) == {"ocean": "Pacific"}
+    with pytest.raises(ValidationError, match="'ocean' is a required property"):
+        validator.validate_python({"sea": "Baltic"})
+    diagnostics = request_diagnostics(request)
+    assert diagnostics.output_kind == "json_schema"

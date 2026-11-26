@@ -18,16 +18,19 @@ from collections.abc import Callable, Coroutine, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self, cast
 from uuid import uuid4
 
+from jsonschema.validators import validator_for
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
+from ....errors import KediExecutionError
 from ....media import MediaError
 from ....run_budget import BudgetDimension, RunBudgetExceeded, admit_run_operation
 from ...approvals.policy import (
@@ -44,7 +47,9 @@ from ...execution import run_sync
 from ...hooks import HookDeniedError
 from ...invocation import InvocationUsage, report_invocation
 from ...meta import AdapterCapabilities, AgentAdapterKind
+from ...output_schema import OutputCorrection
 from ...request import (
+    JsonSchemaOutput,
     OutputContract,
     SchemaOutput,
     TextOutput,
@@ -55,6 +60,8 @@ from ...request import (
 from ...request.context import take_prompt_media
 from ...request.media import MediaAttachment, attachment_content
 from ...request.prompts import output_correction, protocol_correction, required_tools_correction
+from ...subagents import SubagentExecutionRequest, SubagentUsageLimits, accept_subagent_output
+from ...subagents.context import current_subagent_execution
 from ...tools.errors import correctable_tool_error
 from ...tools.execution import validate_tool_arguments
 from ...tools.specs import ToolSpec
@@ -128,7 +135,9 @@ class JsonRpcAdapter:
         supports_stateful_history=None,
         supports_request_budget=None,
         supports_tool_attempt_budget=None,
-        # A run reports one total when it ends; per-request usage comes with subagents.
+        supports_subagents=None,
+        supports_background_subagents=None,
+        # A run reports one total when it ends, so a child's token limits cannot be checked.
         supports_token_usage=False,
         negotiated_capabilities=frozenset(
             {
@@ -140,6 +149,8 @@ class JsonRpcAdapter:
                 "stateful_history",
                 "request_budget",
                 "tool_attempt_budget",
+                "subagents",
+                "background_subagents",
             }
         ),
         supports_profile_override=True,
@@ -181,6 +192,13 @@ class JsonRpcAdapter:
         self._conversation: ContextVar[AdapterConversationContext | None] = ContextVar(
             f"jsonrpc_conversation_{id(self)}", default=None
         )
+        self._child: ContextVar[SubagentExecutionRequest | None] = ContextVar(
+            f"jsonrpc_child_{id(self)}", default=None
+        )
+        # The bridge run whose callbacks are executing: a child started there names it.
+        self._calling_run: ContextVar[str | None] = ContextVar(
+            f"jsonrpc_calling_run_{id(self)}", default=None
+        )
         self._connection = Connection(
             self.command,
             handler=self._on_request,
@@ -217,6 +235,15 @@ class JsonRpcAdapter:
     def default_model(self) -> str | None:
         return self._model
 
+    def telemetry_model_name(self) -> str | None:
+        return self.active_profile.model or self._model
+
+    @property
+    def supports_native_subagent_resume(self) -> bool:
+        """With sessions, a child's continuation carries the bridge's own state."""
+
+        return bool(self.capabilities.supports_stateful_history)
+
     @property
     def active_profile(self) -> AgentProfile:
         stack = self._profiles.get()
@@ -246,10 +273,27 @@ class JsonRpcAdapter:
     @contextmanager
     def tool_scope(self, tools: Sequence[object] = ()) -> Generator[None, None, None]:
         token = self._tools.set(tuple(tool for tool in tools if isinstance(tool, ToolSpec)))
+        # A Kedi call made by one of a child's tools is an ordinary call, not the child's turn.
+        child = self._child.set(None)
         try:
             yield
         finally:
+            self._child.reset(child)
             self._tools.reset(token)
+
+    @contextmanager
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Generator[None, None, None]:
+        """The child's profile, exactly its tools, and its own conversation."""
+
+        with self.tool_scope(request.tools), self.profile_override(request.profile):
+            token = self._child.set(request)
+            try:
+                yield
+            finally:
+                self._child.reset(token)
+
+    def subagent_run_kwargs(self, limits: SubagentUsageLimits) -> Mapping[str, Any]:
+        return {"limits": limits}
 
     def register_tool(self, tool: ToolSpec) -> None:
         self._tools.set((*self._tools.get(), tool))
@@ -266,8 +310,37 @@ class JsonRpcAdapter:
         finally:
             self._conversation.reset(token)
 
-    async def invoke(self, *, prompt: str, instructions: str | None = None, **_: Any) -> str:
-        return await self._run(prompt, TextOutput(), instructions)
+    async def invoke(
+        self,
+        *,
+        prompt: str,
+        instructions: str | None = None,
+        limits: SubagentUsageLimits | None = None,
+        **_: Any,
+    ) -> str:
+        return await self._run(prompt, TextOutput(), instructions, limits=limits)
+
+    async def produce_subagent(
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, Any],
+        instructions: str | None = None,
+        limits: SubagentUsageLimits | None = None,
+        **_: Any,
+    ) -> Mapping[str, Any]:
+        """A child's JSON result, corrected with Kedi's feedback until the schema accepts it."""
+
+        child = self._child.get()
+        if child is None:
+            raise KediExecutionError("produce_subagent runs only inside subagent_scope")
+        schema_validator = validator_for(output_schema)(output_schema)
+
+        def accept(data: Any) -> Any:
+            return accept_subagent_output(data, schema_validator, child.output_state)
+
+        output = JsonSchemaOutput(schema=output_schema)
+        return await self._run(template, output, instructions, limits=limits, accept=accept)
 
     async def produce(
         self,
@@ -310,7 +383,15 @@ class JsonRpcAdapter:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    async def _run(self, prompt: str, output: OutputContract, instructions: str | None) -> Any:
+    async def _run(
+        self,
+        prompt: str,
+        output: OutputContract,
+        instructions: str | None,
+        *,
+        limits: SubagentUsageLimits | None = None,
+        accept: Callable[[Any], Any] | None = None,
+    ) -> Any:
         disconnected = self._connection.disconnected
         if disconnected is not None:
             raise disconnected
@@ -324,7 +405,9 @@ class JsonRpcAdapter:
             tools=tools,
         )
         rendered = request.render()
-        conversation = self._conversation.get()
+        child = self._child.get()
+        # A child keeps its own conversation: the parent's history is not the child's.
+        conversation = None if child is not None else self._conversation.get()
         # The first native run in a Kedi call takes the prompt's media; nested runs get none.
         attachments = take_prompt_media()
         user_content = (
@@ -332,12 +415,21 @@ class JsonRpcAdapter:
             if attachments
             else None
         )
-        validator = output_validator(request.output, request=request)
+        # A child's result is checked against its JSON Schema by Kedi's subagent validator.
+        validator = (
+            None if accept is not None else output_validator(request.output, request=request)
+        )
         run_id = uuid4().hex
+        parent_run_id = self._calling_run.get()
+        calling = self._calling_run.set(run_id)
+        try:
+            context = contextvars.copy_context()
+        finally:
+            self._calling_run.reset(calling)
         run = _Run(
             run_id=run_id,
             loop=asyncio.get_running_loop(),
-            context=contextvars.copy_context(),
+            context=context,
             tools={tool.name: tool for tool in tools},
         )
         required = {tool.name for tool in rendered.tools if tool.required_before_output}
@@ -367,18 +459,30 @@ class JsonRpcAdapter:
                 for tool in rendered.tools
             ],
             "continuation": None,
-            "session": None
-            if conversation is None
-            else {
+            "session": None,
+            "subagent": None if child is None else _lineage(child, parent_run_id, limits),
+        }
+        commit: Callable[[Any], None] | None = None
+        if child is not None and self.capabilities.supports_stateful_history:
+            # A continuation resumes from the bridge state of the child's last committed run.
+            history = child.conversation
+            params["session"] = {
+                "id": history.conversation_id,
+                "turn": len(history.turns),
+                "state": history.resume_state.get("bridge"),
+            }
+            commit = partial(history.result_state.__setitem__, "bridge")
+        elif conversation is not None:
+            params["session"] = {
                 "id": conversation.session_id,
                 "turn": conversation.turn_sequence,
                 "state": conversation.resume_state.get("bridge"),
-            },
-        }
+            }
+            commit = partial(conversation.result_state.__setitem__, "bridge")
         self._runs[run_id] = run
         try:
             with agent_event_run(self.shortname) as run.events:
-                answer = await self._attempts(run, params, validator, required)
+                answer = await self._attempts(run, params, validator, required, accept, commit)
                 if run.events is not None and isinstance(answer, str):
                     run.events.complete_run(final_text=answer)
                 return answer
@@ -393,6 +497,8 @@ class JsonRpcAdapter:
         params: JsonObject,
         validator: TypeAdapter[Any] | None,
         required: set[str],
+        accept: Callable[[Any], Any] | None,
+        commit: Callable[[Any], None] | None,
     ) -> Any:
         """Ask the bridge, then send Kedi's corrections, until an answer is valid."""
 
@@ -403,12 +509,11 @@ class JsonRpcAdapter:
             finally:
                 if run.failure is not None:
                     raise run.failure
-            answer, correction = _check_answer(result, validator, required, run)
+            answer, correction = _check_answer(result, validator, required, run, accept)
             if correction is None:
-                conversation = self._conversation.get()
-                if conversation is not None and "state" in result:
+                if commit is not None and "state" in result:
                     # Kedi commits it only after accepting this turn's result.
-                    conversation.result_state["bridge"] = result["state"]
+                    commit(result["state"])
                 return answer
             params = {**params, "continuation": {"answer": result, "message": correction}}
         raise JsonRpcError(
@@ -424,7 +529,9 @@ class JsonRpcAdapter:
             # Cancellation is a request: the bridge stopping is not confirmed by it.
             self._connection.notify("run/cancel", {"runId": params["runId"]})
             raise
-        report_invocation(_usage(result.get("usage")))
+        # A governed bridge's requests were counted as Kedi admitted them; Kedi counts tool calls.
+        governed = bool(self.capabilities.supports_request_budget)
+        report_invocation(_usage(result.get("usage"), requests_counted=governed))
         return result
 
     def _on_request(self, request_id: int | str, method: str, params: JsonObject) -> None:
@@ -548,6 +655,12 @@ class JsonRpcAdapter:
             return
         run.attempted.add(name)
         try:
+            # Kedi counts the call before it runs, so a child's tool-call limit can stop it.
+            report_invocation(InvocationUsage(tool_calls=1))
+        except KediExecutionError as exc:
+            self._stop(request_id, run, exc)
+            return
+        try:
             # Sync tools run off the loop; Kedi's wrapper applies approval and budgets.
             value = await asyncio.to_thread(_call, tool, arguments)
             if inspect.isawaitable(value):
@@ -569,26 +682,29 @@ class JsonRpcAdapter:
         self._connection.respond(request_id, result=reply)
 
     async def _admit(self, request_id: int | str, run: _Run, dimension: str) -> None:
-        """Charge a step the bridge is about to take to the run's budget, as in-process."""
+        """Admit a step the bridge is about to take, as in-process adapters do.
 
+        The run budget charges it, then Kedi counts it, so a child's request or tool-call
+        limit stops it before the bridge takes it.
+        """
+
+        denial: JsonObject = {"admitted": False, "dimension": dimension}
         try:
             admit_run_operation(cast(BudgetDimension, BUDGET_DIMENSIONS[dimension]))
+            step = InvocationUsage(requests=1) if dimension == "request" else None
+            report_invocation(step or InvocationUsage(tool_calls=1))
         except RunBudgetExceeded as exc:
-            run.stop(exc)
-            self._connection.respond(
-                request_id,
-                result={
-                    "admitted": False,
-                    "dimension": dimension,
-                    "limit": exc.limit,
-                    "consumed": exc.consumed,
-                    "scopeDepth": exc.scope_depth,
-                },
-            )
-            # The bridge must skip the step and end the run; cancel it in case it does not.
-            self._connection.notify("run/cancel", {"runId": run.run_id})
+            denial |= {"limit": exc.limit, "consumed": exc.consumed, "scopeDepth": exc.scope_depth}
+            failure: KediExecutionError = exc
+        except KediExecutionError as exc:  # a child's usage limit
+            failure = exc
+        else:
+            self._connection.respond(request_id, result={"admitted": True})
             return
-        self._connection.respond(request_id, result={"admitted": True})
+        run.stop(failure)
+        self._connection.respond(request_id, result={**denial, "reason": failure.message})
+        # The bridge must skip the step and end the run; cancel it in case it does not.
+        self._connection.notify("run/cancel", {"runId": run.run_id})
 
     async def _approve(self, request_id: int | str, run: _Run, request: ApprovalRequest) -> None:
         """Decide a call of the bridge's own tool with the policies Kedi's tools get."""
@@ -609,7 +725,12 @@ class JsonRpcAdapter:
         self._connection.respond(request_id, result=reply)
 
     def _approval_policies(self) -> tuple[ApprovalPolicy | None, ...]:
-        return (self.active_profile.approval,)
+        """A child's ancestors' policies first, then its own, as for Kedi tools."""
+
+        child = self._child.get()
+        ceiling = () if child is None else tuple(child.approval_ceiling)
+        local = self.active_profile.approval
+        return (*ceiling, local) if local is not None or not ceiling else ceiling
 
     def _stop(self, request_id: int | str, run: _Run, failure: BaseException) -> None:
         """End the run with Kedi's ``failure`` and tell the bridge why its request failed."""
@@ -640,18 +761,43 @@ async def _decide_approval(
             reasons.append(decision.reason)
         if decision.edit_arguments is not None:
             arguments = dict(decision.edit_arguments)
-    reason = "; ".join(reasons) or None
+    reason = "; ".join(dict.fromkeys(reasons)) or None
     if arguments != dict(request.arguments):
         return ApprovalDecision.edit(arguments, reason=reason)
     return ApprovalDecision.allow(reason=reason)
 
 
-def _usage(usage: Any) -> InvocationUsage:
-    """The run's usage as the bridge reported it; a count it left out is unknown."""
+def _lineage(
+    child: SubagentExecutionRequest, parent_run_id: str | None, limits: SubagentUsageLimits | None
+) -> JsonObject:
+    """Who the child is: Kedi's run, the bridge run that started it, its remaining limits."""
+
+    execution = current_subagent_execution()
+    remaining = child.usage_limits if limits is None else limits
+    return {
+        "id": None if execution is None else execution.run_id,
+        "parentRunId": parent_run_id,
+        "conversationId": child.conversation.conversation_id,
+        "name": child.profile.name,
+        "limits": {
+            "requests": remaining.request_limit,
+            "toolCalls": remaining.tool_calls_limit,
+            "inputTokens": remaining.input_tokens_limit,
+            "outputTokens": remaining.output_tokens_limit,
+            "totalTokens": remaining.total_tokens_limit,
+        },
+    }
+
+
+def _usage(usage: Any, *, requests_counted: bool = False) -> InvocationUsage:
+    """The run's usage as the bridge reported it; a count it left out is unknown.
+
+    ``requests_counted``: Kedi already counted each request when it admitted it.
+    """
 
     if not isinstance(usage, dict):
-        return InvocationUsage.unmeasured()
-    requests = _count(usage, "requests")
+        return InvocationUsage.unmeasured(requests=0 if requests_counted else 1)
+    requests = 0 if requests_counted else _count(usage, "requests")
     input_tokens, output_tokens = _count(usage, "inputTokens"), _count(usage, "outputTokens")
     total = _count(usage, "totalTokens")
     if total is None and input_tokens is not None and output_tokens is not None:
@@ -711,6 +857,12 @@ def _negotiate(handshake: JsonObject) -> _Peer:
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
+    subagents = flags["supports_subagents"]
+    if subagents and not governed:
+        raise JsonRpcError(
+            INVALID_PARAMS,
+            "subagents need governed: Kedi admits each of a child's requests against its limits",
+        )
     capabilities = AdapterCapabilities(
         supports_structured_output=flags["supports_structured_output"],
         supports_tool_registration=tools,
@@ -725,6 +877,9 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         supports_request_budget=governed,
         supports_tool_attempt_budget=governed or not native_tools,
         supports_token_usage=False,
+        supports_subagents=subagents,
+        # Kedi runs a background child as another run on the same connection.
+        supports_background_subagents=subagents,
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,
@@ -764,7 +919,11 @@ def _user_content(
 
 
 def _check_answer(
-    result: JsonObject, validator: TypeAdapter[Any] | None, required: set[str], run: _Run
+    result: JsonObject,
+    validator: TypeAdapter[Any] | None,
+    required: set[str],
+    run: _Run,
+    accept: Callable[[Any], Any] | None = None,
 ) -> tuple[Any, str | None]:
     """The validated answer, or Kedi's correction for the next turn."""
 
@@ -774,13 +933,19 @@ def _check_answer(
     missing = required - run.called
     if missing:
         return None, required_tools_correction(missing, attempted=bool(missing & run.attempted))
-    if validator is None:
+    if validator is None and accept is None:
         text = result.get("text")
         if not isinstance(text, str):
             raise JsonRpcError(INVALID_PARAMS, "a text run must answer with a string 'text'")
         return text, None
     if "data" not in result:
         raise JsonRpcError(INVALID_PARAMS, "a structured run must answer with 'data'")
+    if accept is not None:
+        try:
+            return accept(result["data"]), None
+        except OutputCorrection as correction:
+            return None, str(correction)
+    assert validator is not None
     try:
         return validator.validate_python(result["data"]), None
     except ValidationError as exc:

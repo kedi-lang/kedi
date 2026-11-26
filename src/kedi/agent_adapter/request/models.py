@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, Mapping, TypeAlias
 
 if TYPE_CHECKING:
     from pydantic import TypeAdapter
@@ -131,7 +131,21 @@ class TypedOutput:
     output_type: Any
 
 
-OutputContract: TypeAlias = TextOutput | SchemaOutput | TypedOutput
+@dataclass(frozen=True, slots=True, kw_only=True)
+class JsonSchemaOutput:
+    """An answer that must match this JSON Schema, sent to the model as given.
+
+    ``SchemaOutput`` holds a template's field types; this holds a JSON Schema itself, such as
+    the result schema Kedi gives a child.
+    """
+
+    schema: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "schema", _frozen_semantic_mapping(self.schema))
+
+
+OutputContract: TypeAlias = TextOutput | SchemaOutput | TypedOutput | JsonSchemaOutput
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -242,13 +256,30 @@ def output_validator(
 
     if isinstance(output, TextOutput):
         return None
-    from pydantic import TypeAdapter
+    from pydantic import AfterValidator, TypeAdapter
 
     from ..output_schema import build_output_model
 
     if isinstance(output, SchemaOutput):
         return TypeAdapter(build_output_model(dict(output.schema), request=request))
+    if isinstance(output, JsonSchemaOutput):
+        return TypeAdapter(Annotated[Any, AfterValidator(_json_schema_check(output.schema))])
     return TypeAdapter(output.output_type)
+
+
+def _json_schema_check(schema: Mapping[str, Any]) -> Callable[[Any], Any]:
+    from jsonschema.validators import validator_for
+
+    plain = thaw_json(schema)
+    validator = validator_for(plain)(plain)
+
+    def check(value: Any) -> Any:
+        issues = sorted(validator.iter_errors(value), key=lambda issue: list(issue.path))
+        if issues:
+            raise ValueError("; ".join(issue.message[:320] for issue in issues[:8]))
+        return value
+
+    return check
 
 
 def output_json_schema(
@@ -268,6 +299,8 @@ def output_json_schema(
 
     if isinstance(output, SchemaOutput):
         return build_output_model(dict(output.schema), request=request).model_json_schema()
+    if isinstance(output, JsonSchemaOutput):
+        return thaw_json(output.schema)
     output_type = output.output_type
     if isinstance(output_type, type) and issubclass(output_type, BaseModel):
         return output_type.model_json_schema()

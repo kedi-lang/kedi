@@ -11,8 +11,11 @@ Kedi to bridge:
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
   capabilities, mediaKinds?}``. Kedi sends nothing else before it completes.
 - ``run`` ``{runId, callKind, promptKind, model, system, instructionParts, user, userContent,
-  output, tools, continuation, session}`` returns ``{text}`` or ``{data}``, optionally with
-  ``usage`` and, in a session, ``state``. ``session`` is ``null``, or ``{id, turn, state}``:
+  output, tools, continuation, session, subagent}`` returns ``{text}`` or ``{data}``, optionally
+  with ``usage`` and, in a session, ``state``. ``subagent`` is ``null``, or, for a child Kedi
+  runs on the bridge, ``{id, parentRunId, conversationId, name, limits}``: Kedi's run id for
+  the child, the bridge run whose tool call started it, the child conversation, the child
+  profile and its remaining limits. ``session`` is ``null``, or ``{id, turn, state}``:
   the bridge's ``state`` from the conversation's last committed turn, ``null`` at first.
   ``userContent`` is ``null``, or the user turn with its media: ``{type: "text", text}`` and
   ``{type: "media", name, kind, mediaType, data | url}`` parts, ``data`` in base64.
@@ -25,9 +28,10 @@ Bridge to Kedi:
   ``{ok: false, error}``. Only tools of a run in progress are callable.
 - ``budget/admit`` ``{runId, dimension}`` (with the ``governed`` capability), before the step
   runs: ``dimension`` is ``request`` for every model request, retries included, and
-  ``toolAttempt`` for each attempt of a bridge tool. It returns ``{admitted: true}``, or
-  ``{admitted: false, dimension, limit, consumed, scopeDepth}``: the bridge then skips the
-  step and ends the run, which fails with Kedi's ``RunBudgetExceeded``.
+  ``toolAttempt`` for each attempt of a bridge tool. Kedi charges the run budget and counts
+  the step for a child's limits. It returns ``{admitted: true}``, or ``{admitted: false,
+  dimension, reason}``, with ``limit``, ``consumed`` and ``scopeDepth`` for a run budget: the
+  bridge then skips the step and ends the run, which fails with Kedi's error.
 - ``approval/request`` ``{runId, callId?, tool, arguments, risk, description?}`` (with the
   ``nativeTools`` capability), before each call of a bridge tool. ``risk`` is ``read_only``,
   ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
@@ -75,8 +79,13 @@ CAPABILITIES: Final = {
     "mediaInput": "supports_media_input",
     "sessions": "supports_stateful_history",
     "governed": "supports_request_budget",
+    "subagents": "supports_subagents",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
+
+``subagents`` lets Kedi run its children on the bridge, concurrently when they run in the
+background; it needs ``governed``, because Kedi admits each of a child's requests against its
+limits before the bridge sends it.
 
 ``governed`` promises that every model request the bridge's backend makes goes through
 ``budget/admit`` first: SDK retries, tool-loop turns and internal calls too. A bridge that

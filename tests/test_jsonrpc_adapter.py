@@ -40,7 +40,11 @@ from kedi.agent_adapter.conformance.check import SCENARIOS, _check_run, _run
 from kedi.agent_adapter.conformance.endpoint import RecordingEndpoint
 from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
+from kedi.agent_adapter.subagents import SubagentExecutionRequest, SubagentUsageLimits
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.compile import build_capture_env
+from kedi.agent_profile.evaluation import eval_profile_definition
+from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.run_budget import RunBudget, RunBudgetExceeded, run_budget_scope
 
@@ -117,6 +121,8 @@ def test_the_handshake_sets_kind_identity_and_instance_capabilities(adapters: li
         ("nameless", "initialize must name the backend"),
         ("capabilities-list", "capabilities must be an object"),
         ("exit-on-init", "boom: missing API key"),
+        # Kedi admits each of a child's requests against its limits: only a governed bridge.
+        ("subagents-ungoverned", "subagents need governed"),
     ],
 )
 def test_a_bridge_that_fails_the_handshake_is_never_exposed(scenario: str, message: str) -> None:
@@ -815,3 +821,217 @@ def test_the_conformance_kit_catches_a_retry_kedi_did_not_admit() -> None:
         )
     problems = _check_run(scenario, variant, result)
     assert "2 requests reached the model endpoint, expected 1" in problems
+
+
+SUBAGENTS = """
+@lookup(query: str) -> str:
+    = found-<query>
+
+> profile: worker:
+    ###
+    Handles one isolated worker task.
+    ###
+    > approval: allow
+    > use: lookup
+
+> profile: manager:
+    > approval: allow
+    > subagent: worker
+"""
+
+
+def delegation_tools(runtime: Any, adapter: JsonRpcAdapter) -> dict[str, Any]:
+    profile = eval_profile_definition(
+        runtime, runtime._profile_registry["manager"], build_capture_env(runtime)
+    )
+    return {tool.name: tool for tool in runtime._resolve_agent_tool_specs(profile, adapter)}
+
+
+def test_kedi_runs_its_children_on_a_governed_bridge(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_subagents is True
+    assert adapter.capabilities.supports_background_subagents is True
+    assert adapter.supports_native_subagent_resume is True
+    runtime = compile_program(parse_program(SUBAGENTS), adapter=adapter)
+    tools = delegation_tools(runtime, adapter)
+    first = asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Find q."))
+    replies = json.loads(first["task_summary"])
+    lineage = replies["subagent"]
+    assert lineage["id"] == first["run_id"] and lineage["name"] == "worker"
+    assert lineage["parentRunId"] is None  # started by Python, not from a bridge run
+    assert lineage["limits"] == {
+        "requests": 8,
+        "toolCalls": 16,
+        "inputTokens": None,
+        "outputTokens": None,
+        "totalTokens": None,
+    }
+    assert all(reply["result"] == {"admitted": True} for reply in replies["admissions"])
+    assert all(reply["result"]["result"] == "found-q" for reply in replies["lookups"])
+    assert replies["approval"]["result"]["decision"] == "allow"
+    assert replies["session"] == {"id": lineage["conversationId"], "turn": 0, "state": None}
+    # Kedi counted the child's two admitted requests and two tool calls, nothing twice: the
+    # bridge's own request count is ignored, its token counts are kept.
+    record = runtime._subagent_coordinator.runs.snapshot()[-1]
+    assert (record.requests, record.tool_calls, record.total_tokens) == (2, 2, 4)
+    # A continuation resumes from the bridge state the child's last run committed.
+    second = asyncio.run(tools["continue_subagent"].fn(run_id=first["run_id"], task="Again."))
+    session = json.loads(second["task_summary"])["session"]
+    assert session == {
+        "id": lineage["conversationId"],
+        "turn": 1,
+        "state": {"turn": 0, "previous": None},
+    }
+    # A continuation is a new task with limits of its own, counted on its own record.
+    assert json.loads(second["task_summary"])["subagent"]["limits"] == lineage["limits"]
+    record = runtime._subagent_coordinator.runs.snapshot()[-1]
+    assert (record.run_id, record.requests, record.tool_calls) == (second["run_id"], 2, 2)
+
+
+def test_a_child_started_from_a_bridge_run_names_that_run(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    parent = json.loads(
+        run(SUBAGENTS + "\n> use: manager\n[r] << Delegate one task.\n= <r>\n", adapter)
+    )
+    delegated = parent["reply"]["result"]
+    assert delegated["ok"] is True
+    child = json.loads(delegated["result"]["task_summary"])
+    assert child["subagent"]["parentRunId"] == parent["runId"]
+
+
+@pytest.mark.parametrize(
+    ("limits", "message"),
+    [
+        (SubagentUsageLimits(request_limit=1), "request limit 1 exceeded"),
+        (SubagentUsageLimits(tool_calls_limit=1), "tool call limit 1 exceeded"),
+    ],
+)
+def test_a_childs_limits_stop_the_step_before_the_bridge_takes_it(
+    adapters: list, limits: SubagentUsageLimits, message: str
+) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    runtime = compile_program(
+        parse_program(SUBAGENTS), adapter=adapter, subagent_usage_limits=limits
+    )
+    tools = delegation_tools(runtime, adapter)
+    with pytest.raises(KediExecutionError, match=message):
+        asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Find q."))
+    assert runtime._subagent_coordinator.runs.snapshot()[-1].status == "failed"
+
+
+def test_a_childs_bridge_tools_answer_to_its_parents_policy(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    source = SUBAGENTS.replace(
+        "> profile: manager:\n    > approval: allow", "> profile: manager:\n    > approval: deny"
+    )
+    runtime = compile_program(parse_program(source), adapter=adapter)
+    tools = delegation_tools(runtime, adapter)
+    replies = json.loads(
+        asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Find q."))["task_summary"]
+    )
+    # The worker allows; its parent's deny is the ceiling, for Kedi's tools and the bridge's.
+    assert replies["approval"]["result"] == {"decision": "deny", "reason": "static deny policy"}
+    assert all(reply["result"]["ok"] is False for reply in replies["lookups"])
+
+
+def test_structured_children_are_corrected_with_kedis_feedback(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    runtime = compile_program(parse_program(SUBAGENTS), adapter=adapter)
+    tools = delegation_tools(runtime, adapter)
+    schema = {
+        "type": "object",
+        "properties": {"ocean": {"type": "string"}},
+        "required": ["ocean"],
+    }
+    result = asyncio.run(
+        tools["delegate_task"].fn(subagent="worker", task="Name an ocean.", final_schema=schema)
+    )
+    assert result["final_result"] == {"ocean": "Pacific"}
+    # The bridge's second answer quotes Kedi's correction of its first.
+    assert "task_summary and final_result" in result["task_summary"]
+
+
+def test_without_sessions_kedi_replays_the_childs_turns(adapters: list) -> None:
+    adapter = peer("subagents-stateless")
+    adapters.append(adapter)
+    assert adapter.supports_native_subagent_resume is False
+    runtime = compile_program(parse_program(SUBAGENTS), adapter=adapter)
+    tools = delegation_tools(runtime, adapter)
+    first = asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Find q."))
+    second = asyncio.run(tools["continue_subagent"].fn(run_id=first["run_id"], task="Again."))
+    replies = json.loads(second["task_summary"])
+    assert replies["session"] is None
+    assert replies["user"].startswith("Continue the same child task using this verified prior")
+
+
+def test_only_the_childs_own_turn_is_the_child(adapters: list) -> None:
+    adapter = peer("subagents-stateless")
+    adapters.append(adapter)
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(name="worker"),
+        tools=(),
+        instructions=None,
+        approval_ceiling=(),
+        usage_limits=SubagentUsageLimits(),
+    )
+    with adapter.subagent_scope(request):
+        assert adapter._child.get() is request
+        with adapter.tool_scope(()):
+            # A Kedi call made by one of the child's tools is an ordinary call.
+            assert adapter._child.get() is None
+        replies = json.loads(adapter.invoke_sync(prompt="Direct."))
+    # Called outside Kedi's coordinator: no Kedi run id, and the request's own limits.
+    assert replies["subagent"]["id"] is None
+    assert replies["subagent"]["limits"]["requests"] == 8
+    with pytest.raises(KediExecutionError, match="only inside subagent_scope"):
+        asyncio.run(adapter.produce_subagent(template="x", output_schema={"type": "object"}))
+
+
+def manager_run(adapter: JsonRpcAdapter, prompt: str) -> dict[str, Any]:
+    return json.loads(run(SUBAGENTS + f"\n> use: manager\n[r] << {prompt}\n= <r>\n", adapter))
+
+
+def test_a_background_child_runs_beside_its_bridge_parent(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    parent = manager_run(adapter, "Delegate in the background.")
+    started = parent["reply"]["result"]["result"]
+    assert started["status"] == "running"
+    waited = parent["wait_subagent"]["result"]["result"]
+    assert waited["run_id"] == started["run_id"]
+    child = json.loads(waited["task_summary"])
+    # The child ran on the owner loop while its parent's run waited on the same connection.
+    assert child["subagent"]["parentRunId"] == parent["runId"]
+    assert all(reply["result"]["ok"] for reply in child["lookups"])
+
+
+def test_cancelling_a_background_child_cancels_its_bridge_run(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    parent = manager_run(adapter, "Delegate, then cancel.")
+    assert parent["cancel_subagent"]["result"]["result"]["cancel_requested"] is True
+    deadline = time.monotonic() + 10
+    while not any(line.startswith("cancel ") for line in adapter._connection.stderr_tail):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def test_a_bridge_that_dies_during_a_child_releases_its_slot_once() -> None:
+    adapter = peer("subagents-die")
+    try:
+        runtime = compile_program(parse_program(SUBAGENTS), adapter=adapter)
+        tools = delegation_tools(runtime, adapter)
+        with pytest.raises(Exception) as caught:
+            asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Find q."))
+        assert "bridge crashed during a child" in str(caught.value)
+        coordinator = runtime._subagent_coordinator
+        assert coordinator.runs.snapshot()[-1].status == "failed"
+        # The slot was released exactly once: a second release would raise "slot underflow".
+        assert coordinator._active_runs == 0
+    finally:
+        adapter.close()

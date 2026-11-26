@@ -200,6 +200,8 @@ async function handle(message) {
           mediaInput: true,
           sessions: true,
           governed: true,
+          // Kedi runs its children here as ordinary runs; params.subagent says whose they are.
+          subagents: true,
         },
         mediaKinds: ["image"],
       },
