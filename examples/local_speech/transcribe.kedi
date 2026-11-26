@@ -1,0 +1,12 @@
+> import: media
+
+###
+Write down what is said in an audio clip, with the local transcription model the caller
+selected. The clip travels as a reference, `<<clip>>`, so the model hears the audio itself.
+###
+@transcribe(clip: Audio) -> str:
+  [text] << Transcribe <<clip>>.
+  = <text>
+
+# roundtrip.py binds this file: `clip` arrives as a global.
+= `transcribe(clip)`

@@ -244,3 +244,6 @@ plans/
 /playground/
 /harness/
 /benchmarks
+
+# Recordings and measurements from the local speech example
+examples/local_speech/out/

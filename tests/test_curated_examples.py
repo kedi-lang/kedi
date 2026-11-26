@@ -28,6 +28,7 @@ WORKFLOWS = {
     "module_imports",
     "knapsack",
     "flappy_kedi",
+    "local_speech",
 }
 
 

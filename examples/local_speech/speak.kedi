@@ -1,0 +1,14 @@
+> import: media
+
+###
+Read one sentence aloud with the local speech model the caller selected.
+
+The model reads the prompt as written, so the sentence is the whole prompt.
+The procedure returns the audio value itself, not its text rendering.
+###
+@speak(sentence: str) -> Audio:
+  [speech: Audio] << <sentence>
+  = `speech`
+
+# run.py binds this file: `sentence` arrives as a global.
+= `speak(sentence)`
