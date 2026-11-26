@@ -445,6 +445,9 @@ media:
   `_2` suffix can differ between runs; names stay unique.
 - A conversation restored from a checkpoint keeps its names but not their
   media: new media get new names, and an earlier name can no longer be named.
+- To resolve names, a conversation keeps every media it named in memory for
+  its lifetime, including media that history archiving or compaction has
+  dropped from the history.
 
 With a history processor, native compaction or history archiving, Kedi cannot
 tell what the model still sees, so it attaches references on every turn.

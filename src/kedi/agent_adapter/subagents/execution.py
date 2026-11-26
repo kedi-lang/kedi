@@ -365,14 +365,19 @@ def _uses_native_approvals(adapter: object) -> bool:
 
 
 def _task_with_verified_history(turns: tuple[SubagentTurn, ...], task: str) -> str:
-    history = [
-        {
-            "task": turn.task,
-            "task_summary": turn.task_summary,
-            "final_result": turn.final_result,
-        }
-        for turn in turns
-    ]
+    from kedi.agent_adapter.request_budget import project_media_payloads
+
+    # A media capture is stored as a data URI; the child reads a short label, not base64.
+    history, _ = project_media_payloads(
+        [
+            {
+                "task": turn.task,
+                "task_summary": turn.task_summary,
+                "final_result": turn.final_result,
+            }
+            for turn in turns
+        ]
+    )
     return (
         "Continue the same child task using this verified prior conversation state:\n"
         f"{json.dumps(history, ensure_ascii=False)}\n\n"

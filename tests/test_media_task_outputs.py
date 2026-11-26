@@ -82,3 +82,21 @@ def test_delegated_results_stay_json_and_name_no_media() -> None:
     state = SubagentOutputState(TypeAdapter(Image))
     with pytest.raises(ValidationError, match="Expected an image as a data URI"):
         state.validate_candidate("cats_2")
+
+
+def test_a_continued_child_reads_earlier_media_as_labels_not_base64() -> None:
+    import base64
+
+    from kedi.agent_adapter.subagents import SubagentTurn
+    from kedi.agent_adapter.subagents.execution import _task_with_verified_history
+
+    encoded = base64.b64encode(BLUE).decode()
+    turn = SubagentTurn(
+        run_id="r",
+        task="pick",
+        task_summary="picked",
+        final_result={"photo": f"data:image/png;base64,{encoded}", "reason": "blue"},
+    )
+    text = _task_with_verified_history((turn,), "Now pick the red one.")
+    assert encoded not in text
+    assert '"photo": "[image: ' in text and '"reason": "blue"' in text
