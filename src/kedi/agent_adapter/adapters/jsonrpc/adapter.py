@@ -46,6 +46,8 @@ from ...conversation import AdapterConversationContext
 from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
 from ...hooks import HookDeniedError, HookHandler, HookRegistrationMixin, hooked_agent_run
+from ...hooks.dispatcher import current_hook_dispatcher
+from ...hooks.models import HookEventName
 from ...hooks.tool_wrapper import (
     dispatch_post_tool_use,
     dispatch_post_tool_use_failure,
@@ -87,7 +89,6 @@ from .protocol import (
     CANCELLED,
     CAPABILITIES,
     HOOK_EVENTS,
-    HOOK_ORIGINS,
     INTERRUPTED,
     INVALID_PARAMS,
     MEDIA_KINDS,
@@ -261,7 +262,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
         self.effort_levels = peer.effort_levels
         """The ``> effort:`` levels the bridge maps to its backend."""
         self.hook_origins = peer.hook_origins
-        """The sources of the bridge's own tools whose events it reports with hook/invoke."""
+        """The sources of the bridge's own tools: it reports their calls with hook/invoke."""
 
     @classmethod
     async def launch(cls, command: Sequence[str], **options: Any) -> Self:
@@ -520,6 +521,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "continuation": None,
             "session": None,
             "subagent": None if child is None else _lineage(child, parent_run_id, limits),
+            "hooks": self._hook_events(),
         }
         commit: Callable[[Any], None] | None = None
         if child is not None and self.capabilities.supports_stateful_history:
@@ -618,6 +620,16 @@ class JsonRpcAdapter(HookRegistrationMixin):
             governed = bool(self.capabilities.supports_request_budget)
             report_invocation(_usage(result.get("usage"), requests_counted=governed))
         return result
+
+    def _hook_events(self) -> list[str]:
+        """The tool events with handlers: the bridge sends hook/invoke for these only."""
+
+        dispatcher = current_hook_dispatcher()
+        if not self.hook_origins or dispatcher is None:
+            return []
+        return sorted(
+            event for event in HOOK_EVENTS if dispatcher.handlers_for(cast("HookEventName", event))
+        )
 
     def _media_output(self, output_type: Any) -> OutputMediaKind | None:
         """The media the bridge's model produces for ``output_type``, when it can."""
@@ -764,7 +776,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
         if origin not in self.hook_origins:
             raise JsonRpcError(
                 UNSUPPORTED,
-                f"hook/invoke for {origin!r} tools needs it in the handshake's hooks.origins",
+                f"hook/invoke for {origin!r} tools: the bridge runs no such tools "
+                f"(it reports {', '.join(sorted(self.hook_origins)) or 'none'})",
             )
         if (
             event not in HOOK_EVENTS
@@ -1150,15 +1163,13 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         raise JsonRpcError(INVALID_PARAMS, f"settings lists Kedi's own settings: {', '.join(own)}")
     if not isinstance(effort, list) or not set(effort) <= EFFORT_VALUES:
         raise JsonRpcError(INVALID_PARAMS, f"effort must list levels of {sorted(EFFORT_VALUES)}")
-    hooks = handshake.get("hooks", {})
-    origins = hooks.get("origins", []) if isinstance(hooks, dict) else None
-    if not isinstance(origins, list) or not set(origins) <= HOOK_ORIGINS:
-        raise JsonRpcError(
-            INVALID_PARAMS, f"hooks.origins must list sources of {sorted(HOOK_ORIGINS)}"
-        )
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
+    # A bridge that runs tools of its own reports their calls to Kedi's hooks.
+    origins: frozenset[HookToolOrigin] = (
+        frozenset({"adapter_native", "provider_builtin"}) if native_tools else frozenset()
+    )
     subagents = flags["supports_subagents"]
     live_input, interrupt = (
         flags["supports_live_subagent_input"],
@@ -1168,7 +1179,6 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         (subagents and not governed, "subagents need governed: Kedi admits each child request"),
         (live_input and not subagents, "liveInput needs subagents"),
         (interrupt and not live_input, "interrupt needs liveInput"),
-        (bool(origins) and not native_tools, "hooks for a bridge's own tools need nativeTools"),
     ):
         if unmet:
             raise JsonRpcError(INVALID_PARAMS, problem)
@@ -1212,7 +1222,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         frozenset(kinds),
         native_tools,
         frozenset(effort),
-        frozenset(cast("list[HookToolOrigin]", origins)),
+        origins,
     )
 
 

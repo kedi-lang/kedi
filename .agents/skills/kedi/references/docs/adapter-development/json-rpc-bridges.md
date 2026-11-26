@@ -49,7 +49,7 @@ it has not exited within the timeout.
 
 | Method | Direction | Params | Result |
 |---|---|---|---|
-| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`, `hooks`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) and [Hooks](#hooks) |
+| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) |
 | `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"content": [...]}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
@@ -106,6 +106,7 @@ actions the bridge parses.
 | `fallbackModels` | the profile's `> fallback:` models, in order; empty for none |
 | `settings` | the profile's `> settings:` the bridge listed in `initialize`, as name and value |
 | `effort` | the profile's `> effort:` level, or `null` |
+| `hooks` | the tool events that have handlers, for a bridge with `nativeTools`: send `hook/invoke` for these only (see [Hooks](#hooks)); empty otherwise |
 | `system` | the system text: send it verbatim as the system or developer message |
 | `instructionParts` | the same text as parts, each with `identity`, `source` and `content` |
 | `user` | the prompt: send it verbatim as the user turn |
@@ -242,11 +243,12 @@ Kedi runs a program's hooks on every bridge: `user_prompt_submit` before the
 run is assembled, and the tool events around each Kedi tool at `tool/call`.
 The bridge needs nothing for these.
 
-For its own tools, a bridge with `nativeTools` lists in `initialize` the
-sources whose calls it reports, in `hooks` `{"origins": [...]}`:
-`adapter_native` for the backend's tools, `mcp` for its MCP servers' tools and
-`provider_builtin` for tools the model provider runs. It then sends
-`hook/invoke` around each such call:
+A bridge with `nativeTools` runs tools of its own, so it reports their calls
+to the program's hooks: that is part of `nativeTools`, as `approval/request`
+is. Each run's `hooks` lists the tool events that have handlers; for those,
+send `hook/invoke` around each call of a bridge tool, with `origin`
+`adapter_native` for the backend's tools or `provider_builtin` for tools the
+model provider runs. With no handlers, `hooks` is empty and nothing is sent.
 
 1. `pre_tool_use` with the call's `arguments`, before `approval/request`.
    Kedi answers `continue`, `edit` with the `arguments` to run instead (ask
@@ -257,8 +259,8 @@ sources whose calls it reports, in `hooks` `{"origins": [...]}`:
    when it was cancelled.
 
 A hook that fails or times out stops the run, as for Kedi tools: a failing
-hook is a failing safety or audit control. Without a source in
-`hooks.origins`, Kedi refuses `hook/invoke` for it.
+hook is a failing safety or audit control. Kedi refuses `hook/invoke` from a
+bridge without `nativeTools`.
 
 ### Subagents
 

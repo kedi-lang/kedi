@@ -135,8 +135,6 @@ def test_the_handshake_sets_kind_identity_and_instance_capabilities(adapters: li
         ("interrupt-without-live", "interrupt needs liveInput"),
         ("settings-own", "settings lists Kedi's own settings: context_limit"),
         ("settings-not-names", "settings must list setting names"),
-        ("hooks-not-native", "hooks for a bridge's own tools need nativeTools"),
-        ("hooks-unknown-origin", "hooks.origins must list sources of"),
         ("effort-unknown", "effort must list levels of"),
     ],
 )
@@ -1444,7 +1442,11 @@ def test_the_programs_hooks_run_around_a_bridges_own_tool(adapters: list) -> Non
     adapters.append(adapter)
     hooks = adapter.capabilities.hooks
     assert hooks is not None and hooks.pre_tool_use is not None
-    assert hooks.pre_tool_use.origins == {"kedi", "adapter_native"}
+    assert hooks.pre_tool_use.origins == {"kedi", "adapter_native", "provider_builtin"}
+    source = "> approval: allow\n[r] << {prompt}\n= <r>\n"
+    # With no handlers, the run lists no events and the bridge sends no hook/invoke.
+    quiet = json.loads(run(source.format(prompt="Run ls."), adapter))
+    assert quiet == {"hooks": [], "approval": quiet["approval"]}
     events: list[Any] = []
 
     def pre(event: Any) -> Any:
@@ -1460,8 +1462,8 @@ def test_the_programs_hooks_run_around_a_bridges_own_tool(adapters: list) -> Non
     adapter.on("post_tool_use_failure")(
         lambda event: events.append(("failed", event.error_type, event.error_message))
     )
-    source = "> approval: allow\n[r] << {prompt}\n= <r>\n"
     ran = json.loads(run(source.format(prompt="Run ls."), adapter))
+    assert ran["hooks"] == ["post_tool_use", "post_tool_use_failure", "pre_tool_use"]
     # The edit reaches the bridge, which asks approval for the edited arguments.
     assert ran["pre"]["result"] == {"decision": "edit", "arguments": {"command": "ls -la"}}
     assert ran["approval"]["result"]["decision"] == "allow"
@@ -1504,7 +1506,7 @@ def test_hook_invoke_needs_a_declared_origin_and_a_well_formed_call(adapters: li
         "arguments": {},
     }
     for params, message in (
-        ({"origin": "mcp"}, "hook/invoke for 'mcp' tools needs it in the handshake"),
+        ({"origin": "mcp"}, "hook/invoke for 'mcp' tools: the bridge runs no such tools"),
         ({"event": "teleport"}, "hook/invoke needs an event of"),
     ):
         with pytest.raises(JsonRpcError, match=re.escape(message)):

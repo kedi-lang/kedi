@@ -9,12 +9,11 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
-  capabilities, mediaKinds?, settings?, effort?, hooks?}``: ``settings`` names the
-  ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps, ``hooks``
-  ``{origins}`` the sources of its own tools whose calls it reports with ``hook/invoke``. Kedi sends nothing else before
+  capabilities, mediaKinds?, settings?, effort?}``: ``settings`` names the ``> settings:`` the
+  backend applies, ``effort`` the ``> effort:`` levels it maps. Kedi sends nothing else before
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
-  instructionParts, user, userContent, output, tools, continuation, session, subagent}``
+  instructionParts, user, userContent, output, tools, continuation, session, subagent, hooks}``
   returns ``{text}``, ``{data}`` or ``{content}``, optionally
   with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
   toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
@@ -55,8 +54,9 @@ Bridge to Kedi:
   reason}``, or ``{decision: "edit", arguments, reason}``: the bridge runs the edited
   arguments, after another ``approval/request`` if their risk is higher.
 - ``hook/invoke`` ``{runId, event, callId, tool, origin, arguments, inputSchema?, result?,
-  error?, interrupted?}`` (for an ``origin`` the handshake's ``hooks.origins`` lists), around
-  each call of a bridge tool: ``pre_tool_use`` before its ``approval/request``, then
+  error?, interrupted?}`` (with ``nativeTools``), around each call of a bridge tool, for the
+  events the run's ``hooks`` lists (those with handlers): ``pre_tool_use`` before its
+  ``approval/request``, then
   ``post_tool_use`` with its ``result`` or ``post_tool_use_failure`` with ``error`` ``{type,
   message}``. ``pre_tool_use`` returns ``{decision: "continue"}``, ``{decision: "edit",
   arguments}`` or ``{decision: "deny", reason}``; the others return ``{}``. Kedi runs the
@@ -138,8 +138,6 @@ the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 NATIVE_TOOLS: Final = "nativeTools"
-HOOK_ORIGINS: Final = frozenset({"adapter_native", "mcp", "provider_builtin"})
-"""Sources of a bridge's own tools; Kedi's tools are hooked by Kedi."""
 HOOK_EVENTS: Final = frozenset({"pre_tool_use", "post_tool_use", "post_tool_use_failure"})
 
 BUDGET_DIMENSIONS: Final = {"request": "request", "toolAttempt": "tool_attempt"}

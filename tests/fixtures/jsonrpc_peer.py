@@ -57,12 +57,6 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "sessions": True}
     elif SCENARIO == "hooked":
         result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
-        result["hooks"] = {"origins": ["adapter_native"]}
-    elif SCENARIO == "hooks-not-native":
-        result["hooks"] = {"origins": ["adapter_native"]}
-    elif SCENARIO == "hooks-unknown-origin":
-        result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
-        result["hooks"] = {"origins": ["kedi"]}
     elif SCENARIO == "drawing":
         result["capabilities"] = {
             **CAPABILITIES,
@@ -339,14 +333,17 @@ def hooked(request_id: int, params: dict[str, Any]) -> None:
         send({"id": request_id, "result": {"text": "answered early"}})
         return
     command = {"Run ls.": "ls", "Run rm.": "rm -rf /", "Run a failing command.": "false"}[user]
-    pre = call_kedi(
-        "hook/invoke", {**call, "event": "pre_tool_use", "arguments": {"command": command}}
-    )
-    seen: dict[str, Any] = {"pre": pre}
-    if "error" in pre or pre["result"]["decision"] == "deny":
-        send({"id": request_id, "result": {"text": json.dumps(seen)}})
-        return
-    arguments = pre["result"].get("arguments", {"command": command})
+    # Kedi lists the events with handlers; the bridge reports only those.
+    events = params["hooks"]
+    seen: dict[str, Any] = {"hooks": events}
+    arguments = {"command": command}
+    if "pre_tool_use" in events:
+        pre = call_kedi("hook/invoke", {**call, "event": "pre_tool_use", "arguments": arguments})
+        seen["pre"] = pre
+        if "error" in pre or pre["result"]["decision"] == "deny":
+            send({"id": request_id, "result": {"text": json.dumps(seen)}})
+            return
+        arguments = pre["result"].get("arguments", arguments)
     approval = {"runId": run_id, "callId": "c1", "tool": "shell", "risk": "mutating"}
     seen["approval"] = call_kedi("approval/request", {**approval, "arguments": arguments})
     if arguments["command"] == "false":
@@ -354,7 +351,8 @@ def hooked(request_id: int, params: dict[str, Any]) -> None:
         post = {**call, "event": "post_tool_use_failure", "arguments": arguments, "error": error}
     else:
         post = {**call, "event": "post_tool_use", "arguments": arguments, "result": "a b"}
-    seen["post"] = call_kedi("hook/invoke", post)
+    if post["event"] in events:
+        seen["post"] = call_kedi("hook/invoke", post)
     send({"id": request_id, "result": {"text": json.dumps(seen)}})
 
 
