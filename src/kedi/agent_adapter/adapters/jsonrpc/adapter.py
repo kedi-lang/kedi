@@ -30,6 +30,7 @@ from pydantic_core import to_jsonable_python
 
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
+from ....effort import EFFORT_VALUES
 from ....errors import KediExecutionError
 from ....media import MediaError
 from ....run_budget import BudgetDimension, RunBudgetExceeded, admit_run_operation
@@ -160,12 +161,14 @@ class JsonRpcAdapter:
                 "live_subagent_input",
                 "subagent_interrupt",
                 "token_usage",
+                "effort",
+                "settings",
             }
         ),
         supports_profile_override=True,
         supports_model_override=True,
-        supports_effort=False,
-        supports_settings=False,
+        supports_effort=None,
+        supports_settings=None,
         supports_mcp=False,
     )
 
@@ -228,6 +231,8 @@ class JsonRpcAdapter:
             raise
         self.kind, self.backend, self.capabilities = peer.kind, peer.backend, peer.capabilities
         self.media_kinds, self.native_tools = peer.media_kinds, peer.native_tools
+        self.effort_levels = peer.effort_levels
+        """The ``> effort:`` levels the bridge maps to its backend."""
 
     @classmethod
     async def launch(cls, command: Sequence[str], **options: Any) -> Self:
@@ -263,12 +268,15 @@ class JsonRpcAdapter:
         unsupported = [
             name
             for name, present in (
-                ("effort", profile.effort is not None),
+                ("effort", profile.effort is not None and profile.effort not in self.effort_levels),
                 ("mcp", bool(profile.mcp_servers)),
             )
             if present
         ]
-        unsupported += sorted(set(profile.settings) - KEDI_RUNTIME_SETTING_KEYS)
+        # Kedi applies its own settings; the bridge applies the names it listed.
+        unsupported += sorted(
+            set(profile.settings) - KEDI_RUNTIME_SETTING_KEYS - self.capabilities.settings
+        )
         if unsupported:
             raise AgentProfileOverrideUnsupported(
                 f"{self.shortname} does not support profile fields: {', '.join(unsupported)}"
@@ -449,6 +457,13 @@ class JsonRpcAdapter:
             "callKind": rendered.call_kind,
             "promptKind": rendered.prompt_kind,
             "model": self.active_profile.model or self._model,
+            "fallbackModels": list(self.active_profile.fallback_models or ()),
+            "settings": {
+                name: to_jsonable_python(value, fallback=str)
+                for name, value in self.active_profile.settings.items()
+                if name in self.capabilities.settings
+            },
+            "effort": self.active_profile.effort,
             "system": rendered.system,
             "instructionParts": [
                 {"identity": part.identity, "source": part.source, "content": part.content}
@@ -921,6 +936,7 @@ class _Peer:
     capabilities: AdapterCapabilities
     media_kinds: frozenset[str]
     native_tools: bool
+    effort_levels: frozenset[str]
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -947,6 +963,13 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         raise JsonRpcError(INVALID_PARAMS, f"mediaKinds must list kinds of {sorted(MEDIA_KINDS)}")
     if flags["supports_media_input"] and not kinds:
         raise JsonRpcError(INVALID_PARAMS, "mediaInput needs mediaKinds")
+    settings, effort = handshake.get("settings", []), handshake.get("effort", [])
+    if not isinstance(settings, list) or not all(isinstance(name, str) for name in settings):
+        raise JsonRpcError(INVALID_PARAMS, "settings must list setting names")
+    if own := sorted(set(settings) & KEDI_RUNTIME_SETTING_KEYS):
+        raise JsonRpcError(INVALID_PARAMS, f"settings lists Kedi's own settings: {', '.join(own)}")
+    if not isinstance(effort, list) or not set(effort) <= EFFORT_VALUES:
+        raise JsonRpcError(INVALID_PARAMS, f"effort must list levels of {sorted(EFFORT_VALUES)}")
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
@@ -983,11 +1006,13 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         supports_subagent_interrupt=interrupt,
         supports_profile_override=True,
         supports_model_override=True,
-        supports_effort=False,
-        supports_settings=False,
+        supports_effort=bool(effort),
+        supports_settings=bool(settings),
+        settings=frozenset(settings),
+        supports_model_fallback=flags["supports_model_fallback"],
         supports_mcp=False,
     )
-    return _Peer(kind, backend, capabilities, frozenset(kinds), native_tools)
+    return _Peer(kind, backend, capabilities, frozenset(kinds), native_tools, frozenset(effort))
 
 
 def _user_content(

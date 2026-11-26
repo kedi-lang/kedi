@@ -65,6 +65,16 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {"media": True, "events": True}
     elif SCENARIO in ADMISSION:
         result["capabilities"] = {**CAPABILITIES, **ADMISSION[SCENARIO]}
+    elif SCENARIO == "configured":
+        result["capabilities"] = {**CAPABILITIES, "modelFallback": True}
+        result["settings"] = ["temperature"]
+        result["effort"] = ["low", "high"]
+    elif SCENARIO == "settings-own":
+        result["settings"] = ["context_limit"]
+    elif SCENARIO == "settings-not-names":
+        result["settings"] = [1]
+    elif SCENARIO == "effort-unknown":
+        result["effort"] = ["turbo"]
     return result
 
 
@@ -270,6 +280,10 @@ def run(request_id: int, params: dict[str, Any]) -> None:
         return
     if SCENARIO == "live":
         live_probe(request_id, params)
+        return
+    if SCENARIO == "configured":
+        keys = ("model", "fallbackModels", "settings", "effort")
+        send({"id": request_id, "result": {"text": json.dumps({key: params[key] for key in keys})}})
         return
     if SCENARIO in ("subagents", "subagents-stateless", "subagents-die"):
         subagent_probe(request_id, params)

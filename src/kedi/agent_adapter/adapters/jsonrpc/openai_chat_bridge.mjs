@@ -7,7 +7,8 @@
 // and calls Kedi tools back with tool/call. It writes no instructions of its own.
 //
 // It is governed: it asks Kedi (budget/admit) before every request to the endpoint, and
-// makes no requests of its own besides those, retries included.
+// makes no requests of its own besides those: no retries. With fallbackModels it tries the
+// next model when a request fails, each attempt admitted like any other request.
 //
 // Usage: node openai_chat_bridge.mjs --base-url URL [--mode native|protocol]
 //        [--api-key-env NAME] [--max-steps N]
@@ -57,23 +58,43 @@ function request(method, params) {
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
 }
 
-async function complete(runId, body, signal) {
+// Kedi's > settings: names this bridge applies, and the OpenAI fields they become.
+const SETTINGS = {
+  temperature: "temperature",
+  max_tokens: "max_tokens",
+  top_p: "top_p",
+  seed: "seed",
+  stop_sequences: "stop",
+  presence_penalty: "presence_penalty",
+  frequency_penalty: "frequency_penalty",
+};
+// Kedi's > effort: levels this bridge sends as reasoning_effort.
+const EFFORT = ["minimal", "low", "medium", "high"];
+
+async function complete(runId, body, models, signal) {
+  // Tries each model in order when a request fails, asking Kedi before every attempt.
   // Returns the model's message; reports the request's token counts with run/usage.
-  const admission = await request("budget/admit", { runId, dimension: "request" });
-  if (!admission.admitted) {
-    // Kedi fails the run with its RunBudgetExceeded; the request is never sent.
-    throw new RpcError(RUN_FAILED, `Kedi's ${admission.dimension} budget is exhausted`);
+  let failure;
+  for (const model of models) {
+    const admission = await request("budget/admit", { runId, dimension: "request" });
+    if (!admission.admitted) {
+      // Kedi fails the run with its own error; the request is never sent.
+      throw new RpcError(RUN_FAILED, admission.reason);
+    }
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ ...body, model, stream: false }),
+      signal,
+    });
+    if (response.ok) return reported(runId, await response.json());
+    failure = new RpcError(RUN_FAILED, `model ${model} answered ${response.status}: ${await response.text()}`);
+    log(failure.message);
   }
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ ...body, stream: false }),
-    signal,
-  });
-  if (!response.ok) {
-    throw new RpcError(RUN_FAILED, `model endpoint answered ${response.status}: ${await response.text()}`);
-  }
-  const reply = await response.json();
+  throw failure;
+}
+
+function reported(runId, reply) {
   const usage = reply.usage ?? {};
   send({
     method: "run/usage",
@@ -121,7 +142,10 @@ async function run(params, state) {
     messages.push({ role: "assistant", content: answerText(params.continuation.answer) });
     messages.push({ role: "user", content: params.continuation.message });
   }
-  const body = { model: params.model ?? "default", messages };
+  const body = { messages };
+  for (const [name, value] of Object.entries(params.settings ?? {})) body[SETTINGS[name]] = value;
+  if (params.effort) body.reasoning_effort = params.effort;
+  const models = [params.model ?? "default", ...(params.fallbackModels ?? [])];
   if (native && params.tools.length) {
     body.tools = params.tools.map((tool) => ({
       type: "function",
@@ -145,7 +169,7 @@ async function run(params, state) {
     // Live input from Kedi joins the conversation before the next model request.
     const delivering = state.inputs.splice(0);
     for (const { texts } of delivering) for (const text of texts) messages.push({ role: "user", content: text });
-    const message = await complete(params.runId, body, signal);
+    const message = await complete(params.runId, body, models, signal);
     for (const { id } of delivering) send({ id, result: { delivered: true } });
     if (native) {
       const calls = message.tool_calls ?? [];
@@ -225,7 +249,10 @@ async function handle(message) {
           liveInput: true,
           interrupt: true,
           usage: true,
+          modelFallback: true,
         },
+        settings: Object.keys(SETTINGS),
+        effort: EFFORT,
         mediaKinds: ["image"],
       },
     });

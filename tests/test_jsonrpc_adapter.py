@@ -131,6 +131,9 @@ def test_the_handshake_sets_kind_identity_and_instance_capabilities(adapters: li
         ("subagents-ungoverned", "subagents need governed"),
         ("live-without-subagents", "liveInput needs subagents"),
         ("interrupt-without-live", "interrupt needs liveInput"),
+        ("settings-own", "settings lists Kedi's own settings: context_limit"),
+        ("settings-not-names", "settings must list setting names"),
+        ("effort-unknown", "effort must list levels of"),
     ],
 )
 def test_a_bridge_that_fails_the_handshake_is_never_exposed(scenario: str, message: str) -> None:
@@ -1197,3 +1200,80 @@ def test_input_a_bridge_refuses_waits_for_the_next_attempt(adapters: list) -> No
     )
     # Kedi counts the input undelivered, so the coordinator gives it to the next attempt.
     assert asyncio.run(adapter._deliver("run-1", (item,))) is False
+
+
+CONFIGURED = (
+    """> model: primary
+> fallback:
+    backup-1
+    backup-2
+> effort: high
+> settings:
+    temperature: 0.2
+    context_limit: 40000
+"""
+    + ECHO
+)
+
+
+def test_settings_effort_and_fallbacks_reach_the_bridge_that_named_them(adapters: list) -> None:
+    adapter, plain = peer("configured"), peer("default")
+    adapters += [adapter, plain]
+    assert adapter.capabilities.settings == frozenset({"temperature"})
+    assert adapter.capabilities.supports_effort and adapter.capabilities.supports_model_fallback
+    sent = json.loads(run(CONFIGURED, adapter))
+    # Kedi applies its own settings (context_limit); the bridge gets the names it listed.
+    assert sent == {
+        "model": "primary",
+        "fallbackModels": ["backup-1", "backup-2"],
+        "settings": {"temperature": 0.2},
+        "effort": "high",
+    }
+    for directive, refused in (
+        ("> effort: max\n", "effort"),
+        ("> settings:\n    top_p: 0.5\n", "top_p"),
+    ):
+        error = failure(directive + ECHO, adapter)
+        assert f"does not support profile fields: {refused}" in str(error)
+    # A bridge that named none takes none, and Kedi refuses > fallback: before the run.
+    assert "does not support profile fields: effort" in str(
+        failure("> effort: low\n" + ECHO, plain)
+    )
+    assert "model_fallback" in str(failure("> fallback: backup-1\n" + ECHO, plain))
+
+
+class BrokenModelEndpoint(RecordingEndpoint):
+    """Fails every request for the model named broken."""
+
+    def _answer(self, protocol: Any, body: dict[str, Any]) -> dict[str, Any]:
+        if body.get("model") == "broken":
+            raise RuntimeError("the model is down")
+        return super()._answer(protocol, body)
+
+
+def test_the_reference_bridge_falls_back_and_applies_settings_and_effort() -> None:
+    source = (
+        """> model: broken
+> fallback: working
+> effort: low
+> settings:
+    temperature: 0.2
+    stop_sequences: `["END"]`
+"""
+        + ECHO
+    )
+    with BrokenModelEndpoint() as endpoint:
+        endpoint.script = Script(final="Hello.", text=True)
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        try:
+            assert run(source, adapter) == "Hello."
+            broken, working = endpoint.take()
+            assert (broken.body["model"], working.body["model"]) == ("broken", "working")
+            assert working.body["temperature"] == 0.2 and working.body["stop"] == ["END"]
+            assert working.body["reasoning_effort"] == "low"
+            # Each attempt was admitted: a one-request budget stops the fallback.
+            error = failure("> budget:\n    request_limit: 1\n" + source, adapter)
+            assert isinstance(error, RunBudgetExceeded)
+            assert [exchange.body["model"] for exchange in endpoint.take()] == ["broken"]
+        finally:
+            adapter.close()

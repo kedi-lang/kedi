@@ -45,7 +45,7 @@ it has not exited within the timeout.
 
 | Method | Direction | Params | Result |
 |---|---|---|---|
-| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds` |
+| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) |
 | `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
@@ -78,6 +78,7 @@ backend name is refused, and the process is stopped.
 | `liveInput` | the bridge takes input for a running run with `run/input`; needs `subagents` |
 | `interrupt` | the bridge stops an attempt on `run/interrupt`; needs `liveInput` |
 | `usage` | the bridge sends `run/usage` for every model request; enables `token_usage`, so children can have token limits |
+| `modelFallback` | the bridge tries `fallbackModels` in order when a model request fails; enables `> fallback:` |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
@@ -95,6 +96,9 @@ actions the bridge parses.
 | `runId` | the run; `tool/call` names it |
 | `callKind`, `promptKind` | `invoke` or `produce`; `raw`, `template` or `claim` |
 | `model` | the profile's model, or the adapter's default |
+| `fallbackModels` | the profile's `> fallback:` models, in order; empty for none |
+| `settings` | the profile's `> settings:` the bridge listed in `initialize`, as name and value |
+| `effort` | the profile's `> effort:` level, or `null` |
 | `system` | the system text: send it verbatim as the system or developer message |
 | `instructionParts` | the same text as parts, each with `identity`, `source` and `content` |
 | `user` | the prompt: send it verbatim as the user turn |
@@ -136,6 +140,23 @@ budget, stops the run: Kedi answers the call with `-32002`, sends
 with `-32003`. Calls run concurrently on
 the run's event loop, so a tool may itself start a nested run on the same
 bridge while the outer run waits.
+
+### Settings, Effort and Fallback
+
+A bridge lists in `initialize` what it applies: `settings`, the `> settings:`
+names it maps to its backend, and `effort`, the `> effort:` levels it accepts
+(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Each run then carries the
+profile's values for those names in `settings`, and its level in `effort`.
+
+Kedi applies its own settings (`context_limit`, `media_limit`,
+`request_retries`, `tool_reason`, `voice`) and never sends them; a bridge may
+not list them. Kedi refuses a setting or level the bridge did not list before
+the run, so a program never runs with a configuration it did not get.
+
+With `modelFallback`, a run carries the profile's `> fallback:` models in
+`fallbackModels`. Try them in order, after `model`, when a model request
+fails. A governed bridge asks `budget/admit` before each attempt: a fallback is
+a request like any other. Without `modelFallback`, Kedi refuses `> fallback:`.
 
 ### Budgets
 
@@ -333,7 +354,10 @@ response formats, for endpoints without them. It is `governed`: it asks
 `budget/admit` before every request and makes no retries. It advertises
 `subagents`, `liveInput`, `interrupt` and `usage`: it runs children as ordinary
 runs, adds live input before its next request, stops a fetch on `run/interrupt`,
-and reports each request's token counts. Start a new bridge from it.
+and reports each request's token counts. It lists the OpenAI chat settings
+(`temperature`, `max_tokens`, `top_p`, `seed`, `stop_sequences`,
+`presence_penalty`, `frequency_penalty`), sends `effort` as `reasoning_effort`,
+and tries `fallbackModels` when a request fails. Start a new bridge from it.
 
 ## Conformance
 
