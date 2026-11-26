@@ -50,7 +50,7 @@ it has not exited within the timeout.
 | Method | Direction | Params | Result |
 |---|---|---|---|
 | `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) |
-| `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage`, and `state` in a session |
+| `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"media": ...}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
 | `run/interrupt` | Kedi → bridge (notification) | `runId` | — ; the run answers with `-32006` |
@@ -83,6 +83,8 @@ backend name is refused, and the process is stopped.
 | `interrupt` | the bridge stops an attempt on `run/interrupt`; needs `liveInput` |
 | `usage` | the bridge sends `run/usage` for every model request; enables `token_usage`, so children can have token limits |
 | `modelFallback` | the bridge tries `fallbackModels` in order when a model request fails; enables `> fallback:` |
+| `imageOutput` | the bridge's model draws images for `[img: Image] << ...`; see [Media Output](#media-output) |
+| `audioOutput` | the bridge's model speaks for `[speech: Audio] << ...` |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
@@ -107,7 +109,7 @@ actions the bridge parses.
 | `instructionParts` | the same text as parts, each with `identity`, `source` and `content` |
 | `user` | the prompt: send it verbatim as the user turn |
 | `userContent` | `null`, or the user turn with its media; see [Media](#media) |
-| `output` | `null` for text, or `schema` (the output JSON Schema) and `toolName` |
+| `output` | `null` for text; `schema` (the output JSON Schema) and `toolName` for data; or `media` for an image or speech the model makes (see [Media Output](#media-output)) |
 | `tools` | each tool's `name`, `description`, `inputSchema`, `outputSchema` and `requiredBeforeOutput` |
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
 | `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
@@ -144,6 +146,27 @@ budget, stops the run: Kedi answers the call with `-32002`, sends
 with `-32003`. Calls run concurrently on
 the run's event loop, so a tool may itself start a nested run on the same
 bridge while the outer run waits.
+
+### Media Output
+
+With `imageOutput`, `[img: Image] << Draw a cat.` reaches the bridge with
+`output` `{"media": "image"}`. Have the model draw, and answer with
+`{"media": {"kind": "image", "mediaType": "image/png", "data": "<base64>"}}`,
+or with a `url` instead of `data`. When the request holds images, or a tool
+may return one, `output` also has `schema` and `toolName`: the model may then
+name one of the request's images instead, and the bridge answers
+`{"data": "<name>"}`. Kedi resolves the name to that image, as it does for any
+media-typed value a model writes.
+
+With `audioOutput`, `[speech: Audio] << Read this aloud.` reaches the bridge
+with `output` `{"media": "audio", "voice": ...}`: `voice` is the profile's
+`> settings: voice`, or `null` for the model's own. The run has no tools and
+no media. Answer with `{"media": {"kind": "audio", "mediaType": "audio/wav",
+"data": "<base64>"}}`. Kedi fails a run whose `media` is of another kind.
+
+Without the capability, Kedi has the model name a request image for
+`[img: Image] <<`, as for any adapter that cannot draw, and refuses
+`[speech: Audio] <<` before the run.
 
 ### Settings, Effort and Fallback
 
@@ -361,7 +384,11 @@ runs, adds live input before its next request, stops a fetch on `run/interrupt`,
 and reports each request's token counts. It lists the OpenAI chat settings
 (`temperature`, `max_tokens`, `top_p`, `seed`, `stop_sequences`,
 `presence_penalty`, `frequency_penalty`), sends `effort` as `reasoning_effort`,
-and tries `fallbackModels` when a request fails. Start a new bridge from it.
+and tries `fallbackModels` when a request fails. With `--image-output` it asks
+image models to draw (OpenRouter's chat completions with `modalities`
+`image`), and with `--audio-output` audio models to speak (OpenAI's chat
+completions audio); `reference_bridge_command(..., image_output=True,
+audio_output=True)` passes them. Start a new bridge from it.
 
 ## Conformance
 

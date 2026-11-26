@@ -14,8 +14,12 @@ Kedi to bridge:
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
   instructionParts, user, userContent, output, tools, continuation, session, subagent}``
-  returns ``{text}`` or ``{data}``, optionally
-  with ``usage`` and, in a session, ``state``. ``subagent`` is ``null``, or, for a child Kedi
+  returns ``{text}``, ``{data}`` or ``{media}``, optionally
+  with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
+  toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
+  schema?, toolName?}`` (the model draws an image; with ``schema`` it may instead name an image
+  of its request, as ``data``) or ``{media: "audio", voice}`` (the model speaks; the run has
+  no tools). ``media`` is ``{kind, mediaType, data | url}``, ``data`` in base64. ``subagent`` is ``null``, or, for a child Kedi
   runs on the bridge, ``{id, parentRunId, conversationId, name, limits}``: Kedi's run id for
   the child, the bridge run whose tool call started it, the child conversation, the child
   profile and its remaining limits. ``session`` is ``null``, or ``{id, turn, state}``:
@@ -100,6 +104,8 @@ CAPABILITIES: Final = {
     "interrupt": "supports_subagent_interrupt",
     "usage": "supports_token_usage",
     "modelFallback": "supports_model_fallback",
+    "imageOutput": "supports_image_output",
+    "audioOutput": "supports_audio_output",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
 

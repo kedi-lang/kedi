@@ -10,8 +10,12 @@
 // makes no requests of its own besides those: no retries. With fallbackModels it tries the
 // next model when a request fails, each attempt admitted like any other request.
 //
+// With --image-output it asks image models to draw (OpenRouter's chat completions: modalities
+// image, message.images); with --audio-output it asks audio models to speak (OpenAI's chat
+// completions audio). Both need --mode native.
+//
 // Usage: node openai_chat_bridge.mjs --base-url URL [--mode native|protocol]
-//        [--api-key-env NAME] [--max-steps N]
+//        [--api-key-env NAME] [--max-steps N] [--image-output] [--audio-output]
 // stdout carries only protocol frames; diagnostics go to stderr.
 
 
@@ -31,6 +35,8 @@ const mode = option("mode", "native");
 const apiKey = process.env[option("api-key-env", "OPENAI_API_KEY")] ?? "unused";
 const maxSteps = Number(option("max-steps", "8"));
 const native = mode === "native";
+const imageOutput = native && process.argv.includes("--image-output");
+const audioOutput = native && process.argv.includes("--audio-output");
 
 function log(...parts) {
   process.stderr.write(`[openai-chat-bridge] ${parts.join(" ")}\n`);
@@ -151,7 +157,14 @@ async function run(params, state) {
       function: { name: tool.name, description: tool.description ?? "", parameters: tool.inputSchema },
     }));
   }
-  if (native && params.output) {
+  const media = params.output?.media;
+  if (media === "image") body.modalities = ["image", "text"];
+  if (media === "audio") {
+    body.modalities = ["text", "audio"];
+    body.audio = { voice: params.output.voice ?? "alloy", format: "wav" };
+  }
+  // A drawing answers with an image; one that may name a request image writes its name.
+  if (native && params.output && !media) {
     body.response_format = {
       type: "json_schema",
       json_schema: { name: params.output.toolName, schema: params.output.schema },
@@ -173,6 +186,7 @@ async function run(params, state) {
     if (native) {
       const calls = message.tool_calls ?? [];
       if (!calls.length) {
+        if (media) return finish(produced(media, message, params.output), message.content ?? "");
         if (!params.output) return finish({ text: message.content ?? "" }, message.content ?? "");
         try {
           return finish({ data: JSON.parse(message.content) }, message.content);
@@ -225,6 +239,28 @@ async function run(params, state) {
   throw new RpcError(RUN_FAILED, `no final answer after ${maxSteps} model requests`);
 }
 
+function produced(media, message, output) {
+  // The run's answer for a media output: the image or speech the model made, or, for an image
+  // that may name one of the request, the name it wrote.
+  if (media === "audio" && message.audio?.data) {
+    return { media: { kind: "audio", mediaType: "audio/wav", data: message.audio.data } };
+  }
+  const url = message.images?.[0]?.image_url?.url;
+  if (media === "image" && url) {
+    const found = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+    if (!found) return { media: { kind: "image", url } };
+    return { media: { kind: "image", mediaType: found[1], data: found[2] } };
+  }
+  if (media === "image" && output.schema && message.content) {
+    try {
+      return { data: JSON.parse(message.content) };
+    } catch {
+      return { data: message.content.trim() };
+    }
+  }
+  throw new RpcError(RUN_FAILED, `the model gave no ${media === "audio" ? "speech" : "image"}`);
+}
+
 async function handle(message) {
   const { id, method, params } = message;
   if (method === "initialize") {
@@ -249,6 +285,8 @@ async function handle(message) {
           interrupt: true,
           usage: true,
           modelFallback: true,
+          imageOutput,
+          audioOutput,
         },
         settings: Object.keys(SETTINGS),
         effort: EFFORT,

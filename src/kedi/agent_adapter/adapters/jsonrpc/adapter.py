@@ -29,10 +29,10 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
-from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
+from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS, speech_voice
 from ....effort import EFFORT_VALUES
 from ....errors import KediExecutionError
-from ....media import MediaError
+from ....media import Media, MediaError
 from ....run_budget import BudgetDimension, RunBudgetExceeded, admit_run_operation
 from ...approvals.policy import (
     ApprovalDecision,
@@ -59,7 +59,15 @@ from ...request import (
     output_validator,
 )
 from ...request.context import take_prompt_media
-from ...request.media import MediaAttachment, attachment_content
+from ...request.media import (
+    MediaAttachment,
+    OutputMediaKind,
+    attachment_content,
+    media_validation_context,
+    output_media_kind,
+    tools_may_return_media,
+)
+from ...request.models import RenderedRequest
 from ...request.prompts import output_correction, protocol_correction, required_tools_correction
 from ...subagents import SubagentExecutionRequest, SubagentUsageLimits, accept_subagent_output
 from ...subagents.context import current_subagent_execution
@@ -104,6 +112,8 @@ class _Run:
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
     failure: BaseException | None = None
     events: AgentMessageResolver | None = None
+    media: OutputMediaKind | None = None
+    """The media the run's model produces: ``[img: Image] <<`` or ``[speech: Audio] <<``."""
     live: LiveInput | None = None
     """The live input of the Kedi call; the run's prompt may carry some of it."""
     prompt: str = ""
@@ -146,6 +156,8 @@ class JsonRpcAdapter:
         supports_live_subagent_input=None,
         supports_subagent_interrupt=None,
         supports_token_usage=None,
+        supports_image_output=None,
+        supports_audio_output=None,
         negotiated_capabilities=frozenset(
             {
                 "structured_output",
@@ -163,6 +175,8 @@ class JsonRpcAdapter:
                 "token_usage",
                 "effort",
                 "settings",
+                "image_output",
+                "audio_output",
             }
         ),
         supports_profile_override=True,
@@ -368,7 +382,7 @@ class JsonRpcAdapter:
         instructions: str | None = None,
         **_: Any,
     ) -> Any:
-        if not self.capabilities.supports_structured_output:
+        if not (self.capabilities.supports_structured_output or self._media_output(output_type)):
             raise JsonRpcError(
                 UNSUPPORTED, f"bridge {self.backend['name']!r} does not support structured output"
             )
@@ -412,7 +426,9 @@ class JsonRpcAdapter:
         disconnected = self._connection.disconnected
         if disconnected is not None:
             raise disconnected
-        tools = self._tools.get()
+        media = self._media_output(output.output_type if isinstance(output, TypedOutput) else None)
+        # A speech request sends text only: the model speaks, and calls no tools.
+        tools = () if media == "audio" else self._tools.get()
         request = call_request(
             prompt=prompt,
             output=output,
@@ -450,6 +466,7 @@ class JsonRpcAdapter:
             tools={tool.name: tool for tool in tools},
             live=current_live_input(),
             prompt=rendered.user,
+            media=media,
         )
         required = {tool.name for tool in rendered.tools if tool.required_before_output}
         params: JsonObject = {
@@ -471,9 +488,7 @@ class JsonRpcAdapter:
             ],
             "user": rendered.user,
             "userContent": user_content,
-            "output": None
-            if rendered.output_json_schema is None
-            else {"schema": rendered.output_json_schema, "toolName": rendered.output_tool_name},
+            "output": self._output(rendered, media, attachments, tools),
             "tools": [
                 {
                     "name": tool.name,
@@ -585,6 +600,40 @@ class JsonRpcAdapter:
             governed = bool(self.capabilities.supports_request_budget)
             report_invocation(_usage(result.get("usage"), requests_counted=governed))
         return result
+
+    def _media_output(self, output_type: Any) -> OutputMediaKind | None:
+        """The media the bridge's model produces for ``output_type``, when it can."""
+
+        kind = output_media_kind(output_type)
+        produces = {
+            "image": self.capabilities.supports_image_output,
+            "audio": self.capabilities.supports_audio_output,
+        }
+        return kind if kind is not None and produces[kind] else None
+
+    def _output(
+        self,
+        rendered: RenderedRequest,
+        media: OutputMediaKind | None,
+        attachments: Sequence[MediaAttachment],
+        tools: Sequence[ToolSpec],
+    ) -> JsonObject | None:
+        """The run's ``output``: text, data, or the media its model produces."""
+
+        data = (
+            None
+            if rendered.output_json_schema is None
+            else {"schema": rendered.output_json_schema, "toolName": rendered.output_tool_name}
+        )
+        if media == "audio":
+            return {"media": "audio", "voice": speech_voice(self.active_profile.settings)}
+        if media == "image":
+            # The model draws, or names an image the request or a tool result holds.
+            may_name = tools_may_return_media(tools) or any(
+                attachment.media.kind == "image" for attachment in attachments
+            )
+            return {"media": "image", **(data if may_name and data else {})}
+        return data
 
     async def _deliver(self, run_id: str, items: tuple[AgentInput, ...]) -> bool:
         """Hand live input to the running bridge run; true once its model has it."""
@@ -1010,6 +1059,8 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         supports_settings=bool(settings),
         settings=frozenset(settings),
         supports_model_fallback=flags["supports_model_fallback"],
+        supports_image_output=flags["supports_image_output"],
+        supports_audio_output=flags["supports_audio_output"],
         supports_mcp=False,
     )
     return _Peer(kind, backend, capabilities, frozenset(kinds), native_tools, frozenset(effort))
@@ -1059,6 +1110,8 @@ def _check_answer(
     missing = required - run.called
     if missing:
         return None, required_tools_correction(missing, attempted=bool(missing & run.attempted))
+    if run.media is not None and "media" in result:
+        return _media(result["media"], run.media), None
     if validator is None and accept is None:
         text = result.get("text")
         if not isinstance(text, str):
@@ -1073,19 +1126,50 @@ def _check_answer(
             return None, str(correction)
     assert validator is not None
     try:
-        return validator.validate_python(result["data"]), None
+        # A media-typed value names an image or audio of the request (MEDIA_NAMES).
+        return validator.validate_python(result["data"], context=media_validation_context()), None
     except ValidationError as exc:
         return None, output_correction(exc)
 
 
-def reference_bridge_command(base_url: str, *, mode: str = "native") -> list[str]:
+def _media(value: Any, kind: OutputMediaKind) -> Media:
+    """The image or audio a run answered with, as Kedi media."""
+
+    from ....media import Audio, Image
+
+    if not isinstance(value, dict) or value.get("kind") != kind:
+        raise JsonRpcError(INVALID_PARAMS, f"the run asked for {kind}; 'media' must be {kind}")
+    media_type = value.get("mediaType")
+    cls = Image if kind == "image" else Audio
+    if isinstance(value.get("url"), str):
+        return cls.from_url(value["url"], media_type=media_type)
+    try:
+        data = base64.b64decode(value["data"], validate=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise JsonRpcError(INVALID_PARAMS, "'media' needs base64 'data' or a 'url'") from exc
+    return cls.from_bytes(data, media_type)
+
+
+def reference_bridge_command(
+    base_url: str,
+    *,
+    mode: str = "native",
+    image_output: bool = False,
+    audio_output: bool = False,
+) -> list[str]:
     """Run the reference bridge with Node.js against an OpenAI-compatible ``base_url``.
 
     ``mode="protocol"`` treats the endpoint as having no native structured output or tool
-    calling, so Kedi sends its protocol parts.
+    calling, so Kedi sends its protocol parts. ``image_output`` and ``audio_output`` say the
+    endpoint's models draw (OpenRouter's image output) or speak (OpenAI's chat audio).
     """
 
-    return ["node", str(REFERENCE_BRIDGE), "--base-url", base_url, "--mode", mode]
+    flags = [
+        flag
+        for flag, enabled in (("--image-output", image_output), ("--audio-output", audio_output))
+        if enabled
+    ]
+    return ["node", str(REFERENCE_BRIDGE), "--base-url", base_url, "--mode", mode, *flags]
 
 
 __all__ = ["REFERENCE_BRIDGE", "JsonRpcAdapter", "JsonRpcDisconnected", "reference_bridge_command"]

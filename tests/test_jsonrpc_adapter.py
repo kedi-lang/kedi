@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import json
+import re
 import sys
 import threading
 import time
@@ -1299,3 +1301,133 @@ def test_the_reference_bridge_keeps_line_separators_inside_a_frame(adapters: lis
         assert asyncio.run(adapter.invoke(prompt=prompt)) == "done"
         (exchange,) = endpoint.take()
         assert prompt in _strings(exchange.body["messages"])
+
+
+def test_a_bridge_model_draws_and_speaks(adapters: list) -> None:
+    from kedi.media import Audio, Image
+
+    adapter = peer("drawing")
+    adapters.append(adapter)
+    capabilities = adapter.capabilities
+    assert capabilities.supports_image_output and capabilities.supports_audio_output
+    image = run("> import: media\n[img: Image] << Draw a cat.\n= `img`\n", adapter)
+    assert isinstance(image, Image) and image.media_type == "image/png"
+    assert image.data is not None and image.data.startswith(b"\x89PNG")
+    # With nothing to name, the model can only draw: the output holds no schema.
+    seen = json.loads(run("[seen] << What did you get?\n= <seen>\n", adapter))
+    assert seen["output"] == {"media": "image"}
+    # With an image in the request, the model may name it instead of drawing.
+    source = (
+        f'> import: media\n[photo: Image] = `image("{PIXEL}")`\n'
+        "[img: Image] << Pick one. <<photo>>\n= `img`\n"
+    )
+    picked = run(source, adapter)
+    # The model named the request's photo: Kedi returns that image, not a drawing.
+    assert isinstance(picked, Image) and picked.data == base64.b64decode(PIXEL.split(",")[1])
+    seen = json.loads(run("[seen] << What did you get?\n= <seen>\n", adapter))
+    assert seen["output"]["media"] == "image" and seen["output"]["schema"] == {"type": "string"}
+
+    async def speak() -> Any:
+        profile = AgentProfile(settings={"voice": "nova"})
+        with adapter.profile_override(profile), adapter.tool_scope((lookup_tool(),)):
+            return await adapter.produce(template="Say hello.", output_type=Audio)
+
+    speech = asyncio.run(speak())
+    assert isinstance(speech, Audio) and speech.media_type == "audio/wav"
+    seen = json.loads(run("[seen] << What did you get?\n= <seen>\n", adapter))
+    # A speech request carries the voice, and no tools.
+    assert seen == {"output": {"media": "audio", "voice": "nova"}, "tools": []}
+
+
+def test_a_bridge_answers_with_the_media_it_was_asked_for(adapters: list) -> None:
+    from kedi.media import Image
+
+    adapter = peer("drawing")
+    adapters.append(adapter)
+
+    def draw(prompt: str) -> Any:
+        return asyncio.run(adapter.produce(template=prompt, output_type=Image))
+
+    linked = draw("Link it.")
+    assert isinstance(linked, Image) and linked.url == "https://example.com/cat.png"
+    for prompt, message in (
+        ("Answer with sound.", "the run asked for image; 'media' must be image"),
+        ("Answer with garbage.", "'media' needs base64 'data' or a 'url'"),
+    ):
+        with pytest.raises(JsonRpcError, match=re.escape(message)):
+            draw(prompt)
+
+
+def test_a_bridge_without_media_output_still_only_names_media(adapters: list) -> None:
+    from kedi.media import MediaError
+
+    adapter = peer("media")
+    adapters.append(adapter)
+    assert not adapter.capabilities.supports_image_output
+    error = failure("> import: media\n[img: Image] << Draw a cat.\n= `img`\n", adapter)
+    assert isinstance(error, MediaError) and "holds no image to name" in str(error)
+    error = failure("> import: media\n[speech: Audio] << Say hello.\n= `speech`\n", adapter)
+    assert isinstance(error, MediaError) and "cannot produce speech" in str(error)
+
+
+class MediaEndpoint(RecordingEndpoint):
+    """Draws for image requests and speaks for audio ones, as chat completions report it."""
+
+    def _answer(self, protocol: Any, body: dict[str, Any]) -> dict[str, Any]:
+        answer = super()._answer(protocol, body)
+        message = answer["choices"][0]["message"]
+        modalities = body.get("modalities") or []
+        if "image" in modalities and "Draw" in json.dumps(body["messages"]):
+            png = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+            message["images"] = [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png}"}}
+            ]
+        if "audio" in modalities:
+            message["audio"] = {"data": base64.b64encode(b"RIFF\x00WAVE").decode()}
+        return answer
+
+
+def test_the_reference_bridge_draws_and_speaks_when_its_endpoint_does(adapters: list) -> None:
+    from kedi.media import Audio, Image
+
+    with MediaEndpoint() as endpoint:
+        endpoint.script = Script(final="photo", text=True)
+        command = reference_bridge_command(
+            f"{endpoint.base_url}/v1", image_output=True, audio_output=True
+        )
+        adapter = JsonRpcAdapter(command)
+        adapters.append(adapter)
+        assert adapter.capabilities.supports_image_output
+        drawn = run("> import: media\n[img: Image] << Draw a cat.\n= `img`\n", adapter)
+        assert isinstance(drawn, Image) and drawn.data == b"\x89PNG\r\n\x1a\n"
+        (drawing,) = endpoint.take()
+        assert drawing.body["modalities"] == ["image", "text"]
+        assert "response_format" not in drawing.body
+        # A model that writes a name instead picks the request's image.
+        source = (
+            f'> import: media\n[photo: Image] = `image("{PIXEL}")`\n'
+            "[img: Image] << Pick <<photo>>.\n= `img`\n"
+        )
+        picked = run(source, adapter)
+        assert isinstance(picked, Image)
+        assert picked.data == base64.b64decode(PIXEL.split(",")[1])
+        endpoint.take()
+        profile = AgentProfile(settings={"voice": "nova"})
+
+        async def speak() -> Any:
+            with adapter.profile_override(profile):
+                return await adapter.produce(template="Say hello.", output_type=Audio)
+
+        speech = asyncio.run(speak())
+        assert isinstance(speech, Audio) and speech.data == b"RIFF\x00WAVE"
+        (spoken,) = endpoint.take()
+        assert spoken.body["audio"] == {"voice": "nova", "format": "wav"}
+        assert "tools" not in spoken.body
+
+
+def test_the_reference_bridge_claims_no_media_output_by_default(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        assert not adapter.capabilities.supports_image_output
+        assert not adapter.capabilities.supports_audio_output
