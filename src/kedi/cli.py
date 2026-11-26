@@ -167,6 +167,39 @@ def _skills_command_help() -> str:
     )
 
 
+_ADAPTER_USAGE = "Usage: kedi adapter check MODULE:CLASS [--json]"
+
+
+def _check_adapter_command(arguments: list[str]) -> bool:
+    """``kedi adapter check``: run the conformance kit on ``CLASS.for_conformance``; passed?"""
+
+    import importlib
+    import json
+
+    rest = [argument for argument in arguments if argument != "--json"]
+    if len(rest) != 2 or rest[0] != "check":
+        raise click.UsageError(_ADAPTER_USAGE)
+    module_name, _, attribute = rest[1].partition(":")
+    if not module_name or not attribute:
+        raise click.UsageError(f"{_ADAPTER_USAGE}: name the adapter as MODULE:CLASS")
+    try:
+        adapter = getattr(importlib.import_module(module_name), attribute)
+    except (ImportError, AttributeError) as exc:
+        raise click.UsageError(str(exc)) from exc
+    factory = getattr(adapter, "for_conformance", None)
+    if not callable(factory):
+        raise click.UsageError(f"{rest[1]} has no for_conformance(base_url) constructor")
+    from kedi.agent_adapter.conformance import check_adapter
+
+    try:
+        report = check_adapter(factory)
+    except Exception as exc:
+        raise click.ClickException(f"{rest[1]}.for_conformance failed: {exc}") from exc
+    as_json = len(rest) != len(arguments)
+    click.echo(json.dumps(report.as_dict(), indent=2) if as_json else report.render())
+    return report.passed
+
+
 def _run_notebook_command(arguments: list[str]) -> int:
     try:
         from kedi_notebook.server import serve_cli
@@ -403,6 +436,10 @@ def main(
             click.echo(
                 "Usage: kedi explain SOURCE\n\nInspect model calls without running the program."
             )
+        elif source == "adapter" and command_source is None:
+            click.echo(
+                f"{_ADAPTER_USAGE}\n\nCheck that an adapter sends the model what Kedi rendered."
+            )
         else:
             click.echo(ctx.get_help())
         return 0
@@ -467,6 +504,8 @@ def main(
         return _run_notebook_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:
         return _run_package_command(source, list(ctx.args))
+    if source == "adapter" and command_source is None:
+        ctx.exit(0 if _check_adapter_command(list(ctx.args)) else 1)
     if source == "explain" and command_source is None:
         if len(ctx.args) != 1:
             raise click.UsageError("Usage: kedi explain SOURCE")

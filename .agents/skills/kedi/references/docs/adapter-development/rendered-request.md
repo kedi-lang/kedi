@@ -37,7 +37,7 @@ else:
 | `media` | the prompt's attachments (see [Multimodal Input](multimodal-input.md)) |
 | `output_json_schema` | the output schema Kedi built, with the model description and field descriptions; `None` for text |
 | `output_tool_name` | `final_result` when there is an output schema, for a backend that takes the output as a tool call |
-| `tools` | each tool's name, Kedi description, input and return schema, and `required_before_output` |
+| `tools` | each tool's name, Kedi description, input and return schema, and `required_before_output`; `parameters` and `returns` give the schemas as plain JSON objects |
 | `prompt_kind` | `raw`, `template` or `claim` |
 | `call_kind` | `invoke` or `produce` |
 

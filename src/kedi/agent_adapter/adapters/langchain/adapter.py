@@ -11,6 +11,7 @@ from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError, create_model
 from pydantic_ai import UsageLimits
 from pydantic_ai.output import OutputDataT
+from typing_extensions import Self
 
 from kedi.agent_adapter.adapters.langchain.messages import (
     _apply_langchain_effort_settings,
@@ -217,6 +218,18 @@ class LangChainAdapter(HookRegistrationMixin):
         return model_template_prompt_mode(
             profile.model if profile.model is not None else self._model
         )
+
+    @classmethod
+    def for_conformance(cls, base_url: str) -> Self:
+        """An adapter on the conformance kit's OpenAI-compatible endpoint (``kedi adapter check``)."""
+
+        from langchain_openai import ChatOpenAI
+        from pydantic import SecretStr
+
+        model = ChatOpenAI(
+            model="conformance", base_url=f"{base_url}/v1", api_key=SecretStr("conformance")
+        )
+        return cls(model, request_retries=0)
 
     def __init__(
         self,

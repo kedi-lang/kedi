@@ -131,6 +131,129 @@ assert script.instructions[0] == pydantic_instructions[0], (script.instructions[
 Both adapters returned the same value, and the custom adapter sent the model
 exactly the instruction text Kedi's own adapter sends.
 
+## Conformance Check
+
+`kedi adapter check MODULE:CLASS` runs Kedi programs through your adapter and
+checks what reached the model against what Kedi rendered (see
+[Rendered Request](rendered-request.md)). `CLASS.for_conformance(base_url)`
+returns an adapter whose backend talks to the kit's local recording endpoint,
+which speaks three protocols:
+
+| Route | Protocol |
+|---|---|
+| `{base_url}/v1/chat/completions` | OpenAI Chat Completions |
+| `{base_url}/v1/messages` | Anthropic Messages |
+| `{base_url}/kedi/webgpu` | the WebGPU bridge payload |
+
+Send requests with `stream` off; the endpoint refuses streamed ones. The kit
+creates a fresh adapter for every run and closes it afterwards with `aclose()`
+or `close()` when the adapter has one, so `for_conformance` may start
+processes or open clients.
+
+Each scenario runs one Kedi call in two variants with different text:
+
+| Scenario | Program |
+|---|---|
+| `invoke` | a raw invoke with profile instructions |
+| `produce` | a template capture of nested types with field descriptions |
+| `claim` | a template condition |
+| `tool-allow`, `tool-deny` | a tool the model calls once, with `approval: allow` or `deny` |
+| `media` | an image prompt; runs only with `supports_media_input` |
+
+Subagents are not covered yet; the report says so. For every recorded request
+the kit checks that:
+
+- each instruction part is in the system text exactly once, and the prompt is
+  in the user turn exactly once;
+- the output schema's descriptions and each tool's description arrive
+  unchanged;
+- the program returns the scripted value, and a tool's result reaches the model
+  only when approval allows the call;
+- text Kedi did not write is the same in both variants. A fixed harness prompt
+  passes and the report lists it; text that depends on the request, such as
+  "Fill these fields: …", fails.
+
+`--json` prints the report as JSON. The command exits 1 when a check fails.
+`PydanticAdapter`, `LangChainAdapter` and `WebGPUAdapter` have
+`for_conformance`; the Claude and Codex harness adapters reach their models
+through their CLIs, so this endpoint cannot record them:
+
+```bash
+kedi adapter check kedi.agent_adapter:PydanticAdapter
+```
+
+From Python, `check_adapter` takes the factory directly. The backend below
+gives the [Reference Adapter](reference-adapter.md) an OpenAI-compatible
+transport, and the reference adapter passes:
+
+```python title="http_backend.py"
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import httpx
+
+from backend import BackendRequest, Reply, ToolCall
+
+
+class HttpBackend:
+    """The scripted backend's contract over an OpenAI-compatible endpoint."""
+
+    def __init__(self, base_url: str) -> None:
+        self.url = f"{base_url}/v1/chat/completions"
+
+    async def complete(self, request: BackendRequest) -> Reply:
+        messages: list[dict[str, Any]] = []
+        if request.instructions:
+            messages.append({"role": "system", "content": request.instructions})
+        for message in request.messages:
+            if "tool_calls" in message:
+                calls = [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
+                    }
+                    for call in message["tool_calls"]
+                ]
+                messages.append({"role": "assistant", "content": None, "tool_calls": calls})
+            else:
+                messages.append(message)
+        body: dict[str, Any] = {"model": request.model, "messages": messages}
+        if request.tools:
+            body["tools"] = [{"type": "function", "function": tool} for tool in request.tools]
+        if request.output_schema is not None:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "output", "schema": request.output_schema},
+            }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(self.url, json=body, timeout=30)
+        message = response.json()["choices"][0]["message"]
+        calls = tuple(
+            ToolCall(call["id"], call["function"]["name"], json.loads(call["function"]["arguments"]))
+            for call in message.get("tool_calls") or ()
+        )
+        if calls or request.output_schema is None:
+            return Reply(text=message.get("content"), tool_calls=calls)
+        return Reply(data=json.loads(message["content"]))
+```
+
+```python title="run_conformance.py"
+from kedi.agent_adapter.conformance import check_adapter
+
+from chat_adapter import ChatAdapter
+from http_backend import HttpBackend
+from multimodal_adapter import MultimodalAdapter
+
+for adapter in (ChatAdapter, MultimodalAdapter):
+    report = check_adapter(lambda base_url: adapter(HttpBackend(base_url), model="m1"))
+    assert report.passed, report.render()
+    statuses = {result.name: result.status for result in report.results}
+    assert statuses["media"] == ("passed" if adapter is MultimodalAdapter else "skipped")
+```
+
 ## Running the Section's Examples
 
 The scenarios on these pages are executable. `tests/test_adapter_development_examples.py`

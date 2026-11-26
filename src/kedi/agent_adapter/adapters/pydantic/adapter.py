@@ -42,6 +42,7 @@ from pydantic_ai.tools import (
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 from pydantic_ai.workspaces import WorkspaceBackend, WorkspaceRef
+from typing_extensions import Self
 
 from kedi.agent_adapter.adapters.pydantic import hooks as _hooks
 from kedi.agent_adapter.adapters.pydantic import messages as _messages
@@ -236,6 +237,16 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         from .compat import configured_prompt_model
 
         return model_template_prompt_mode(configured_prompt_model(self, profile.model))
+
+    @classmethod
+    def for_conformance(cls, base_url: str) -> Self:
+        """An adapter on the conformance kit's OpenAI-compatible endpoint (``kedi adapter check``)."""
+
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        provider = OpenAIProvider(base_url=f"{base_url}/v1", api_key="conformance")
+        return cls(OpenAIChatModel("conformance", provider=provider), request_retries=0)
 
     def __init__(
         self,

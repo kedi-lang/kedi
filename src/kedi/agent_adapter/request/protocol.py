@@ -12,7 +12,7 @@ import json
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Literal, TypeAlias
 
-from .models import InstructionPart, ToolDefinition
+from .models import InstructionPart, ToolDefinition, thaw_json
 from .prompts import (
     PROTOCOL_FINAL_DATA,
     PROTOCOL_FINAL_TEXT,
@@ -81,26 +81,16 @@ def tool_catalog(tools: Sequence[ToolDefinition]) -> str:
         lines = [f'<Tool name="{tool.name}">']
         if tool.description:
             lines.append(f"<Description>{tool.description}</Description>")
-        lines.append(f"<InputSchema>{_json(tool.input_schema or {'type': 'object'})}</InputSchema>")
-        if tool.output_schema is not None:
-            lines.append(f"<ReturnSchema>{_json(tool.output_schema)}</ReturnSchema>")
+        lines.append(f"<InputSchema>{_json(tool.parameters)}</InputSchema>")
+        if tool.returns is not None:
+            lines.append(f"<ReturnSchema>{_json(tool.returns)}</ReturnSchema>")
         lines.append("</Tool>")
         entries.append("\n".join(lines))
     return "<Tools>\n" + "\n".join(entries) + "\n</Tools>"
 
 
 def _json(value: Any) -> str:
-    return json.dumps(_plain(value), ensure_ascii=False, sort_keys=True)
-
-
-def _plain(value: Any) -> Any:
-    """Frozen request mappings and tuples as plain JSON values."""
-
-    if isinstance(value, Mapping):
-        return {key: _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    return value
+    return json.dumps(thaw_json(value), ensure_ascii=False, sort_keys=True)
 
 
 __all__ = [

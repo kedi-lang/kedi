@@ -43,10 +43,25 @@ traffic. Existing Kedi variables are synchronized back after side effects.
 
 ## Browser Model Bridge
 
-`WebGPUAdapter` sends prompts, JSON Schema, settings, and iterative tool calls
-through a `BrowserModelBridge`. It supports structured output, scoped tools,
-profile/model/effort/settings overrides, and optionally selected MCP
-transports.
+`WebGPUAdapter` sends each model turn through a `BrowserModelBridge`: an object
+with `request(payload, *, timeout)` that returns the model's reply. It supports
+structured output, scoped tools, profile/model/effort/settings overrides, and
+optionally selected MCP transports.
+
+The payload carries `model`, `effort`, `settings`, `messages`, `tools`, `step`, and
+`instructions`: the system text Kedi rendered, including its output and tool
+protocol parts (see [Rendered Request](../adapter-development/rendered-request.md)).
+It also carries `outputSchema` for a structured call, or `responseMode: "text"`.
+The bridge forwards `instructions` unchanged and returns one of:
+
+| Reply | Meaning |
+|---|---|
+| `{"kind": "final", "data": ...}` / `{"kind": "final", "text": ...}` | the answer |
+| `{"kind": "tool_call", "name": ..., "arguments": {...}, "callId": ...}` | one tool call |
+| `{"kind": "retry", "error": ...}` | the model's answer was not one protocol action; Kedi sends its correction |
+| `{"kind": "error", "error": ...}` | the bridge failed |
+
+`HttpBridge(url)` posts each payload as JSON to `url` and returns the JSON reply.
 
 It is not registered as a normal DSL shortname; construct and pass the adapter
 instance from Python.

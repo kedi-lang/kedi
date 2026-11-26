@@ -21,6 +21,16 @@ def _frozen_value(value: Any) -> Any:
     return value
 
 
+def thaw_json(value: Any) -> Any:
+    """A frozen request mapping or tuple as plain JSON values, for a backend request."""
+
+    if isinstance(value, Mapping):
+        return {key: thaw_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [thaw_json(item) for item in value]
+    return value
+
+
 def _frozen_semantic_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return _frozen_value(value)
 
@@ -87,6 +97,18 @@ class ToolDefinition:
                 "output_schema",
                 _frozen_semantic_mapping(self.output_schema),
             )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """The input schema as a plain JSON object, ``{"type": "object"}`` without one."""
+
+        return thaw_json(self.input_schema) if self.input_schema is not None else {"type": "object"}
+
+    @property
+    def returns(self) -> dict[str, Any] | None:
+        """The return schema as a plain JSON object, when the tool declares one."""
+
+        return None if self.output_schema is None else thaw_json(self.output_schema)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
