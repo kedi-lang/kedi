@@ -16,7 +16,7 @@ none sends a real customer message, changes an account, or executes a reviewed p
 | [Python API](python_api/README.md) | Extract an incident and draft a status notice | `@query`, `@bind`, `@type`, native Python values | Yes |
 | [Jev routing](jev_routing/README.md) | Route a ticket using explicit decision criteria | Finite choices, thresholds, decision metadata | Jev |
 | [Flappy Kedi](flappy_kedi/README.md) | Fly a pixel cat with typed model decisions, or play yourself | Kedi decision loop, choice criteria, Python binding, Pygame | Jev, local Laya, or manual |
-| [Local speech](local_speech/README.md) | Speak Turkish and English and transcribe English, offline | `[speech: Audio] <<`, audio prompts, local LangChain models | Local models, no key |
+| [Local speech](local_speech/README.md) | Speak and transcribe Turkish and English, offline | `[speech: Audio] <<`, audio prompts, local LangChain models | Local models, no key |
 | [Local extraction](local_extraction/README.md) | Read refund requests into typed records with a 34 MB local model, then route them | Typed raw invoke, descriptions, deterministic checks on model output | Local model, no key |
 | [Module imports](module_imports/README.md) | Compute an order quote in integer cents | Exports, imports, typed procedures, colocated tests | No |
 | [Knapsack](knapsack/README.md) | Evaluate feasible, optimal item selections | Prompt spans, datasets, scoring, optimization | Yes |

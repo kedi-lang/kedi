@@ -41,8 +41,15 @@ def speech_models(monkeypatch: pytest.MonkeyPatch) -> Any:
             heard.append(samples)
             return {"text": f" heard {len(samples)} samples in {language} "}
 
+    class FakeWhisper:
+        def transcribe(self, samples: np.ndarray, language: str | None, beam_size: int) -> Any:
+            heard.append(samples)
+            segments = [SimpleNamespace(text=" Hesabınıza "), SimpleNamespace(text=" iade edildi.")]
+            return iter(segments), None
+
     monkeypatch.setattr(speech_models, "_ema", FakeEma)
     monkeypatch.setattr(speech_models, "_whistle", FakeWhistle)
+    monkeypatch.setattr(speech_models, "_whisper", FakeWhisper)
     speech_models.heard = heard
     return speech_models
 
@@ -77,6 +84,15 @@ def test_transcribe_hears_the_clip_resampled_to_16_khz(speech_models: Any) -> No
     assert samples.dtype == np.float32 and abs(float(samples.mean()) - 0.25) < 1e-3
 
 
+def test_whisper_hears_the_clip_after_leading_silence(speech_models: Any) -> None:
+    clip = run(EXAMPLE / "speak.kedi", LangChainAdapter(speech_models.EmaLightning()), sentence="x")
+    adapter = LangChainAdapter(speech_models.Whisper(language="tr"))
+    assert run(EXAMPLE / "transcribe.kedi", adapter, clip=clip) == "Hesabınıza iade edildi."
+    (samples,) = speech_models.heard
+    silence = speech_models.LEADING_SILENCE
+    assert len(samples) == silence + 1600 and not samples[:silence].any()
+
+
 def test_round_trip_scores_words_without_punctuation() -> None:
     sys.path.insert(0, str(EXAMPLE))
     try:
@@ -88,6 +104,12 @@ def test_round_trip_scores_words_without_punctuation() -> None:
     assert roundtrip.word_error_rate(
         reference, roundtrip.words("The meeting starts at 9.30 on the third floor.")
     ) == pytest.approx(1 / 9)
+    assert roundtrip.words("Tren İzmir'e, rüzgâr ILIK.", "tr") == [
+        "tren",
+        "izmire",
+        "rüzgar",
+        "ılık",
+    ]
 
 
 def test_ema_lightning_refuses_a_voice_it_does_not_have(speech_models: Any) -> None:

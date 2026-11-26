@@ -11,7 +11,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from speech_models import load  # noqa: E402
 
-for model, name in (("tr", "EMA Lightning"), ("en", "Phonon 31m"), ("whistle", "Cactus Whistle")):
+MODELS = (
+    ("tr", "EMA Lightning"),
+    ("en", "Phonon 31m"),
+    ("whistle", "Cactus Whistle"),
+    ("whisper", "Whisper small"),
+)
+for model, name in MODELS:
     print(f"{name}: loaded in {load(model):.1f} s")
 print("Models are in ~/.cache/huggingface, ~/.cache/ema_lightning and ~/.cache/cactus.")
 print("Run offline with")

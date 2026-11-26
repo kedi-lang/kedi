@@ -9,7 +9,9 @@ sent to a model whose profile declares ``audio_inputs``. These classes run offli
   ema-lightning``;
 - ``Phonon``: English speech, Phonon 31m (Apache 2.0, 24 kHz), ``pip install ptts``;
 - ``Whistle``: transcription in English and six other languages, Cactus Whistle (Apache 2.0),
-  ``pip install cactus-compute``. Turkish is not one of them.
+  ``pip install cactus-compute``. Turkish is not one of them;
+- ``Whisper``: transcription in Turkish (and Whisper's other languages), Whisper small through
+  faster-whisper (MIT), ``pip install faster-whisper``.
 
 Each loads its weights once per process. Provision them with ``provision.py`` while online;
 later runs need no network.
@@ -31,6 +33,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 PHONON_MODEL = "hf://gradium/phonon-31m-en@92741c5b07d085ff840e26fea8ce43110b87852f"
+WHISPER_MODEL = ("Systran/faster-whisper-small", "536b0662742c02347bc0e980a01041f333bce120")
+
+LEADING_SILENCE = 8_000
+"""Half a second at 16 kHz, prepended before Whisper transcribes."""
 
 SYNTHESIS_SECONDS: list[float] = []
 """How long each synthesis took, for the measurements."""
@@ -93,17 +99,13 @@ class Phonon(LocalSpeech):
         return np.asarray(tts.synth(text, voice=self.voice, seed=self.seed)), tts.sample_rate
 
 
-class Whistle(BaseChatModel):
-    """Transcribes the audio in the last user turn; ``language`` skips detection."""
+class Transcriber(BaseChatModel):
+    """Transcribes the audio clip in the last user turn; ``language`` skips detection."""
 
     profile: Any = {"audio_inputs": True}
     language: str | None = None
 
-    @property
-    def _llm_type(self) -> str:
-        return "cactus-whistle"
-
-    def bind_tools(self, tools: Any, **_: Any) -> Whistle:
+    def bind_tools(self, tools: Any, **_: Any) -> Transcriber:
         # A transcriber answers with what it hears and calls no tools, so Kedi's are unused.
         return self
 
@@ -117,10 +119,39 @@ class Whistle(BaseChatModel):
             if isinstance(part, dict) and part.get("type") == "audio"
         ]
         if len(clips) != 1:
-            raise ValueError(f"Whistle transcribes one audio clip per prompt, got {len(clips)}")
+            raise ValueError(f"{self._llm_type} transcribes one audio clip, got {len(clips)}")
         samples = _resample(*read_wav(base64.b64decode(clips[0]["base64"])), 16_000)
-        text = _whistle().transcribe(samples, language=self.language)["text"].strip()
+        text = self.transcribe(samples).strip()
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+
+    def transcribe(self, samples: np.ndarray) -> str:
+        raise NotImplementedError
+
+
+class Whistle(Transcriber):
+    """English (and de, fr, es, it, nl, pl) transcription with Cactus Whistle."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "cactus-whistle"
+
+    def transcribe(self, samples: np.ndarray) -> str:
+        return _whistle().transcribe(samples, language=self.language)["text"]
+
+
+class Whisper(Transcriber):
+    """Turkish transcription with Whisper small (faster-whisper, int8 on the CPU)."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "whisper-small"
+
+    def transcribe(self, samples: np.ndarray) -> str:
+        # Whisper drops the first word of a clip that starts with speech, as EMA's clips do
+        # ("Hesabınıza", "Şu an"); half a second of leading silence keeps it.
+        padded = np.concatenate([np.zeros(LEADING_SILENCE, np.float32), samples])
+        segments, _ = _whisper().transcribe(padded, language=self.language, beam_size=5)
+        return " ".join(segment.text.strip() for segment in segments)
 
 
 @cache
@@ -128,6 +159,14 @@ def _whistle() -> Any:
     from cactus import Whistle as CactusWhistle
 
     return CactusWhistle()
+
+
+@cache
+def _whisper() -> Any:
+    from faster_whisper import WhisperModel
+
+    name, revision = WHISPER_MODEL
+    return WhisperModel(name, device="cpu", compute_type="int8", revision=revision)
 
 
 @cache
@@ -145,10 +184,10 @@ def _phonon() -> Any:
 
 
 def load(model: str) -> float:
-    """Load a model's weights now (``tr``, ``en`` or ``whistle``); returns the seconds."""
+    """Load a model's weights now (``tr``, ``en``, ``whistle`` or ``whisper``); the seconds."""
 
     started = time.perf_counter()
-    {"tr": _ema, "en": _phonon, "whistle": _whistle}[model]()
+    {"tr": _ema, "en": _phonon, "whistle": _whistle, "whisper": _whisper}[model]()
     return time.perf_counter() - started
 
 
