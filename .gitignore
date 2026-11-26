@@ -250,3 +250,6 @@ examples/local_speech/out/
 
 # Reports from the local extraction example
 examples/local_extraction/out/
+
+# Reports from the local vision example
+examples/local_vision/out/

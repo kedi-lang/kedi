@@ -18,6 +18,7 @@ none sends a real customer message, changes an account, or executes a reviewed p
 | [Flappy Kedi](flappy_kedi/README.md) | Fly a pixel cat with typed model decisions, or play yourself | Kedi decision loop, choice criteria, Python binding, Pygame | Jev, local Laya, or manual |
 | [Local speech](local_speech/README.md) | Speak Turkish and English and transcribe English, offline | `[speech: Audio] <<`, audio prompts, local LangChain models | Local models, no key |
 | [Local extraction](local_extraction/README.md) | Read refund requests into typed records with a 34 MB local model, then route them | Typed raw invoke, descriptions, deterministic checks on model output | Local model, no key |
+| [Local vision](local_vision/README.md) | Read receipt images with a 21 MB local vision model and check that they add up | Image prompts `<<photo>>`, deterministic checks on model output | Local model, no key |
 | [Module imports](module_imports/README.md) | Compute an order quote in integer cents | Exports, imports, typed procedures, colocated tests | No |
 | [Knapsack](knapsack/README.md) | Evaluate feasible, optimal item selections | Prompt spans, datasets, scoring, optimization | Yes |
 
