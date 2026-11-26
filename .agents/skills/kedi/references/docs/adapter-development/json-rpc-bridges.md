@@ -420,6 +420,29 @@ by URL.
 Kedi admits 64 bridge requests at a time (`max_inbound_requests`); more are
 answered with `-32004`.
 
+When a run fails in the harness, put the harness's own error in the error's
+`data`, so the user sees what went wrong behind the bridge:
+
+```json
+{"code": -32002, "message": "the harness failed",
+ "data": {"harness": {"type": "ProviderError", "message": "429 rate limited",
+                      "cause": {"type": "HTTPError", "message": "Too Many Requests"}}}}
+```
+
+Kedi quotes it, with the bridge's last five stderr lines, in the error it
+raises. When Kedi stops the run itself, for example on an exhausted budget,
+its own error comes first and the bridge's report follows it:
+
+```text
+Kedi error: RuntimeError
+  Run request budget exhausted (limit 1, consumed 1)
+  from the bridge: the harness failed
+  harness error: ProviderError: 429 rate limited
+    caused by: HTTPError: Too Many Requests
+  bridge stderr:
+    [harness] retrying the provider
+```
+
 ### Cancellation and Timeouts
 
 When a Kedi call is cancelled or exceeds `request_timeout`, Kedi sends

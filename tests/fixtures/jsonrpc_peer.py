@@ -55,6 +55,8 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "events": True}
     elif SCENARIO == "sessions":
         result["capabilities"] = {**CAPABILITIES, "sessions": True}
+    elif SCENARIO == "harness-errors":
+        result["capabilities"] = {**CAPABILITIES, "governed": True}
     elif SCENARIO == "hooked":
         result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
     elif SCENARIO == "mcp-not-native":
@@ -320,6 +322,27 @@ def drawing(request_id: int, params: dict[str, Any]) -> None:
     send({"id": request_id, "result": answers.get(user, {"content": made})})
 
 
+HARNESS = {
+    "type": "ProviderError",
+    "message": "429 rate limited",
+    "cause": {"type": "HTTPError", "message": "Too Many Requests"},
+}
+
+
+def harness_errors(request_id: int, params: dict[str, Any]) -> None:
+    """The harness fails, or Kedi stops it: the run's error carries the harness's own."""
+
+    sys.stderr.write("[harness] retrying the provider\n[harness] giving up\n")
+    sys.stderr.flush()
+    if params["user"] == "Spend.":
+        for _ in range(2):
+            reply = call_kedi("budget/admit", {"runId": params["runId"], "dimension": "request"})
+            if not reply["result"]["admitted"]:
+                break
+    error = {"code": -32002, "message": "the harness failed", "data": {"harness": HARNESS}}
+    send({"id": request_id, "error": error})
+
+
 def hooked(request_id: int, params: dict[str, Any]) -> None:
     """The bridge's own shell tool, with the program's hooks around each call."""
 
@@ -392,6 +415,9 @@ def run(request_id: int, params: dict[str, Any]) -> None:
         return
     if SCENARIO == "hooked":
         hooked(request_id, params)
+        return
+    if SCENARIO == "harness-errors":
+        harness_errors(request_id, params)
         return
     if SCENARIO == "configured":
         keys = ("model", "fallbackModels", "settings", "effort")
