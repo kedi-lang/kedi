@@ -1433,3 +1433,141 @@ def test_the_reference_bridge_claims_no_media_output_by_default(adapters: list) 
         adapters.append(adapter)
         assert not adapter.capabilities.supports_image_output
         assert not adapter.capabilities.supports_audio_output
+
+
+def test_the_programs_hooks_run_around_a_bridges_own_tool(adapters: list) -> None:
+    from kedi.agent_adapter.hooks import PreToolUseDecision
+
+    adapter = peer("hooked")
+    adapters.append(adapter)
+    hooks = adapter.capabilities.hooks
+    assert hooks is not None and hooks.pre_tool_use is not None
+    assert hooks.pre_tool_use.origins == {"kedi", "adapter_native", "provider_builtin"}
+    source = "> approval: allow\n[r] << {prompt}\n= <r>\n"
+    # With no handlers, the run lists no events and the bridge sends no hook/invoke.
+    quiet = json.loads(run(source.format(prompt="Run ls."), adapter))
+    assert quiet == {"hooks": [], "approval": quiet["approval"]}
+    events: list[Any] = []
+
+    def pre(event: Any) -> Any:
+        events.append(("pre", event.tool_name, event.origin, dict(event.arguments)))
+        if event.arguments["command"].startswith("rm"):
+            return PreToolUseDecision.deny("no deleting")
+        if event.arguments["command"] == "ls":
+            return PreToolUseDecision.edit({"command": "ls -la"})
+        return None
+
+    adapter.on("pre_tool_use")(pre)
+    adapter.on("post_tool_use")(lambda event: events.append(("post", event.result)))
+    adapter.on("post_tool_use_failure")(
+        lambda event: events.append(("failed", event.error_type, event.error_message))
+    )
+    ran = json.loads(run(source.format(prompt="Run ls."), adapter))
+    assert ran["hooks"] == ["post_tool_use", "post_tool_use_failure", "pre_tool_use"]
+    # The edit reaches the bridge, which asks approval for the edited arguments.
+    assert ran["pre"]["result"] == {"decision": "edit", "arguments": {"command": "ls -la"}}
+    assert ran["approval"]["result"]["decision"] == "allow"
+    assert ran["post"]["result"] == {}
+    denied = json.loads(run(source.format(prompt="Run rm."), adapter))
+    assert denied["pre"]["result"]["decision"] == "deny"
+    assert "no deleting" in denied["pre"]["result"]["reason"]
+    failed = json.loads(run(source.format(prompt="Run a failing command."), adapter))
+    assert failed["post"]["result"] == {}
+    assert events == [
+        ("pre", "shell", "adapter_native", {"command": "ls"}),
+        ("post", "a b"),
+        ("pre", "shell", "adapter_native", {"command": "rm -rf /"}),
+        ("pre", "shell", "adapter_native", {"command": "false"}),
+        ("failed", "CalledProcessError", "exit status 1"),
+    ]
+
+
+def test_a_failing_hook_stops_the_bridge_run(adapters: list) -> None:
+    adapter = peer("hooked")
+    adapters.append(adapter)
+
+    def broken(event: Any) -> Any:
+        raise RuntimeError("audit store is down")
+
+    adapter.on("pre_tool_use")(broken)
+    error = failure("> approval: allow\n[r] << Run ls.\n= <r>\n", adapter)
+    assert "audit store is down" in f"{error} {error.__cause__}"
+
+
+def test_hook_invoke_needs_a_declared_origin_and_a_well_formed_call(adapters: list) -> None:
+    adapter = peer("hooked")
+    adapters.append(adapter)
+    base = {
+        "runId": "r",
+        "event": "pre_tool_use",
+        "callId": "c",
+        "tool": "shell",
+        "origin": "adapter_native",
+        "arguments": {},
+    }
+    for params, message in (
+        ({"origin": "mcp"}, "hook/invoke for 'mcp' tools: the bridge runs no such tools"),
+        ({"event": "teleport"}, "hook/invoke needs an event of"),
+    ):
+        with pytest.raises(JsonRpcError, match=re.escape(message)):
+            adapter._parse_hook({**base, **params})
+
+
+def test_kedi_tool_hooks_and_the_prompt_hook_run_on_any_bridge(adapters: list) -> None:
+    from kedi.agent_adapter.hooks import PreToolUseDecision, UserPromptSubmitDecision
+
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="lookup", arguments={"query": "q"})
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        seen: list[Any] = []
+        adapter.on("user_prompt_submit")(
+            lambda event: UserPromptSubmitDecision.edit(event.content + " Be brief.")
+        )
+        adapter.on("pre_tool_use")(lambda event: PreToolUseDecision.edit({"query": "edited"}))
+        adapter.on("post_tool_use")(lambda event: seen.append((event.origin, event.result)))
+        with adapter.tool_scope((lookup_tool(),)):
+            assert asyncio.run(adapter.invoke(prompt="Look it up.")) == "done"
+        first, second = endpoint.take()
+        assert "Look it up. Be brief." in _strings(first.body["messages"])
+        # The hook's edit is what the tool ran with.
+        assert seen == [("kedi", "found-edited")]
+        assert "found-edited" in json.dumps(second.body)
+
+
+def test_a_programs_prompt_hook_runs_once_on_a_bridge(adapters: list) -> None:
+    from kedi.agent_adapter.hooks import UserPromptSubmitDecision
+
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True)
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        adapter.on("user_prompt_submit")(
+            lambda event: UserPromptSubmitDecision.edit(event.content + " Be brief.")
+        )
+        assert run("[r] << Say hi.\n= <r>\n", adapter) == "done"
+        (exchange,) = endpoint.take()
+        texts = _strings(exchange.body["messages"])
+        assert any(text.endswith("Say hi. Be brief.") for text in texts)
+        assert not any("Be brief. Be brief." in text for text in texts)
+
+
+def test_a_hook_still_running_when_the_run_ends_is_cancelled(adapters: list) -> None:
+    import kedi.agent_adapter.adapters.jsonrpc.adapter as module
+
+    adapter = peer("hooked")
+    adapters.append(adapter)
+
+    async def slow(event: Any) -> Any:
+        await asyncio.sleep(30)
+        raise AssertionError("the hook should have been cancelled")
+
+    adapter.on("pre_tool_use")(slow)
+    assert adapter.invoke_sync(prompt="Answer early.") == "answered early"
+    deadline = time.monotonic() + 10
+    while f"hook reply {CANCELLED}" not in adapter._connection.stderr_tail:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    # Kedi only describes a bridge tool for its hooks; the bridge runs it.
+    with pytest.raises(RuntimeError, match="a bridge tool runs in the bridge"):
+        module._bridge_tool(command="ls")

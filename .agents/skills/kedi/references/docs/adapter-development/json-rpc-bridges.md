@@ -57,6 +57,7 @@ it has not exited within the timeout.
 | `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
+| `hook/invoke` | bridge → Kedi | `runId`, `event`, `callId`, `tool`, `origin`, `arguments`, optional `inputSchema`, `result`, `error` (`type`, `message`), `interrupted` | for `pre_tool_use`: `decision` (`continue`, `edit` with `arguments`, or `deny` with `reason`); otherwise `{}`; see [Hooks](#hooks) |
 | `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
 | `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
 | `shutdown` | Kedi → bridge | `{}` | `{}`; then Kedi closes stdin |
@@ -105,6 +106,7 @@ actions the bridge parses.
 | `fallbackModels` | the profile's `> fallback:` models, in order; empty for none |
 | `settings` | the profile's `> settings:` the bridge listed in `initialize`, as name and value |
 | `effort` | the profile's `> effort:` level, or `null` |
+| `hooks` | the tool events that have handlers, for a bridge with `nativeTools`: send `hook/invoke` for these only (see [Hooks](#hooks)); empty otherwise |
 | `system` | the system text: send it verbatim as the system or developer message |
 | `instructionParts` | the same text as parts, each with `identity`, `source` and `content` |
 | `user` | the prompt: send it verbatim as the user turn |
@@ -234,6 +236,31 @@ approval prompt or a failing approval handler stops the run, as for Kedi tools.
 
 Kedi's own tools need no `approval/request`: Kedi applies the policy at
 `tool/call`.
+
+### Hooks
+
+Kedi runs a program's hooks on every bridge: `user_prompt_submit` before the
+run is assembled, and the tool events around each Kedi tool at `tool/call`.
+The bridge needs nothing for these.
+
+A bridge with `nativeTools` runs tools of its own, so it reports their calls
+to the program's hooks: that is part of `nativeTools`, as `approval/request`
+is. Each run's `hooks` lists the tool events that have handlers; for those,
+send `hook/invoke` around each call of a bridge tool, with `origin`
+`adapter_native` for the backend's tools or `provider_builtin` for tools the
+model provider runs. With no handlers, `hooks` is empty and nothing is sent.
+
+1. `pre_tool_use` with the call's `arguments`, before `approval/request`.
+   Kedi answers `continue`, `edit` with the `arguments` to run instead (ask
+   approval for those), or `deny` with a `reason` for the model; skip the call
+   then.
+2. After the call, `post_tool_use` with its `result`, or
+   `post_tool_use_failure` with `error` `{type, message}` and `interrupted`
+   when it was cancelled.
+
+A hook that fails or times out stops the run, as for Kedi tools: a failing
+hook is a failing safety or audit control. Kedi refuses `hook/invoke` from a
+bridge without `nativeTools`.
 
 ### Subagents
 

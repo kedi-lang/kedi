@@ -13,7 +13,7 @@ Kedi to bridge:
   backend applies, ``effort`` the ``> effort:`` levels it maps. Kedi sends nothing else before
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
-  instructionParts, user, userContent, output, tools, continuation, session, subagent}``
+  instructionParts, user, userContent, output, tools, continuation, session, subagent, hooks}``
   returns ``{text}``, ``{data}`` or ``{content}``, optionally
   with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
   toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
@@ -53,6 +53,14 @@ Bridge to Kedi:
   ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
   reason}``, or ``{decision: "edit", arguments, reason}``: the bridge runs the edited
   arguments, after another ``approval/request`` if their risk is higher.
+- ``hook/invoke`` ``{runId, event, callId, tool, origin, arguments, inputSchema?, result?,
+  error?, interrupted?}`` (with ``nativeTools``), around each call of a bridge tool, for the
+  events the run's ``hooks`` lists (those with handlers): ``pre_tool_use`` before its
+  ``approval/request``, then
+  ``post_tool_use`` with its ``result`` or ``post_tool_use_failure`` with ``error`` ``{type,
+  message}``. ``pre_tool_use`` returns ``{decision: "continue"}``, ``{decision: "edit",
+  arguments}`` or ``{decision: "deny", reason}``; the others return ``{}``. Kedi runs the
+  program's hooks for Kedi tools itself, at ``tool/call``.
 - ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
   totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
   it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
@@ -130,6 +138,8 @@ the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 NATIVE_TOOLS: Final = "nativeTools"
+HOOK_EVENTS: Final = frozenset({"pre_tool_use", "post_tool_use", "post_tool_use_failure"})
+
 BUDGET_DIMENSIONS: Final = {"request": "request", "toolAttempt": "tool_attempt"}
 """``budget/admit`` dimensions and Kedi's run budget dimensions."""
 TOOL_RISKS: Final = frozenset({"read_only", "mutating", "sensitive"})
