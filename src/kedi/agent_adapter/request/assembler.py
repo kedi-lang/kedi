@@ -4,9 +4,13 @@ import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from hashlib import sha256
-from typing import Iterable
+from typing import TYPE_CHECKING, Any, Iterable
+from uuid import uuid4
 
 from ..tools.specs import ToolSpec
+
+if TYPE_CHECKING:
+    from ...agent_profile import AgentProfile
 from .models import (
     AgentRunRequest,
     CallKind,
@@ -149,4 +153,44 @@ def _plain_value(value: object) -> object:
     return value
 
 
-__all__ = ["RunRequestAssembler", "conversation_lane_identity", "tool_definition"]
+def call_request(
+    *,
+    prompt: str,
+    output: OutputContract,
+    instructions: str | None,
+    profile: AgentProfile,
+    capabilities: Any,
+    tools: Iterable[ToolSpec] = (),
+) -> AgentRunRequest:
+    """The request for an adapter call.
+
+    Kedi's own request when Kedi makes the call. Otherwise, for a direct call outside a Kedi
+    program or a subagent child, the request Kedi would make from the call's arguments.
+    """
+
+    from .context import current_request, has_current_request
+    from .prompts import RawPromptBuilder
+    from .protocol import request_protocol
+
+    if has_current_request():
+        return current_request()
+    text = profile.call_instructions(instructions)
+    parts = (
+        (InstructionPart(identity="profile.instructions", source="profile", content=text),)
+        if text
+        else ()
+    )
+    return RunRequestAssembler().assemble(
+        prompt=RawPromptBuilder(content=prompt).build(),
+        instructions=parts,
+        conversation=None,
+        tool_specs=tuple(tools),
+        output=output,
+        run_id=f"direct_{uuid4().hex}",
+        turn_sequence=0,
+        call_kind="invoke" if isinstance(output, TextOutput) else "produce",
+        protocol=request_protocol(capabilities),
+    )
+
+
+__all__ = ["RunRequestAssembler", "call_request", "conversation_lane_identity", "tool_definition"]

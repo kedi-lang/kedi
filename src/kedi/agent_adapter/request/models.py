@@ -5,6 +5,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, TypeAlias
 
 if TYPE_CHECKING:
+    from pydantic import TypeAdapter
+
     from .media import MediaAttachment
 
 PromptKind: TypeAlias = Literal["raw", "template", "claim"]
@@ -233,6 +235,22 @@ class AgentRunRequest:
         )
 
 
+def output_validator(
+    output: OutputContract, *, request: AgentRunRequest | None = None
+) -> TypeAdapter[Any] | None:
+    """How an adapter validates the model's answer for an output contract; ``None`` for text."""
+
+    if isinstance(output, TextOutput):
+        return None
+    from pydantic import TypeAdapter
+
+    from ..output_schema import build_output_model
+
+    if isinstance(output, SchemaOutput):
+        return TypeAdapter(build_output_model(dict(output.schema), request=request))
+    return TypeAdapter(output.output_type)
+
+
 def output_json_schema(
     output: OutputContract, *, request: AgentRunRequest | None = None
 ) -> Mapping[str, Any] | None:
@@ -302,4 +320,5 @@ __all__ = [
     "ToolDefinition",
     "TypedOutput",
     "output_json_schema",
+    "output_validator",
 ]

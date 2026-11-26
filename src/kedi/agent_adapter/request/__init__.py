@@ -1,4 +1,9 @@
-from .assembler import RunRequestAssembler, conversation_lane_identity, tool_definition
+from .assembler import (
+    RunRequestAssembler,
+    call_request,
+    conversation_lane_identity,
+    tool_definition,
+)
 from .context import (
     agent_run_request_scope,
     current_agent_run_request,
@@ -31,6 +36,7 @@ from .models import (
     TextOutput,
     ToolDefinition,
     TypedOutput,
+    output_validator,
 )
 from .prompts import (
     CLAIM_INSTRUCTION,
@@ -62,10 +68,12 @@ __all__ = [
     "RequestLoweringAdapter",
     "RunMetadata",
     "RunRequestAssembler",
+    "call_request",
     "SchemaOutput",
     "TextOutput",
     "ToolDefinition",
     "TypedOutput",
+    "output_validator",
     "agent_run_request_scope",
     "compose_prompt",
     "current_agent_run_request",

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         _output_json_schema,
     )
     from .codex import CodexAdapter
+    from .jsonrpc import JsonRpcAdapter
     from .langchain import (
         LangChainAdapter,
         _apply_langchain_effort_settings,
@@ -49,6 +50,7 @@ _EXPORT_MODULES = {
     "A2AAdapter": ".a2a",
     "ACPAdapter": ".acp",
     "CodexAdapter": ".codex",
+    "JsonRpcAdapter": ".jsonrpc",
     "LazyAdapter": ".lazy",
     **dict.fromkeys(("BrowserModelBridge", "WebGPUAdapter"), ".webgpu"),
     **dict.fromkeys(
@@ -84,7 +86,9 @@ _EXPORT_MODULES = {
         ".pydantic",
     ),
 }
-_MODULES = frozenset({"a2a", "acp", "claude", "codex", "langchain", "lazy", "pydantic", "webgpu"})
+_MODULES = frozenset(
+    {"a2a", "acp", "claude", "codex", "jsonrpc", "langchain", "lazy", "pydantic", "webgpu"}
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -106,6 +110,7 @@ __all__ = [
     "BrowserModelBridge",
     "ClaudeAdapter",
     "CodexAdapter",
+    "JsonRpcAdapter",
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
