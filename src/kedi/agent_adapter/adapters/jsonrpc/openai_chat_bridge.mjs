@@ -90,6 +90,10 @@ async function callTool(runId, id, name, args) {
 async function run(params, signal) {
   const messages = [];
   if (params.system) messages.push({ role: "system", content: params.system });
+  // In a session, Kedi hands back the state this bridge returned for the last turn.
+  const history = params.session?.state?.messages ?? [];
+  messages.push(...history);
+  const turnStart = messages.length;
   messages.push({ role: "user", content: params.userContent ? userParts(params.userContent) : params.user });
   if (params.continuation) {
     messages.push({ role: "assistant", content: answerText(params.continuation.answer) });
@@ -108,14 +112,19 @@ async function run(params, signal) {
       json_schema: { name: params.output.toolName, schema: params.output.schema },
     };
   }
+  const finish = (result, content) => {
+    if (!params.session) return result;
+    const turn = [...messages.slice(turnStart), { role: "assistant", content }];
+    return { ...result, state: { messages: [...history, ...turn] } };
+  };
   for (let step = 0; step < maxSteps; step++) {
     const message = await complete(body, signal);
     if (native) {
       const calls = message.tool_calls ?? [];
       if (!calls.length) {
-        if (!params.output) return { text: message.content ?? "" };
+        if (!params.output) return finish({ text: message.content ?? "" }, message.content ?? "");
         try {
-          return { data: JSON.parse(message.content) };
+          return finish({ data: JSON.parse(message.content) }, message.content);
         } catch (error) {
           return { invalid: message.content ?? "", error: String(error) };
         }
@@ -152,7 +161,8 @@ async function run(params, signal) {
       return { invalid: message.content ?? "", error: String(error) };
     }
     if (action.action === "final") {
-      return params.output ? { data: action.data } : { text: action.text };
+      const result = params.output ? { data: action.data } : { text: action.text };
+      return finish(result, message.content);
     }
     if (action.action !== "call_tool") {
       return { invalid: message.content, error: `unknown action ${JSON.stringify(action.action)}` };
@@ -180,6 +190,7 @@ async function handle(message) {
           nativeToolCalling: native,
           events: true,
           mediaInput: true,
+          sessions: true,
         },
         mediaKinds: ["image"],
       },

@@ -41,7 +41,7 @@ it has not exited within the timeout.
 | Method | Direction | Params | Result |
 |---|---|---|---|
 | `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds` |
-| `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage` |
+| `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
@@ -61,11 +61,12 @@ backend name is refused, and the process is stopped.
 | `nativeToolCalling` | the backend takes tool definitions natively |
 | `events` | the bridge sends `run/event` notifications |
 | `mediaInput` | the bridge sends prompt media to its model; `mediaKinds` lists the kinds (`image`, `audio`, `video`, `document`) |
+| `sessions` | the bridge continues conversations from the `state` Kedi hands back; enables `> history: enabled` |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
-before sending anything. Version 1 has no sessions or live input: a bridge
-cannot enable them by advertising them.
+before sending anything. Version 1 has no live input: a bridge cannot enable
+it by advertising it.
 
 Without `nativeStructuredOutput` or `nativeToolCalling`, Kedi adds its
 `protocol.output` and `protocol.tools` parts to the system text (see
@@ -86,6 +87,7 @@ actions the bridge parses.
 | `output` | `null` for text, or `schema` (the output JSON Schema) and `toolName` |
 | `tools` | each tool's `name`, `description`, `inputSchema`, `outputSchema` and `requiredBeforeOutput` |
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
+| `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
 
 Kedi validates every answer. When the data does not match the schema, a required
 tool did not complete, or the bridge reports `{"invalid": "<model text>",
@@ -130,6 +132,21 @@ the model wrote along the way. Events arrive in stream order before the run's
 answer. Events for a run that is not in progress, of an unknown `type`, or
 without the fields above are ignored, as are all events from a bridge that did
 not negotiate `events`.
+
+### Sessions
+
+With `sessions`, a run in a conversation (`> history: enabled`) carries
+`session`: the conversation's `id`, the `turn` number, and the `state` the
+bridge returned for the conversation's last committed turn, `null` at first.
+The bridge answers with the new `state`, any JSON value: the turn's messages
+in the backend's own format, a remote thread id, or both.
+
+Kedi owns the conversation: it orders the turns, commits `state` only after it
+accepts the turn's answer, discards it after a failed or cancelled turn, and
+persists it with interactive sessions and snapshots. The bridge keeps no
+history of its own outside `state`, so the two sides never disagree. A turn
+with another model, tools or settings is another lane (see
+[Conversations and History](conversations.md)) and starts from `null`.
 
 ### Media
 
