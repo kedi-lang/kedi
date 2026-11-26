@@ -49,7 +49,7 @@ it has not exited within the timeout.
 | `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
-| `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension`, `limit`, `consumed`, `scopeDepth`; see [Budgets](#budgets) |
+| `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
 | `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
 | `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
 | `shutdown` | Kedi → bridge | `{}` | `{}`; then Kedi closes stdin |
@@ -71,6 +71,7 @@ backend name is refused, and the process is stopped.
 | `sessions` | the bridge continues conversations from the `state` Kedi hands back; enables `> history: enabled` |
 | `governed` | every model request the backend makes goes through `budget/admit` first; enables `request_limit` (see [Budgets](#budgets)) |
 | `nativeTools` | the backend runs tools of its own besides Kedi's, and asks `approval/request` before each call (see [Approval](#approval)) |
+| `subagents` | Kedi may run its children on the bridge (see [Subagents](#subagents)); needs `governed` |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
@@ -97,6 +98,7 @@ actions the bridge parses.
 | `tools` | each tool's `name`, `description`, `inputSchema`, `outputSchema` and `requiredBeforeOutput` |
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
 | `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
+| `subagent` | `null`, or the child Kedi runs: `id`, `parentRunId`, `conversationId`, `name`, `limits`; see [Subagents](#subagents) |
 
 Kedi validates every answer. When the data does not match the schema, a required
 tool did not complete, or the bridge reports `{"invalid": "<model text>",
@@ -134,10 +136,10 @@ the bridge asks Kedi before each step it takes:
 - `dimension: "toolAttempt"` before each attempt of one of its own tools, with
   `nativeTools`.
 
-Kedi charges the step to the budget of the Kedi call that started the run and
-answers `{"admitted": true}`. When the budget is spent it answers
-`{"admitted": false, ...}`, sends `run/cancel`, and fails the run with
-`RunBudgetExceeded`. The bridge then skips the step and ends the run with an
+Kedi charges the step to the budget of the Kedi call that started the run,
+counts it, and answers `{"admitted": true}`. When the budget is spent it answers
+`{"admitted": false, ...}` with a `reason`, sends `run/cancel`, and fails the run
+with `RunBudgetExceeded`. The bridge then skips the step and ends the run with an
 error; if it takes the step anyway, the run still fails. Kedi admits the
 attempts of its own tools at `tool/call`, so a bridge never asks for them.
 
@@ -170,6 +172,44 @@ approval prompt or a failing approval handler stops the run, as for Kedi tools.
 
 Kedi's own tools need no `approval/request`: Kedi applies the policy at
 `tool/call`.
+
+### Subagents
+
+With `subagents`, a profile's children run on the bridge: Kedi decides to start
+one, checks `max_agents`, depth and concurrency, and sends the child as a `run`
+of its own. Background children are runs that overlap their parent's.
+
+`subagent` says whose run it is:
+
+| Field | Contents |
+|---|---|
+| `id` | Kedi's run id for the child; `delegate_task` returns it to the parent |
+| `parentRunId` | the bridge run whose `tool/call` started the child, or `null` |
+| `conversationId` | the child conversation; `continue_subagent` continues it |
+| `name` | the child profile |
+| `limits` | the child's remaining `requests`, `toolCalls`, `inputTokens`, `outputTokens` and `totalTokens`; `null` for no limit |
+
+Kedi enforces the limits; the bridge may pass them to its backend as well, for
+an earlier stop. Kedi counts each request it admits with `budget/admit` and
+each tool call it serves, so a child's request or tool-call limit stops the step
+before the bridge takes it: `budget/admit` answers `admitted: false` with the
+limit in `reason`, and a `tool/call` fails. For a governed bridge, `requests`
+in `usage` is ignored, because Kedi has already counted them. This is why
+`subagents` needs `governed`.
+
+A child sees exactly its own tools. Kedi applies the child's approval policy
+and every ancestor's to Kedi tools; for the bridge's own tools,
+`approval/request` answers with the same policies, ancestors first.
+
+A structured child result has `output.schema`, the child's result schema with
+`task_summary` and `final_result`. Kedi validates the answer and sends its
+correction as a `continuation`, as for any run.
+
+With `sessions`, `continue_subagent` sends the state the bridge returned for the
+child's last completed run, in `session` with the child's `conversationId`; Kedi
+commits it only after accepting the run. Without `sessions`, the new task
+carries the earlier turns as text. Version 1 has no live input or interrupts
+for a running child.
 
 ### Events
 
@@ -264,8 +304,8 @@ adapter = JsonRpcAdapter(reference_bridge_command("http://localhost:11434/v1"), 
 
 `mode="protocol"` uses Kedi's protocol parts instead of native tools and
 response formats, for endpoints without them. It is `governed`: it asks
-`budget/admit` before every request and makes no retries. Start a new bridge
-from it.
+`budget/admit` before every request and makes no retries. It advertises
+`subagents` and runs children as ordinary runs. Start a new bridge from it.
 
 ## Conformance
 

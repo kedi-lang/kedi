@@ -11,8 +11,11 @@ Kedi to bridge:
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
   capabilities, mediaKinds?}``. Kedi sends nothing else before it completes.
 - ``run`` ``{runId, callKind, promptKind, model, system, instructionParts, user, userContent,
-  output, tools, continuation, session}`` returns ``{text}`` or ``{data}``, optionally with
-  ``usage`` and, in a session, ``state``. ``session`` is ``null``, or ``{id, turn, state}``:
+  output, tools, continuation, session, subagent}`` returns ``{text}`` or ``{data}``, optionally
+  with ``usage`` and, in a session, ``state``. ``subagent`` is ``null``, or, for a child Kedi
+  runs on the bridge, ``{id, parentRunId, conversationId, name, limits}``: Kedi's run id for
+  the child, the bridge run whose tool call started it, the child conversation, the child
+  profile and its remaining limits. ``session`` is ``null``, or ``{id, turn, state}``:
   the bridge's ``state`` from the conversation's last committed turn, ``null`` at first.
   ``userContent`` is ``null``, or the user turn with its media: ``{type: "text", text}`` and
   ``{type: "media", name, kind, mediaType, data | url}`` parts, ``data`` in base64.
@@ -75,8 +78,13 @@ CAPABILITIES: Final = {
     "mediaInput": "supports_media_input",
     "sessions": "supports_stateful_history",
     "governed": "supports_request_budget",
+    "subagents": "supports_subagents",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
+
+``subagents`` lets Kedi run its children on the bridge, concurrently when they run in the
+background; it needs ``governed``, because Kedi admits each of a child's requests against its
+limits before the bridge sends it.
 
 ``governed`` promises that every model request the bridge's backend makes goes through
 ``budget/admit`` first: SDK retries, tool-loop turns and internal calls too. A bridge that

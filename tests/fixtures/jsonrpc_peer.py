@@ -70,6 +70,9 @@ ADMISSION = {
     "governed-kedi-tools": {"governed": True},
     "native-ungoverned": {"nativeTools": True},
     "abandon-approval": {"nativeTools": True},
+    "subagents": {"governed": True, "subagents": True, "sessions": True, "nativeTools": True},
+    "subagents-stateless": {"governed": True, "subagents": True},
+    "subagents-ungoverned": {"subagents": True},
     # Claims governed, then retries a failed request without asking Kedi.
     "retries-unadmitted": {"governed": True},
 }
@@ -91,6 +94,50 @@ def admission_probe(request_id: int, params: dict[str, Any]) -> None:
         "bad risk": call_kedi("approval/request", {**shell, "risk": "harmless"}),
     }
     send({"id": request_id, "result": {"text": json.dumps(replies, sort_keys=True)}})
+
+
+def subagent_probe(request_id: int, params: dict[str, Any]) -> None:
+    """A parent delegates through Kedi's tool; a child reports what Kedi sent it."""
+
+    run_id = params["runId"]
+    if params["subagent"] is None and "delegate_task" in kedi_tools(params):
+        task = {"subagent": "worker", "task": "Find q."}
+        reply = call_kedi(
+            "tool/call", {"runId": run_id, "name": "delegate_task", "arguments": task}
+        )
+        send({"id": request_id, "result": {"text": json.dumps({"runId": run_id, "reply": reply})}})
+        return
+    replies: dict[str, Any] = {"subagent": params["subagent"], "session": params["session"]}
+    admissions = []
+    for _ in range(2):
+        admissions.append(call_kedi("budget/admit", {"runId": run_id, "dimension": "request"}))
+        if admissions[-1].get("result", {}).get("admitted") is False:
+            send({"id": request_id, "error": {"code": -32002, "message": "the limit is spent"}})
+            return
+    lookup = {"runId": run_id, "name": "lookup", "arguments": {"query": "q"}}
+    replies |= {"admissions": admissions, "lookups": [call_kedi("tool/call", lookup) for _ in "ab"]}
+    replies["user"] = params["user"]
+    if SCENARIO == "subagents":
+        shell = {
+            "runId": run_id,
+            "tool": "shell",
+            "arguments": {"command": "ls"},
+            "risk": "mutating",
+        }
+        replies["approval"] = call_kedi("approval/request", shell)
+    # The bridge's own request count is not Kedi's: Kedi counted what it admitted.
+    usage = {"requests": 5, "inputTokens": 3, "outputTokens": 1}
+    result: dict[str, Any] = {"text": json.dumps(replies, sort_keys=True), "usage": usage}
+    if params["output"] is not None:
+        summary = params["continuation"]["message"] if params["continuation"] else "first try"
+        data: dict[str, Any] = {"task_summary": summary[:900]}
+        if params["continuation"]:  # the first answer leaves out final_result
+            data["final_result"] = {"ocean": "Pacific"}
+        result = {"data": data, "usage": usage}
+    if params["session"] is not None:
+        session = params["session"]
+        result["state"] = {"turn": session["turn"], "previous": session["state"]}
+    send({"id": request_id, "result": result})
 
 
 def unadmitted_retry(request_id: int, params: dict[str, Any]) -> None:
@@ -125,6 +172,9 @@ def run(request_id: int, params: dict[str, Any]) -> None:
     user = params["user"]
     if SCENARIO == "retries-unadmitted":
         unadmitted_retry(request_id, params)
+        return
+    if SCENARIO in ("subagents", "subagents-stateless"):
+        subagent_probe(request_id, params)
         return
     if SCENARIO == "abandon-approval":
         # Answer the run while Kedi is still deciding an approval: Kedi cancels the decision.

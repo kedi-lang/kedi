@@ -16,6 +16,7 @@ from .models import (
     CallKind,
     ConversationCoordinates,
     InstructionPart,
+    JsonSchemaOutput,
     OutputContract,
     PromptDraft,
     RunMetadata,
@@ -51,7 +52,7 @@ class RunRequestAssembler:
             raise ValueError("turn_sequence must be non-negative")
         if call_kind not in {"invoke", "produce"}:
             raise ValueError(f"unsupported agent call kind {call_kind!r}")
-        if not isinstance(output, (TextOutput, SchemaOutput, TypedOutput)):
+        if not isinstance(output, (TextOutput, SchemaOutput, TypedOutput, JsonSchemaOutput)):
             raise TypeError(f"unsupported Kedi output contract {type(output).__name__}")
         if isinstance(output, TextOutput) != (call_kind == "invoke"):
             raise ValueError("invoke requires text output; produce requires structured output")

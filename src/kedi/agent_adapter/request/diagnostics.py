@@ -7,7 +7,7 @@ from hashlib import sha256
 from typing import Any
 
 from .media import media_digest_material
-from .models import AgentRunRequest, SchemaOutput, TypedOutput
+from .models import AgentRunRequest, JsonSchemaOutput, SchemaOutput, TypedOutput
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -37,13 +37,15 @@ def request_diagnostics(request: AgentRunRequest) -> RequestDiagnostics:
     output_kind = (
         "schema"
         if isinstance(request.output, SchemaOutput)
+        else "json_schema"
+        if isinstance(request.output, JsonSchemaOutput)
         else "typed"
         if isinstance(request.output, TypedOutput)
         else "text"
     )
     output_value = (
         request.output.schema
-        if isinstance(request.output, SchemaOutput)
+        if isinstance(request.output, SchemaOutput | JsonSchemaOutput)
         else request.output.output_type
         if isinstance(request.output, TypedOutput)
         else "text"
