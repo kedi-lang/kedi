@@ -71,7 +71,7 @@ from .models import (
     CodexResponsesFallback,
     codex_responses_model,
 )
-from .request.context import current_request
+from .request.context import current_request, has_current_request
 from .request.models import AgentRunRequest, InstructionPart, RenderedRequest, ToolDefinition
 from .requirements import (
     MissingAdapterCapabilityError,
@@ -172,6 +172,7 @@ __all__ = [
     "RenderedRequest",
     "ToolDefinition",
     "current_request",
+    "has_current_request",
     "HOOK_EVENT_NAMES",
     "HookContext",
     "HookCapabilities",

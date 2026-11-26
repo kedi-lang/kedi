@@ -3,6 +3,7 @@ from .context import (
     agent_run_request_scope,
     current_agent_run_request,
     current_request,
+    has_current_request,
     prompt_media_scope,
     take_prompt_media,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "compose_prompt",
     "current_agent_run_request",
     "current_request",
+    "has_current_request",
     "request_diagnostics",
     "conversation_lane_identity",
     "lower_request_sync",

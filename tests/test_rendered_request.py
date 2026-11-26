@@ -16,6 +16,7 @@ from kedi.agent_adapter import (
     RenderedRequest,
     ToolSpec,
     current_request,
+    has_current_request,
 )
 from kedi.agent_adapter.request import (
     RawPromptBuilder,
@@ -191,8 +192,42 @@ def test_text_answers_finish_with_text_and_empty_protocols_add_nothing() -> None
     assert tool_catalog(()) == "<Tools>\n\n</Tools>"
 
 
-def test_current_request_is_refused_outside_a_call_and_in_subagent_entry_points() -> None:
+def test_current_request_is_refused_outside_a_call_and_while_running_a_child() -> None:
+    assert not has_current_request()
     with pytest.raises(RuntimeError, match="only available inside an adapter call"):
         current_request()
-    with subagent_entry_scope(), pytest.raises(RuntimeError, match="subagent entry points"):
-        current_request()
+    with subagent_entry_scope():
+        assert not has_current_request()
+        with pytest.raises(RuntimeError, match="runs a subagent child"):
+            current_request()
+
+
+class ChildAwareAdapter(RenderingAdapter):
+    """Renders Kedi's request when there is one and falls back to its arguments otherwise."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            AdapterCapabilities(
+                supports_structured_output=True,
+                supports_tool_registration=True,
+                supports_artifacts=True,
+                supports_subagents=True,
+            ),
+            "child answer",
+        )
+        self.fallbacks: list[str] = []
+
+    def invoke_sync(self, *, prompt: str, instructions: str | None = None, **_: Any) -> str:
+        if has_current_request():
+            self.rendered.append(current_request().render())
+        else:
+            self.fallbacks.append(prompt)
+        return "child answer"
+
+
+def test_a_text_subagent_child_falls_back_to_its_arguments() -> None:
+    adapter = ChildAwareAdapter()
+    # Kedi's delegation calls the child's invoke inside this scope.
+    with subagent_entry_scope():
+        assert adapter.invoke_sync(prompt="Summarize the report.") == "child answer"
+    assert adapter.fallbacks == ["Summarize the report."] and adapter.rendered == []

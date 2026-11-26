@@ -136,18 +136,29 @@ def current_agent_run_request() -> AgentRunRequest | None:
 _SUBAGENT_ENTRY: ContextVar[bool] = ContextVar("kedi_subagent_entry", default=False)
 
 
+def has_current_request() -> bool:
+    """Whether :func:`current_request` has a request for the adapter call in progress.
+
+    False outside a Kedi call, and when Kedi calls ``invoke``, ``produce`` or
+    ``produce_subagent`` to run a subagent child: use the call's arguments then.
+    """
+
+    return not _SUBAGENT_ENTRY.get() and _CURRENT_AGENT_RUN_REQUEST.get() is not None
+
+
 def current_request() -> AgentRunRequest:
     """The request Kedi is making through the adapter, inside ``produce`` and ``invoke``.
 
     ``current_request().render()`` gives everything the model sees. Raises outside a Kedi
-    call, and in subagent entry points, whose child has no request of its own yet: use the
-    ``template`` and ``output_schema`` arguments there.
+    call, and when Kedi runs a subagent child (its ``invoke``, ``produce`` or
+    ``produce_subagent``), whose request is its parent's; check :func:`has_current_request`
+    and use the call's arguments there.
     """
 
     if _SUBAGENT_ENTRY.get():
         raise RuntimeError(
-            "current_request() is not available in subagent entry points; use their "
-            "template and output_schema arguments"
+            "current_request() is not available while Kedi runs a subagent child; check "
+            "has_current_request() and use the call's arguments"
         )
     request = _CURRENT_AGENT_RUN_REQUEST.get()
     if request is None:
@@ -201,6 +212,7 @@ __all__ = [
     "conversation_media_scope",
     "current_agent_run_request",
     "current_request",
+    "has_current_request",
     "prompt_media",
     "prompt_media_scope",
     "request_tool_media",

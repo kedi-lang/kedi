@@ -14,10 +14,20 @@ rendered = current_request().render()
 ```
 
 `current_request()` is valid inside `invoke`, `produce` and their `_sync`
-forms when Kedi makes the call. It raises `RuntimeError` outside a Kedi call. It
-also raises in subagent entry points (`produce_subagent`, `invoke_subagent`):
-the child runs inside its parent's request, so there use the `template` and
-`output_schema` arguments.
+forms when Kedi makes the call. It raises `RuntimeError` outside a Kedi call,
+and when Kedi calls `invoke`, `produce` or `produce_subagent` to run a subagent
+child: the child runs inside its parent's request. `has_current_request()` says
+which case applies, so an adapter that also runs children falls back to the
+call's arguments:
+
+```python
+from kedi.agent_adapter import current_request, has_current_request
+
+if has_current_request():
+    rendered = current_request().render()
+else:
+    ...  # build the request from prompt or template, instructions and output_schema
+```
 
 | Field | Contents |
 |---|---|
