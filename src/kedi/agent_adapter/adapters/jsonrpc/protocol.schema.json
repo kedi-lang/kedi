@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kedi-lang/json-rpc/schema/v1/protocol.json",
+  "title": "Kedi JSON-RPC bridge protocol, version 1",
+  "description": "Every params and result object of the protocol. The methods table names each method's direction, kind and shapes; spec/protocol.md says what they mean.",
+  "methods": {
+    "initialize": {"direction": "kedi-to-bridge", "kind": "request", "params": "#/$defs/InitializeParams", "result": "#/$defs/InitializeResult"},
+    "run": {"direction": "kedi-to-bridge", "kind": "request", "params": "#/$defs/RunParams", "result": "#/$defs/RunResult"},
+    "run/cancel": {"direction": "kedi-to-bridge", "kind": "notification", "params": "#/$defs/RunRef"},
+    "run/input": {"direction": "kedi-to-bridge", "kind": "request", "capability": "liveInput", "params": "#/$defs/RunInputParams", "result": "#/$defs/RunInputResult"},
+    "run/interrupt": {"direction": "kedi-to-bridge", "kind": "notification", "capability": "interrupt", "params": "#/$defs/RunRef"},
+    "shutdown": {"direction": "kedi-to-bridge", "kind": "request", "params": "#/$defs/Empty", "result": "#/$defs/Empty"},
+    "tool/call": {"direction": "bridge-to-kedi", "kind": "request", "capability": "tools", "params": "#/$defs/ToolCallParams", "result": "#/$defs/ToolCallResult"},
+    "budget/admit": {"direction": "bridge-to-kedi", "kind": "request", "capability": "governed", "params": "#/$defs/BudgetAdmitParams", "result": "#/$defs/BudgetAdmitResult"},
+    "approval/request": {"direction": "bridge-to-kedi", "kind": "request", "capability": "nativeTools", "params": "#/$defs/ApprovalRequestParams", "result": "#/$defs/ApprovalRequestResult"},
+    "hook/invoke": {"direction": "bridge-to-kedi", "kind": "request", "capability": "nativeTools", "params": "#/$defs/HookInvokeParams", "result": "#/$defs/HookInvokeResult"},
+    "artifact/admit": {"direction": "bridge-to-kedi", "kind": "request", "capability": "nativeTools", "params": "#/$defs/ArtifactAdmitParams", "result": "#/$defs/ArtifactAdmitResult"},
+    "media/get": {"direction": "bridge-to-kedi", "kind": "request", "capability": "transcript", "params": "#/$defs/MediaGetParams", "result": "#/$defs/Media"},
+    "history/process": {"direction": "bridge-to-kedi", "kind": "request", "capability": "transcript", "params": "#/$defs/HistoryProcessParams", "result": "#/$defs/HistoryProcessResult"},
+    "model/complete": {"direction": "bridge-to-kedi", "kind": "request", "capability": "testModel", "params": "#/$defs/ModelCompleteParams", "result": "#/$defs/ModelCompleteResult"},
+    "run/usage": {"direction": "bridge-to-kedi", "kind": "notification", "capability": "usage", "params": "#/$defs/RunUsageParams"},
+    "run/event": {"direction": "bridge-to-kedi", "kind": "notification", "capability": "events", "params": "#/$defs/RunEventParams"}
+  },
+  "errors": {
+    "-32700": "parse error",
+    "-32600": "invalid request",
+    "-32601": "method not found",
+    "-32602": "invalid params",
+    "-32603": "internal error",
+    "-32001": "unsupported: the operation needs a capability that was not negotiated",
+    "-32002": "the run failed in the backend",
+    "-32003": "the run stopped after run/cancel",
+    "-32004": "overloaded: no capacity for another request right now",
+    "-32005": "unknown run: the runId names no run in progress",
+    "-32006": "interrupted: the run stopped after run/interrupt; the task continues in another attempt"
+  },
+  "$defs": {
+    "Empty": {"type": "object", "maxProperties": 0},
+    "RunId": {"type": "string", "minLength": 1},
+    "RunRef": {"type": "object", "required": ["runId"], "properties": {"runId": {"$ref": "#/$defs/RunId"}}},
+    "Count": {"type": ["integer", "null"], "minimum": 0},
+    "MediaKind": {"enum": ["image", "audio", "video", "document"]},
+    "ToolRisk": {"enum": ["read_only", "mutating", "sensitive"]},
+    "ToolOrigin": {"enum": ["adapter_native", "mcp", "provider_builtin"]},
+    "HookEvent": {"enum": ["pre_tool_use", "post_tool_use", "post_tool_use_failure"]},
+    "EffortLevel": {"enum": ["minimal", "low", "medium", "high", "xhigh", "max"]},
+    "McpTransport": {"enum": ["stdio", "http", "sse"]},
+
+    "MediaSource": {
+      "description": "Media bytes in base64, or a URL Kedi passes through.",
+      "oneOf": [
+        {"type": "object", "required": ["data"], "properties": {"data": {"type": "string", "contentEncoding": "base64"}}},
+        {"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}}
+      ]
+    },
+    "Media": {
+      "allOf": [
+        {"type": "object", "required": ["kind"], "properties": {"kind": {"$ref": "#/$defs/MediaKind"}, "mediaType": {"type": ["string", "null"]}}},
+        {"$ref": "#/$defs/MediaSource"}
+      ]
+    },
+    "TextPart": {
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": {"type": {"const": "text"}, "text": {"type": "string"}}
+    },
+    "UserContentPart": {
+      "description": "A part of the user turn, in Kedi's layout: text, or an attachment where its label puts it.",
+      "oneOf": [
+        {"$ref": "#/$defs/TextPart"},
+        {
+          "allOf": [
+            {"type": "object", "required": ["type", "name", "kind"], "properties": {"type": {"const": "media"}, "name": {"type": "string"}, "kind": {"$ref": "#/$defs/MediaKind"}, "mediaType": {"type": ["string", "null"]}}},
+            {"$ref": "#/$defs/MediaSource"}
+          ]
+        }
+      ]
+    },
+    "ContentPart": {
+      "description": "A part of a run's answer to a media output.",
+      "oneOf": [
+        {"$ref": "#/$defs/TextPart"},
+        {
+          "allOf": [
+            {"type": "object", "required": ["type", "kind"], "properties": {"type": {"const": "media"}, "kind": {"$ref": "#/$defs/MediaKind"}, "mediaType": {"type": ["string", "null"]}}},
+            {"$ref": "#/$defs/MediaSource"}
+          ]
+        }
+      ]
+    },
+
+    "TranscriptPart": {
+      "oneOf": [
+        {"$ref": "#/$defs/TextPart"},
+        {
+          "type": "object",
+          "required": ["type"],
+          "description": "Media named by ref (in history), or inline (in model/complete).",
+          "properties": {"type": {"const": "media"}, "ref": {"type": "string"}, "kind": {"$ref": "#/$defs/MediaKind"}, "mediaType": {"type": ["string", "null"]}, "data": {"type": "string"}, "url": {"type": "string"}},
+          "anyOf": [{"required": ["ref"]}, {"required": ["data"]}, {"required": ["url"]}]
+        },
+        {"type": "object", "required": ["type", "id", "name", "arguments"], "properties": {"type": {"const": "toolCall"}, "id": {"type": "string"}, "name": {"type": "string"}, "arguments": {}}},
+        {"type": "object", "required": ["type", "id", "result"], "properties": {"type": {"const": "toolResult"}, "id": {"type": "string"}, "result": {}, "isError": {"type": "boolean"}}},
+        {"type": "object", "required": ["type"], "properties": {"type": {"const": "reasoning"}, "text": {"type": "string"}}}
+      ]
+    },
+    "TranscriptMessage": {
+      "type": "object",
+      "required": ["role", "parts"],
+      "properties": {
+        "id": {"type": "string", "description": "Kedi's id for the message; send it back as given."},
+        "role": {"enum": ["user", "assistant", "tool"]},
+        "parts": {"type": "array", "items": {"$ref": "#/$defs/TranscriptPart"}},
+        "providerData": {"description": "Opaque to Kedi: the bridge's, sent back as given."}
+      }
+    },
+    "Transcript": {"type": "array", "items": {"$ref": "#/$defs/TranscriptMessage"}},
+
+    "Tool": {
+      "type": "object",
+      "required": ["name", "inputSchema"],
+      "properties": {
+        "name": {"type": "string"},
+        "description": {"type": ["string", "null"]},
+        "inputSchema": {"type": ["object", "null"]},
+        "outputSchema": {"type": ["object", "null"]},
+        "requiredBeforeOutput": {"type": "boolean"}
+      }
+    },
+    "InstructionPart": {
+      "type": "object",
+      "required": ["identity", "source", "content"],
+      "properties": {
+        "identity": {"type": "string"},
+        "source": {"enum": ["profile", "capability", "skills", "artifacts", "runtime"]},
+        "content": {"type": "string"}
+      }
+    },
+    "Output": {
+      "description": "null for text; schema and toolName for data; media for an image or speech the model makes.",
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "required": ["schema", "toolName"], "not": {"required": ["media"]}, "properties": {"schema": {"type": "object"}, "toolName": {"type": "string"}}},
+        {"type": "object", "required": ["media"], "properties": {"media": {"const": "image"}, "schema": {"type": "object"}, "toolName": {"type": "string"}}},
+        {"type": "object", "required": ["media", "voice"], "properties": {"media": {"const": "audio"}, "voice": {"type": ["string", "null"]}}}
+      ]
+    },
+    "Session": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "required": ["id", "turn", "state"], "properties": {"id": {"type": "string"}, "turn": {"type": "integer", "minimum": 0}, "state": {}}}
+      ]
+    },
+    "Subagent": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["id", "parentRunId", "conversationId", "name", "limits"],
+          "properties": {
+            "id": {"type": ["string", "null"]},
+            "parentRunId": {"type": ["string", "null"]},
+            "conversationId": {"type": "string"},
+            "name": {"type": ["string", "null"]},
+            "limits": {
+              "type": "object",
+              "properties": {"requests": {"$ref": "#/$defs/Count"}, "toolCalls": {"$ref": "#/$defs/Count"}, "inputTokens": {"$ref": "#/$defs/Count"}, "outputTokens": {"$ref": "#/$defs/Count"}, "totalTokens": {"$ref": "#/$defs/Count"}}
+            }
+          }
+        }
+      ]
+    },
+    "McpServer": {
+      "type": "object",
+      "required": ["transport"],
+      "properties": {
+        "transport": {"$ref": "#/$defs/McpTransport"},
+        "command": {"type": ["string", "null"]},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "url": {"type": ["string", "null"]},
+        "headers": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "Usage": {
+      "type": "object",
+      "description": "A count left out is unknown, not zero.",
+      "properties": {"requests": {"$ref": "#/$defs/Count"}, "inputTokens": {"$ref": "#/$defs/Count"}, "outputTokens": {"$ref": "#/$defs/Count"}, "totalTokens": {"$ref": "#/$defs/Count"}}
+    },
+    "HarnessError": {
+      "type": "object",
+      "properties": {"type": {"type": "string"}, "message": {"type": "string"}, "cause": {"$ref": "#/$defs/HarnessError"}}
+    },
+    "ErrorData": {
+      "type": "object",
+      "description": "data of a bridge's error: the harness's own error, and what an interrupted attempt hands back.",
+      "properties": {"harness": {"$ref": "#/$defs/HarnessError"}, "state": {}, "messages": {"$ref": "#/$defs/Transcript"}, "transcript": {"$ref": "#/$defs/Transcript"}}
+    },
+
+    "InitializeParams": {
+      "type": "object",
+      "required": ["protocolVersion", "client"],
+      "properties": {
+        "protocolVersion": {"const": 1},
+        "client": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}},
+        "testModel": {"type": "boolean", "description": "Kedi asks the bridge to send its model requests with model/complete."}
+      }
+    },
+    "Capabilities": {
+      "type": "object",
+      "description": "What the bridge implements. A capability left out is unavailable.",
+      "additionalProperties": {"type": "boolean"},
+      "properties": {
+        "structuredOutput": {"type": "boolean"},
+        "tools": {"type": "boolean"},
+        "nativeStructuredOutput": {"type": "boolean"},
+        "nativeToolCalling": {"type": "boolean"},
+        "nativeTools": {"type": "boolean"},
+        "events": {"type": "boolean"},
+        "mediaInput": {"type": "boolean"},
+        "sessions": {"type": "boolean"},
+        "transcript": {"type": "boolean"},
+        "governed": {"type": "boolean"},
+        "subagents": {"type": "boolean"},
+        "liveInput": {"type": "boolean"},
+        "interrupt": {"type": "boolean"},
+        "usage": {"type": "boolean"},
+        "modelFallback": {"type": "boolean"},
+        "imageOutput": {"type": "boolean"},
+        "audioOutput": {"type": "boolean"},
+        "testModel": {"type": "boolean"}
+      }
+    },
+    "InitializeResult": {
+      "type": "object",
+      "required": ["protocolVersion", "backend", "kind", "capabilities"],
+      "properties": {
+        "protocolVersion": {"const": 1},
+        "backend": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "version": {"type": "string"}}},
+        "kind": {"enum": ["agent-framework", "agent-harness"]},
+        "capabilities": {"$ref": "#/$defs/Capabilities"},
+        "mediaKinds": {"type": "array", "items": {"$ref": "#/$defs/MediaKind"}},
+        "settings": {"type": "array", "items": {"type": "string"}},
+        "effort": {"type": "array", "items": {"$ref": "#/$defs/EffortLevel"}},
+        "mcp": {"type": "object", "properties": {"transports": {"type": "array", "items": {"$ref": "#/$defs/McpTransport"}}}}
+      }
+    },
+    "RunParams": {
+      "type": "object",
+      "required": ["runId", "callKind", "promptKind", "model", "system", "instructionParts", "user", "userContent", "output", "tools", "continuation", "session", "subagent"],
+      "properties": {
+        "runId": {"$ref": "#/$defs/RunId"},
+        "callKind": {"enum": ["invoke", "produce"]},
+        "promptKind": {"enum": ["raw", "template", "claim"]},
+        "model": {"type": ["string", "null"]},
+        "fallbackModels": {"type": "array", "items": {"type": "string"}},
+        "settings": {"type": "object"},
+        "effort": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/EffortLevel"}]},
+        "system": {"type": ["string", "null"]},
+        "instructionParts": {"type": "array", "items": {"$ref": "#/$defs/InstructionPart"}},
+        "user": {"type": "string"},
+        "userContent": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"$ref": "#/$defs/UserContentPart"}}]},
+        "output": {"$ref": "#/$defs/Output"},
+        "tools": {"type": "array", "items": {"$ref": "#/$defs/Tool"}},
+        "continuation": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "object", "required": ["answer", "message"], "properties": {"answer": {"type": "object"}, "message": {"type": "string"}}}
+          ]
+        },
+        "session": {"$ref": "#/$defs/Session"},
+        "history": {"$ref": "#/$defs/Transcript"},
+        "processHistory": {"type": "boolean"},
+        "subagent": {"$ref": "#/$defs/Subagent"},
+        "hooks": {"type": "array", "items": {"$ref": "#/$defs/HookEvent"}},
+        "mcpServers": {"type": "array", "items": {"$ref": "#/$defs/McpServer"}},
+        "admitResults": {"type": "boolean"}
+      }
+    },
+    "RunResult": {
+      "type": "object",
+      "description": "text, data or content; or, in protocol mode, invalid with the parse error when the model's answer was not one action.",
+      "anyOf": [{"required": ["text"]}, {"required": ["data"]}, {"required": ["content"]}, {"required": ["invalid"]}],
+      "properties": {
+        "text": {"type": "string"},
+        "data": {},
+        "content": {"type": "array", "items": {"$ref": "#/$defs/ContentPart"}},
+        "invalid": {"type": "string"},
+        "error": {"type": "string"},
+        "usage": {"$ref": "#/$defs/Usage"},
+        "state": {},
+        "messages": {"$ref": "#/$defs/Transcript"},
+        "transcript": {"$ref": "#/$defs/Transcript"}
+      }
+    },
+    "RunInputParams": {
+      "type": "object",
+      "required": ["runId", "items"],
+      "properties": {
+        "runId": {"$ref": "#/$defs/RunId"},
+        "items": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id", "text"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}}}}
+      }
+    },
+    "RunInputResult": {"type": "object", "required": ["delivered"], "properties": {"delivered": {"type": "boolean"}}},
+
+    "ToolCallParams": {
+      "type": "object",
+      "required": ["runId", "name"],
+      "properties": {"runId": {"$ref": "#/$defs/RunId"}, "callId": {"type": "string"}, "name": {"type": "string"}, "arguments": {"type": "object"}}
+    },
+    "ToolCallResult": {
+      "oneOf": [
+        {"type": "object", "required": ["ok", "result"], "properties": {"ok": {"const": true}, "result": {}}},
+        {"type": "object", "required": ["ok", "error"], "properties": {"ok": {"const": false}, "error": {"type": "string"}}}
+      ]
+    },
+    "BudgetAdmitParams": {
+      "type": "object",
+      "required": ["runId", "dimension"],
+      "properties": {"runId": {"$ref": "#/$defs/RunId"}, "dimension": {"enum": ["request", "toolAttempt"]}}
+    },
+    "BudgetAdmitResult": {
+      "oneOf": [
+        {"type": "object", "required": ["admitted"], "properties": {"admitted": {"const": true}}},
+        {
+          "type": "object",
+          "required": ["admitted", "dimension", "reason"],
+          "properties": {"admitted": {"const": false}, "dimension": {"enum": ["request", "toolAttempt"]}, "reason": {"type": "string"}, "limit": {"type": "integer"}, "consumed": {"type": "integer"}, "scopeDepth": {"type": "integer"}}
+        }
+      ]
+    },
+    "ApprovalRequestParams": {
+      "type": "object",
+      "required": ["runId", "tool", "arguments", "risk"],
+      "properties": {
+        "runId": {"$ref": "#/$defs/RunId"},
+        "callId": {"type": "string"},
+        "tool": {"type": "string"},
+        "arguments": {"type": "object"},
+        "risk": {"$ref": "#/$defs/ToolRisk"},
+        "description": {"type": ["string", "null"]},
+        "origin": {"$ref": "#/$defs/ToolOrigin"}
+      }
+    },
+    "ApprovalRequestResult": {
+      "type": "object",
+      "required": ["decision"],
+      "properties": {"decision": {"enum": ["allow", "deny", "edit"]}, "reason": {"type": "string"}, "arguments": {"type": "object"}},
+      "if": {"properties": {"decision": {"const": "edit"}}},
+      "then": {"required": ["arguments"]}
+    },
+    "HookInvokeParams": {
+      "type": "object",
+      "required": ["runId", "event", "callId", "tool", "origin", "arguments"],
+      "properties": {
+        "runId": {"$ref": "#/$defs/RunId"},
+        "event": {"$ref": "#/$defs/HookEvent"},
+        "callId": {"type": "string"},
+        "tool": {"type": "string"},
+        "origin": {"$ref": "#/$defs/ToolOrigin"},
+        "arguments": {"type": "object"},
+        "inputSchema": {"type": "object"},
+        "result": {},
+        "error": {"type": "object", "properties": {"type": {"type": "string"}, "message": {"type": "string"}}},
+        "interrupted": {"type": "boolean"}
+      }
+    },
+    "HookInvokeResult": {
+      "type": "object",
+      "description": "pre_tool_use answers a decision; the other events answer {}.",
+      "properties": {"decision": {"enum": ["continue", "edit", "deny"]}, "arguments": {"type": "object"}, "reason": {"type": "string"}}
+    },
+    "ArtifactAdmitParams": {
+      "type": "object",
+      "required": ["runId", "callId", "tool", "result"],
+      "properties": {"runId": {"$ref": "#/$defs/RunId"}, "callId": {"type": "string"}, "tool": {"type": "string"}, "origin": {"$ref": "#/$defs/ToolOrigin"}, "result": {}}
+    },
+    "ArtifactAdmitResult": {"type": "object", "required": ["result"], "properties": {"result": {}}},
+    "MediaGetParams": {"type": "object", "required": ["runId", "ref"], "properties": {"runId": {"$ref": "#/$defs/RunId"}, "ref": {"type": "string"}}},
+    "HistoryProcessParams": {"type": "object", "required": ["runId", "messages"], "properties": {"runId": {"$ref": "#/$defs/RunId"}, "messages": {"$ref": "#/$defs/Transcript"}}},
+    "HistoryProcessResult": {"type": "object", "required": ["messages"], "properties": {"messages": {"$ref": "#/$defs/Transcript"}}},
+    "ModelCompleteParams": {
+      "type": "object",
+      "required": ["runId", "messages"],
+      "properties": {
+        "runId": {"$ref": "#/$defs/RunId"},
+        "model": {"type": ["string", "null"]},
+        "system": {"type": ["string", "null"]},
+        "messages": {"$ref": "#/$defs/Transcript"},
+        "tools": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "description": {"type": ["string", "null"]}, "inputSchema": {"type": ["object", "null"]}}}},
+        "output": {"oneOf": [{"type": "null"}, {"type": "object", "properties": {"schema": {"type": "object"}, "toolName": {"type": "string"}}}]}
+      }
+    },
+    "ModelCompleteResult": {"type": "object", "required": ["message"], "properties": {"message": {"$ref": "#/$defs/TranscriptMessage"}}},
+    "RunUsageParams": {
+      "type": "object",
+      "required": ["runId"],
+      "properties": {"runId": {"$ref": "#/$defs/RunId"}, "inputTokens": {"$ref": "#/$defs/Count"}, "outputTokens": {"$ref": "#/$defs/Count"}, "totalTokens": {"$ref": "#/$defs/Count"}, "cacheReadTokens": {"$ref": "#/$defs/Count"}, "cacheWriteTokens": {"$ref": "#/$defs/Count"}}
+    },
+    "RunEventParams": {
+      "type": "object",
+      "required": ["runId", "type"],
+      "properties": {
+        "runId": {"$ref": "#/$defs/RunId"},
+        "type": {"enum": ["message.delta", "message.completed", "tool.boundary"]},
+        "messageId": {"type": "string"},
+        "text": {"type": "string"},
+        "phase": {"enum": ["commentary", "final"]}
+      }
+    }
+  }
+}

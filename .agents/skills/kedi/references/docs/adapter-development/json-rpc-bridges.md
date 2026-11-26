@@ -10,6 +10,12 @@ backend integration, a *bridge*, is a process that speaks Kedi's JSON-RPC
 protocol on its stdio. Kedi renders every piece of text the model reads; the
 bridge transports it to its framework or harness and calls Kedi's tools back.
 
+The protocol lives in [kedi-lang/json-rpc](https://github.com/kedi-lang/json-rpc):
+the [specification](https://github.com/kedi-lang/json-rpc/blob/main/spec/protocol.md)
+and a [JSON Schema](https://github.com/kedi-lang/json-rpc/blob/main/schema/v1/protocol.json)
+for every message, which Kedi's own tests check its traffic against. This page
+explains it for bridge authors.
+
 ```python
 from kedi.agent_adapter import JsonRpcAdapter
 from kedi.lang import compile_program, parse_program
