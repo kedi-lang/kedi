@@ -215,6 +215,12 @@ called, with `Subagent request_limit exhausted; task was not restarted`.
 Passing the limits to the backend stops the run earlier and cheaper, but
 reporting usage is what makes the limits hold.
 
+Token limits hold only when the tokens are measured. On an adapter without
+`supports_token_usage`, a child with token limits fails before it runs. A
+report whose count a limit depends on is `None` fails the child: `Subagent
+input token limit 20000 cannot be enforced: the backend did not report input
+tokens`.
+
 ### Text Children
 
 ```python title="subagent_adapter.py"

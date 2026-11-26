@@ -749,16 +749,20 @@ class SubagentCoordinator:
         span: TelemetrySpan,
         usage: InvocationUsage,
     ) -> None:
+        # A run's token counts are what the backend measured; an unmeasured report adds
+        # none, and _assert_measured refuses one when a token limit depends on it.
         run = self.runs.add_usage(
             run_id,
             requests=usage.requests,
             tool_calls=usage.tool_calls,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            total_tokens=usage.total_tokens,
+            input_tokens=usage.input_tokens or 0,
+            output_tokens=usage.output_tokens or 0,
+            total_tokens=usage.total_tokens or 0,
         )
-        span.set_attribute("gen_ai.usage.input_tokens", run.input_tokens)
-        span.set_attribute("gen_ai.usage.output_tokens", run.output_tokens)
+        if usage.input_tokens is not None:
+            span.set_attribute("gen_ai.usage.input_tokens", run.input_tokens)
+        if usage.output_tokens is not None:
+            span.set_attribute("gen_ai.usage.output_tokens", run.output_tokens)
         span.set_attribute("kedi.subagent.requests", run.requests)
         span.set_attribute("kedi.subagent.tool_calls", run.tool_calls)
 
@@ -768,8 +772,34 @@ class SubagentCoordinator:
         span: TelemetrySpan,
         usage: InvocationUsage,
     ) -> None:
+        self._assert_measured(usage)
         self._record_usage(run_id, span, usage)
         self._assert_usage_limits(run_id)
+
+    def _assert_token_limits_supported(self, adapter: object) -> None:
+        """Refuse token limits, before the child runs, on an adapter that cannot count them."""
+
+        limited = self.usage_limits.token_limit_names()
+        capabilities = getattr(adapter, "capabilities", None)
+        if limited and not (capabilities is not None and capabilities.supports("token_usage")):
+            raise KediExecutionError(
+                f"Adapter {getattr(adapter, 'shortname', type(adapter).__name__)!r} reports no "
+                f"token usage, so the subagent {', '.join(limited)} cannot be enforced"
+            )
+
+    def _assert_measured(self, usage: InvocationUsage) -> None:
+        """A token limit holds only if every report measures the tokens it counts."""
+
+        for label, count, limit in (
+            ("input token", usage.input_tokens, self.usage_limits.input_tokens_limit),
+            ("output token", usage.output_tokens, self.usage_limits.output_tokens_limit),
+            ("total token", usage.total_tokens, self.usage_limits.total_tokens_limit),
+        ):
+            if limit is not None and count is None:
+                raise KediExecutionError(
+                    f"Subagent {label} limit {limit} cannot be enforced: "
+                    f"the backend did not report {label}s"
+                )
 
     def _assert_usage_limits(self, run_id: str) -> None:
         run = self.runs.get(run_id)

@@ -2599,6 +2599,67 @@ def test_adapter_neutral_child_execution_enforces_reported_usage_limits(
     assert run.status == "failed"
 
 
+def test_token_limits_refuse_a_child_adapter_that_reports_no_token_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = RecordingNeutralChildAdapter()  # declares no token_usage
+    invoked: list[str] = []
+
+    async def unreachable(*, prompt: str, **kwargs: Any) -> str:
+        invoked.append(prompt)
+        return "completed"
+
+    monkeypatch.setattr(adapter, "invoke", unreachable)
+    runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=adapter,
+        subagent_usage_limits=SubagentUsageLimits(total_tokens_limit=100),
+    )
+    monkeypatch.setattr(runtime, "_resolve_adapter", lambda _profile: adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tool = runtime._resolve_agent_tool_specs(profile, adapter)[0]
+
+    with pytest.raises(KediExecutionError, match="reports no token usage, so the subagent"):
+        asyncio.run(tool.fn(subagent="worker", task="count tokens"))
+    assert invoked == []  # refused before any model I/O
+
+
+def test_an_unmeasured_report_cannot_satisfy_a_token_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = RecordingNeutralChildAdapter()
+    adapter.capabilities = replace(adapter.capabilities, supports_token_usage=True)
+
+    async def unmeasured(*, prompt: str, **kwargs: Any) -> str:
+        del prompt, kwargs
+        report_invocation(InvocationUsage.unmeasured())
+        return "completed"
+
+    monkeypatch.setattr(adapter, "invoke", unmeasured)
+    runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=adapter,
+        subagent_usage_limits=SubagentUsageLimits(input_tokens_limit=100),
+    )
+    monkeypatch.setattr(runtime, "_resolve_adapter", lambda _profile: adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tool = runtime._resolve_agent_tool_specs(profile, adapter)[0]
+
+    with pytest.raises(KediExecutionError, match="input token limit 100 cannot be enforced"):
+        asyncio.run(tool.fn(subagent="worker", task="count tokens"))
+    # Without a token limit, an unmeasured report is recorded without inventing tokens.
+    runtime = compile_program(parse_program(_profiles_source()), adapter=adapter)
+    monkeypatch.setattr(runtime, "_resolve_adapter", lambda _profile: adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tool = runtime._resolve_agent_tool_specs(profile, adapter)[0]
+    asyncio.run(tool.fn(subagent="worker", task="count tokens"))
+    run = runtime._subagent_coordinator.runs.snapshot()[-1]
+    assert (run.requests, run.total_tokens, run.status) == (1, 0, "completed")
+
+
 def test_pydantic_subagent_execution_requires_an_object_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

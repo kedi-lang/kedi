@@ -525,6 +525,7 @@ class ACPAdapter(HookRegistrationMixin):
         supports_artifacts=False,
         supports_native_artifacts=False,
         supports_stateful_history=False,
+        supports_token_usage=False,
         supports_history_processing=False,
         supports_history_replay=False,
         supports_stream_events=True,

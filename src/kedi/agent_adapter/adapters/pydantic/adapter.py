@@ -207,6 +207,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_stream_events=True,
         supports_request_budget=True,
         supports_tool_attempt_budget=True,
+        supports_token_usage=True,
         supports_media_input=True,
         supports_image_output=True,
         supports_audio_output=True,

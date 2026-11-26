@@ -37,6 +37,7 @@ part of the base adapter protocol rather than an optional capability.
 | Native compaction | yes | yes |
 | Request budget | yes | yes |
 | Tool attempt budget | yes | yes |
+| Token usage | yes | yes |
 | Semantic stream events | yes | yes |
 | Native history processing | yes | yes |
 | Media input | yes | yes |
@@ -73,6 +74,7 @@ part of the base adapter protocol rather than an optional capability.
 | Native compaction | yes | yes | no | no |
 | Request budget | no | no | no | no |
 | Tool attempt budget | no | no | no | no |
+| Token usage | yes | yes | no | no |
 | Semantic stream events | yes | yes | yes | yes |
 | Native history processing | no | no | no | no |
 | Media input | yes | yes | yes | yes |
@@ -137,6 +139,7 @@ not only the adapter.
 | `native_compaction` | Adapter-native history compaction |
 | `request_budget` | `> budget:` `request_limit` |
 | `tool_attempt_budget` | `> budget:` `tool_attempt_limit` |
+| `token_usage` | Subagent token limits (`input_tokens_limit`, `output_tokens_limit`, `total_tokens_limit`) |
 | `media_input` | Media values attached to a prompt |
 | `stream_events` | Completed semantic commentary/final messages and run lifecycle events |
 | `hooks` | Agent lifecycle interception; support is declared separately for each event |

@@ -71,6 +71,7 @@ AdapterCapability = Literal[
     "stream_events",
     "request_budget",
     "tool_attempt_budget",
+    "token_usage",
     "media_input",
     "image_output",
     "audio_output",
@@ -179,6 +180,7 @@ class AdapterCapabilities:
     supports_stream_events: bool | None = None
     supports_request_budget: bool | None = None
     supports_tool_attempt_budget: bool | None = None
+    supports_token_usage: bool | None = None
     supports_media_input: bool | None = None
     supports_image_output: bool | None = None
     supports_audio_output: bool | None = None
@@ -231,6 +233,7 @@ class AdapterCapabilities:
             "stream_events": self.supports_stream_events,
             "request_budget": self.supports_request_budget,
             "tool_attempt_budget": self.supports_tool_attempt_budget,
+            "token_usage": self.supports_token_usage,
             "media_input": self.supports_media_input,
             "image_output": self.supports_image_output,
             "audio_output": self.supports_audio_output,

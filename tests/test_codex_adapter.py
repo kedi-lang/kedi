@@ -553,9 +553,12 @@ def test_codex_subagent_result_and_usage_validation() -> None:
         output_tokens=6,
         total_tokens=20,
     )
-    assert codex_adapter_module._codex_invocation_usage(
-        CodexTurnResult(text="{}", turn={"usage": "unknown"})
-    ) == InvocationUsage(requests=1)
+    assert (
+        codex_adapter_module._codex_invocation_usage(
+            CodexTurnResult(text="{}", turn={"usage": "unknown"})
+        )
+        == InvocationUsage.unmeasured()
+    )
 
     class SyncClient:
         def run_stateless_turn_sync(self, **_kwargs: Any) -> CodexTurnResult:
@@ -659,7 +662,8 @@ def test_codex_malformed_usage_does_not_corrupt_invocation_totals(
             assert adapter.produce_sync("answer", output_type=Answer).answer == "answer"
     finally:
         adapter.close()
-    assert observed == [InvocationUsage(requests=1)]
+    # No valid token update reached the turn: its counts are unknown, not zero.
+    assert observed == [InvocationUsage.unmeasured()]
 
 
 def test_codex_dynamic_tool_calls_are_visible_in_usage(tmp_path: Path) -> None:
@@ -675,7 +679,7 @@ def test_codex_dynamic_tool_calls_are_visible_in_usage(tmp_path: Path) -> None:
     finally:
         adapter.close()
     assert result == ToolAnswer(answer="evidence", success=True)
-    assert observed == [InvocationUsage(requests=1, tool_calls=1)]
+    assert observed == [InvocationUsage.unmeasured(tool_calls=1)]
 
 
 def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None:
