@@ -55,6 +55,11 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "events": True}
     elif SCENARIO == "sessions":
         result["capabilities"] = {**CAPABILITIES, "sessions": True}
+    elif SCENARIO == "transcript":
+        result["capabilities"] = {**CAPABILITIES, "transcript": True, "mediaInput": True}
+        result["mediaKinds"] = ["image"]
+    elif SCENARIO == "both-histories":
+        result["capabilities"] = {**CAPABILITIES, "transcript": True, "sessions": True}
     elif SCENARIO == "harness-errors":
         result["capabilities"] = {**CAPABILITIES, "governed": True}
     elif SCENARIO == "hooked":
@@ -398,6 +403,41 @@ def hooked(request_id: int, params: dict[str, Any]) -> None:
     send({"id": request_id, "result": {"text": json.dumps(seen)}})
 
 
+def transcript_probe(request_id: int, params: dict[str, Any]) -> None:
+    """Kedi holds the conversation: answer with this turn's messages in its schema."""
+
+    user, history = params["user"], params.get("history", [])
+    said = [part["text"] for message in history for part in message["parts"] if "text" in part]
+    reply: dict[str, Any] = {"text": f"{user} after {said}"}
+    turn = [
+        {"role": "user", "parts": [{"type": "text", "text": user}]},
+        {"role": "assistant", "parts": [{"type": "text", "text": reply["text"]}]},
+    ]
+    if user == "Forget it.":
+        pass
+    elif user == "Break a part.":
+        reply["messages"] = [{"role": "user", "parts": [{"type": "hologram"}]}]
+    elif user == "Name a stranger.":
+        reply["messages"] = [{"role": "user", "parts": [{"type": "media", "ref": "stranger"}]}]
+    elif user == "No role.":
+        reply["messages"] = [{"parts": []}]
+    elif user == "Not a list.":
+        reply["messages"] = "everything"
+    elif user.startswith("Look at"):
+        # The turn names its photo by ref; a later turn fetches the bytes with media/get.
+        media = [part for part in params["userContent"] if part["type"] == "media"]
+        turn[0]["parts"] += [{"type": "media", "ref": part["name"]} for part in media]
+        reply["messages"] = turn
+    elif user == "Fetch the photo.":
+        photo = call_kedi("media/get", {"runId": params["runId"], "ref": "photo"})
+        missing = call_kedi("media/get", {"runId": params["runId"], "ref": "nothing"})
+        reply["text"] = json.dumps({"photo": photo, "missing": missing})
+        reply["messages"] = turn
+    else:
+        reply["messages"] = turn
+    send({"id": request_id, "result": reply})
+
+
 def kedi_tools(params: dict[str, Any]) -> list[str]:
     return [tool["name"] for tool in params["tools"] if "artifact" not in tool["name"]]
 
@@ -503,6 +543,15 @@ def run(request_id: int, params: dict[str, Any]) -> None:
             }
         )
         send({"id": request_id, "result": {"text": final}})
+        return
+    if SCENARIO == "transcript":
+        transcript_probe(request_id, params)
+        return
+    if SCENARIO == "both-histories":
+        # Which mode Kedi chose: a harness keeps its session unless the program needs Kedi's.
+        mode = "transcript" if "history" in params else "state"
+        reply = {"text": mode, **({"messages": []} if mode == "transcript" else {"state": {}})}
+        send({"id": request_id, "result": reply})
         return
     if SCENARIO == "sessions":
         session = params["session"]

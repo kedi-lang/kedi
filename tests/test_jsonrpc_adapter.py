@@ -1767,3 +1767,93 @@ def test_kedis_error_rendering_quotes_at_most_four_bridge_causes() -> None:
         "from the bridge: bridge 2",
         "from the bridge: bridge 3",
     ]
+
+
+def test_kedi_holds_the_transcript_and_sends_it_each_turn(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+    capabilities = adapter.capabilities
+    assert capabilities.supports_stateful_history and capabilities.supports_history_replay
+    source = (
+        "> history: enabled\n[a] << First.\n[b] << Second.\n"
+        "> model: other\n[c] << Third.\n= `[a, b, c]`\n"
+    )
+    first, second, third = run(source, adapter)
+    assert first == "First. after []"
+    # The second turn carries the first turn's messages, as Kedi recorded them.
+    assert second == "Second. after ['First.', 'First. after []']"
+    # Another model is another lane: its transcript starts empty.
+    assert third == "Third. after []"
+
+
+def test_a_transcript_turns_media_is_fetched_by_ref(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+    source = (
+        f'> import: media\n> history: enabled\n[photo: Image] = `image("{PIXEL}")`\n'
+        "[a] << Look at <<photo>>.\n[b] << Fetch the photo.\n= <b>\n"
+    )
+    fetched = json.loads(run(source, adapter))
+    photo = fetched["photo"]["result"]
+    assert photo["kind"] == "image" and photo["mediaType"] == "image/png"
+    assert photo["data"] == PIXEL.split(",")[1]
+    assert "the conversation has no 'nothing'" in fetched["missing"]["error"]["message"]
+
+
+def test_kedi_checks_the_messages_a_transcript_run_returns(adapters: list) -> None:
+    adapter = peer("transcript")
+    adapters.append(adapter)
+    for prompt, message in (
+        ("Forget it.", "a transcript run must answer with this turn's 'messages'"),
+        ("Break a part.", "messages[0].parts[0] must be one of text, media, toolCall"),
+        ("Name a stranger.", "messages[0].parts[0]: the conversation has no 'stranger'"),
+        ("No role.", "messages[0] needs a role of user, assistant or tool, and parts"),
+        ("Not a list.", "'messages' must list the turn's messages"),
+    ):
+        error = failure(f"> history: enabled\n[r] << {prompt}\n= <r>\n", adapter)
+        assert message in str(error), prompt
+
+
+def test_a_harness_keeps_its_session_unless_the_program_needs_kedis_transcript(
+    adapters: list,
+) -> None:
+    adapter = peer("both-histories")
+    adapters.append(adapter)
+    assert run("> history: enabled\n[r] << Hi.\n= <r>\n", adapter) == "state"
+    needs = "> requires: history_replay\n> history: enabled\n[r] << Hi.\n= <r>\n"
+    assert run(needs, adapter) == "transcript"
+
+
+def test_media_get_needs_the_transcript_capability(adapters: list) -> None:
+    adapter = peer("sessions")
+    adapters.append(adapter)
+    with pytest.raises(JsonRpcError, match="media/get needs the transcript capability"):
+        adapter._parse_media({"runId": "r", "ref": "photo"})
+    with pytest.raises(JsonRpcError, match="media/get needs a string ref"):
+        peer_with_transcript = peer("transcript")
+        adapters.append(peer_with_transcript)
+        peer_with_transcript._parse_media({"runId": "r"})
+
+
+def test_the_reference_bridge_rebuilds_tool_turns_and_media_from_kedis_transcript(
+    adapters: list,
+) -> None:
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="lookup", arguments={"query": "q"})
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        source = (
+            f'> import: media\n> history: enabled\n[photo: Image] = `image("{PIXEL}")`\n'
+            "@lookup(query: str) -> str:\n  > tool:\n    risk: read_only\n  = `'found ' + query`\n"
+            "> use: lookup\n[a] << Look at <<photo>>.\n[b] << Again.\n= `[a, b]`\n"
+        )
+        assert run(source, adapter) == ["done", "done"]
+        exchanges = endpoint.take()
+        # The second turn's first request replays the first turn from Kedi's transcript.
+        replay = exchanges[2].body["messages"]
+        roles = [message["role"] for message in replay]
+        assert roles[:5] == ["system", "user", "assistant", "tool", "assistant"]
+        image = replay[1]["content"][1]["image_url"]["url"]
+        assert image == PIXEL
+        assert replay[2]["tool_calls"][0]["function"]["name"] == "lookup"
+        assert "found q" in replay[3]["content"]

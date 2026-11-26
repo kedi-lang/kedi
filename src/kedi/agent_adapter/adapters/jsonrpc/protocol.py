@@ -145,6 +145,8 @@ the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 NATIVE_TOOLS: Final = "nativeTools"
+TRANSCRIPT: Final = "transcript"
+"""Kedi holds the conversation: runs carry ``history``, results return ``messages``."""
 MCP_TRANSPORTS: Final = frozenset({"stdio", "http", "sse"})
 """The ``> mcp:`` transports; ``streamable-http`` normalizes to ``http``."""
 HOOK_EVENTS: Final = frozenset({"pre_tool_use", "post_tool_use", "post_tool_use_failure"})

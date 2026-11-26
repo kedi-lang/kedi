@@ -57,6 +57,7 @@ it has not exited within the timeout.
 | `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
+| `media/get` | bridge → Kedi | `runId`, `ref` | `kind`, `mediaType`, and `data` (base64) or `url`; see [Transcript](#transcript) |
 | `artifact/admit` | bridge → Kedi | `runId`, `callId`, `tool`, `origin`, `result` | `result`: what the model sees, the result itself or Kedi's artifact reference; see [MCP Servers](#mcp-servers) |
 | `hook/invoke` | bridge → Kedi | `runId`, `event`, `callId`, `tool`, `origin`, `arguments`, optional `inputSchema`, `result`, `error` (`type`, `message`), `interrupted` | for `pre_tool_use`: `decision` (`continue`, `edit` with `arguments`, or `deny` with `reason`); otherwise `{}`; see [Hooks](#hooks) |
 | `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
@@ -78,6 +79,7 @@ backend name is refused, and the process is stopped.
 | `events` | the bridge sends `run/event` notifications |
 | `mediaInput` | the bridge sends prompt media to its model; `mediaKinds` lists the kinds (`image`, `audio`, `video`, `document`) |
 | `sessions` | the bridge continues conversations from the `state` Kedi hands back; enables `> history: enabled` |
+| `transcript` | Kedi holds the conversation in its own schema; runs carry `history`, results return the turn's `messages`; enables `> history: enabled` and `history_replay` (see [Transcript](#transcript)) |
 | `governed` | every model request the backend makes goes through `budget/admit` first; enables `request_limit` (see [Budgets](#budgets)) |
 | `nativeTools` | the backend runs tools of its own besides Kedi's, and asks `approval/request` before each call (see [Approval](#approval)) |
 | `subagents` | Kedi may run its children on the bridge (see [Subagents](#subagents)); needs `governed` |
@@ -118,6 +120,7 @@ actions the bridge parses.
 | `tools` | each tool's `name`, `description`, `inputSchema`, `outputSchema` and `requiredBeforeOutput` |
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
 | `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
+| `history` | in transcript mode, the conversation's earlier messages in Kedi's schema; absent otherwise |
 | `subagent` | `null`, or the child Kedi runs: `id`, `parentRunId`, `conversationId`, `name`, `limits`; see [Subagents](#subagents) |
 
 Kedi validates every answer. When the data does not match the schema, a required
@@ -384,6 +387,42 @@ values, such as media the conversation already sent, out of it: store an id the
 backend can resolve instead of the bytes. A run whose frame would exceed the
 limit fails with `-32600` before it is sent.
 
+### Transcript
+
+With `transcript`, Kedi holds the conversation instead of the bridge. A run in
+a conversation carries `history`, the earlier turns' messages, and the bridge
+answers with `messages`, this turn's new ones, the user turn included. Kedi
+checks them against its schema and appends them when it commits the turn, as it
+commits `state`. A transcript run that answers without `messages` fails.
+
+```json
+[{"role": "user", "parts": [{"type": "text", "text": "Look at "}, {"type": "media", "ref": "photo"}]},
+ {"role": "assistant", "parts": [{"type": "toolCall", "id": "c1", "name": "lookup", "arguments": {}}],
+  "providerData": {"...": "the bridge's, sent back as given"}},
+ {"role": "tool", "parts": [{"type": "toolResult", "id": "c1", "result": "found"}]},
+ {"role": "assistant", "parts": [{"type": "text", "text": "Done."}]}]
+```
+
+| Part | Fields |
+|---|---|
+| `text` | `text` |
+| `media` | `ref`: the media's name in `userContent` |
+| `toolCall` | `id`, `name`, `arguments` |
+| `toolResult` | `id`, `result`, optional `isError` |
+| `reasoning` | optional `text` |
+
+`providerData` is opaque to Kedi: put there what the backend needs back exactly,
+such as an encrypted reasoning block. Media is named by `ref` after the turn
+that attached it, so its bytes are not sent again with each `history`. A bridge
+that needs the bytes, for example after a restart, asks `media/get` with the
+`ref`.
+
+A bridge may support both modes. Kedi uses `transcript` for an
+`agent-framework` bridge, and for an `agent-harness` only when the program
+needs Kedi's copy of the conversation (`> requires: history_replay`, history
+processing); a harness otherwise keeps its own `state`. `history` travels in
+every run, so a long conversation counts against the 8 MiB frame.
+
 ### Media
 
 With `mediaInput`, a prompt's media arrives in `userContent`, laid out as
@@ -463,7 +502,7 @@ adapter = JsonRpcAdapter(reference_bridge_command("http://localhost:11434/v1"), 
 `mode="protocol"` uses Kedi's protocol parts instead of native tools and
 response formats, for endpoints without them. It is `governed`: it asks
 `budget/admit` before every request and makes no retries. It advertises
-`subagents`, `liveInput`, `interrupt` and `usage`: it runs children as ordinary
+`subagents`, `liveInput`, `interrupt`, `usage` and `transcript`: it runs children as ordinary
 runs, adds live input before its next request, stops a fetch on `run/interrupt`,
 and reports each request's token counts. It lists the OpenAI chat settings
 (`temperature`, `max_tokens`, `top_p`, `seed`, `stop_sequences`,
