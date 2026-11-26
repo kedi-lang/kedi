@@ -6,6 +6,7 @@ threads, so a bridge can wait on Kedi while Kedi sends it another run.
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import threading
@@ -54,6 +55,14 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "events": True}
     elif SCENARIO == "sessions":
         result["capabilities"] = {**CAPABILITIES, "sessions": True}
+    elif SCENARIO == "drawing":
+        result["capabilities"] = {
+            **CAPABILITIES,
+            "mediaInput": True,
+            "imageOutput": True,
+            "audioOutput": True,
+        }
+        result["mediaKinds"] = ["image"]
     elif SCENARIO.startswith("media"):
         result["capabilities"] = {**CAPABILITIES, "mediaInput": True}
         result["mediaKinds"] = {"media": ["image"], "media-bad-kinds": ["smell"]}.get(SCENARIO, [])
@@ -269,6 +278,41 @@ def unadmitted_retry(request_id: int, params: dict[str, Any]) -> None:
                 send({"id": request_id, "error": {"code": -32002, "message": "endpoint failed"}})
 
 
+PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8).decode()
+WAV = base64.b64encode(b"RIFF\x24\x00\x00\x00WAVEfmt ").decode()
+_drawn: dict[str, Any] = {}
+
+
+def drawing(request_id: int, params: dict[str, Any]) -> None:
+    """The model draws and speaks: answers with media for a media output."""
+
+    output, user = params["output"] or {}, params["user"]
+    if user == "What did you get?":
+        send({"id": request_id, "result": {"text": json.dumps(_drawn)}})
+        return
+    _drawn.update(output=output, tools=[tool["name"] for tool in params["tools"]])
+    sound = {"type": "media", "kind": "audio", "mediaType": "audio/wav", "data": WAV}
+    drawn = {"type": "media", "kind": "image", "mediaType": "image/png", "data": PNG}
+    answers = {
+        "Pick one.": {"data": "photo"},
+        "Answer with sound.": {"content": [sound]},
+        "Answer with garbage.": {"content": [{**drawn, "data": "not base64!"}]},
+        "Draw two.": {"content": [drawn, drawn]},
+        "Answer with parts.": {"content": "not a list"},
+        "Link it.": {
+            "content": [{"type": "media", "kind": "image", "url": "https://example.com/cat.png"}]
+        },
+    }
+    # The model's text may come with what it made.
+    made = [
+        {"type": "text", "text": "Here it is."},
+        sound if output.get("media") == "audio" else drawn,
+    ]
+    if user.startswith("Pick one."):
+        user = "Pick one."
+    send({"id": request_id, "result": answers.get(user, {"content": made})})
+
+
 def kedi_tools(params: dict[str, Any]) -> list[str]:
     return [tool["name"] for tool in params["tools"] if "artifact" not in tool["name"]]
 
@@ -280,6 +324,9 @@ def run(request_id: int, params: dict[str, Any]) -> None:
         return
     if SCENARIO == "live":
         live_probe(request_id, params)
+        return
+    if SCENARIO == "drawing":
+        drawing(request_id, params)
         return
     if SCENARIO == "configured":
         keys = ("model", "fallbackModels", "settings", "effort")
