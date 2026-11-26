@@ -1,0 +1,24 @@
+> import: media
+
+# Nothing here is large, so the program drops Kedi's artifact tools (see receipt_record.kedi).
+> artifacts:
+    enabled: false
+
+~Match(
+  same_shop: Annotated[bool, "Both receipts name the same shop"],
+  same_total: Annotated[bool, "Both receipts print the same TOTAL amount"]
+)
+
+###
+Is the second receipt a duplicate of the first? The model compares the two images; the
+program decides that only the same shop and the same total make a duplicate.
+
+The images reach the model as `first` and `second`. Two names for the same content are
+attached once, and the prompt shows the first name twice.
+###
+@duplicate(first: Image, second: Image) -> dict:
+  [match: Match] << Do the receipts <<first>> and <<second>> show the same shop and the same total?
+  = `{"match": match, "duplicate": match.same_shop and match.same_total}`
+
+# pairs.py binds this file: `first` and `second` arrive as globals.
+= `duplicate(first, second)`

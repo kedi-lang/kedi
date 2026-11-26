@@ -189,6 +189,35 @@ These are six clean, synthetic receipts. They show that the program, the type an
 carry over unchanged between backends. They do not show how either model handles photos of
 real receipts.
 
+### Two receipts: the same purchase?
+
+[`same_purchase.kedi`](same_purchase.kedi) compares two receipt images:
+
+- **The question.** `[match: Match] << Do the receipts <<first>> and <<second>> show the
+  same shop and the same total?` asks for two booleans.
+- **The decision.** The program calls a pair a duplicate only when both are true.
+- **The same receipt twice.** Three of the six pairs in [`pairs.py`](pairs.py) give one
+  receipt as both images. Kedi attaches the same content once, and the prompt names it
+  `first` twice. The model must recognize one image under both names; a test checks
+  exactly what reaches the model in both cases.
+
+```bash
+python examples/local_vision/pairs.py --local http://127.0.0.1:8092/v1
+python examples/local_vision/pairs.py --cloud google:gemini-3.5-flash-lite --delay 5
+```
+
+| Measure, 3 runs of 6 pairs | Qwen3-VL-2B, local | `gemini-3.5-flash-lite`, cloud |
+|---|---|---|
+| Runtime failures | 0/18 | 0/18 |
+| Schema-valid answers | 18/18 | 18/18 |
+| Same shop, same total | 18/18 each | 18/18 each |
+| Identical answers across the 3 runs | 6/6 pairs | 6/6 pairs |
+| Latency per pair (median) | 2.3 s | 1.6 s |
+
+The local leg ran under the same network-denied sandbox as above. As with single receipts,
+these clean synthetic images show that the program carries over, not how the models handle
+photographs.
+
 ### Cactus Engine
 
 We tried Cactus Engine first, the Cactus runtime for vision-language models, and it did
@@ -214,6 +243,8 @@ not work here:
 | `score.py` | score the Mirage program against the ground truth |
 | `receipt_record.kedi` | the shared program: a typed `Receipt` from a vision-language model, then the check |
 | `compare.py` | run the shared program locally or on a cloud model, and score it |
+| `same_purchase.kedi` | compare two receipt images, then decide if they are a duplicate |
+| `pairs.py` | run the comparison on six pairs, locally or on a cloud model |
 | `make_receipts.py` | draw the receipts and the ground truth |
 | `receipts/` | the images and `truth.json` |
 | `requirements.txt` | `cactus-compute`, pinned, for Mirage |

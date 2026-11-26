@@ -50,16 +50,21 @@ class CountingModel(WrapperModel):
         return await super().request(*args, **kwargs)
 
 
+def score_failure(error: Exception) -> dict[str, Any]:
+    """A failed case: the cause, and whether it was a runtime failure rather than an answer."""
+
+    cause = getattr(error, "original", None) or error
+    message = str(cause).strip().splitlines()[-1] if str(cause).strip() else ""
+    return {
+        "valid": False,
+        "runtime_failure": isinstance(cause, ModelAPIError),
+        "error": f"{type(cause).__name__}: {message}"[:300],
+    }
+
+
 def score(expected: dict[str, Any], result: Any) -> dict[str, Any]:
     if isinstance(result, Exception):
-        cause = getattr(result, "original", None) or result
-        message = str(cause).strip().splitlines()[-1] if str(cause).strip() else ""
-        return {
-            "valid": False,
-            "runtime_failure": isinstance(cause, ModelAPIError),
-            "error": f"{type(cause).__name__}: {message}"[:300],
-            "fields": dict.fromkeys(FIELDS, False),
-        }
+        return score_failure(result) | {"fields": dict.fromkeys(FIELDS, False)}
     receipt = result["receipt"].model_dump()
     fields = {
         "merchant": receipt["merchant"] == expected["merchant"],
