@@ -14,7 +14,7 @@ import contextvars
 import copy
 import inspect
 import shlex
-from collections.abc import Callable, Coroutine, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -103,6 +103,7 @@ from .protocol import (
     NATIVE_TOOLS,
     PROTOCOL_VERSION,
     RUN_FAILED,
+    TEST_MODEL,
     TOOL_RISKS,
     TRANSCRIPT,
     UNKNOWN_RUN,
@@ -231,15 +232,19 @@ class JsonRpcAdapter(HookRegistrationMixin):
         output_retries: int = 1,
         max_inbound_requests: int = 64,
         hook_handler: HookHandler | None = None,
+        test_model: TestModel | None = None,
     ) -> None:
         """Launch ``command`` and complete the handshake; raises if the bridge is not ready.
 
         The adapter owns the process and stops it on :meth:`close`. ``request_timeout``
         bounds each run; ``output_retries`` is how many corrections Kedi sends per call.
+        ``test_model`` answers the bridge's model requests instead of its model, for tests:
+        it receives each :class:`ModelCall` and returns the assistant's text or message.
         """
 
         self.command = tuple(shlex.split(command) if isinstance(command, str) else command)
         self._init_hook_registration(hook_handler)
+        self._test_model = test_model
         self._history_runner: HistoryProcessorRunner[JsonObject] = HistoryProcessorRunner(
             None, TranscriptHistoryCodec()
         )
@@ -272,12 +277,19 @@ class JsonRpcAdapter(HookRegistrationMixin):
             max_inbound_requests=max_inbound_requests,
         )
         try:
+            hello: JsonObject = {"protocolVersion": PROTOCOL_VERSION, "client": {"name": "kedi"}}
+            if test_model is not None:
+                hello["testModel"] = True
             handshake = self._connection.request_sync(
-                "initialize",
-                {"protocolVersion": PROTOCOL_VERSION, "client": {"name": "kedi"}},
-                timeout=initialize_timeout,
+                "initialize", hello, timeout=initialize_timeout
             )
             peer = _negotiate(handshake)
+            if test_model is not None and not peer.test_model:
+                raise JsonRpcError(
+                    UNSUPPORTED,
+                    f"bridge {peer.backend['name']!r} has no test model: it did not declare "
+                    "testModel",
+                )
         except BaseException:
             self._connection.close(timeout=1)
             raise
@@ -822,6 +834,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "artifact/admit": self._parse_artifact,
             "media/get": self._parse_media,
             "history/process": self._parse_history,
+            "model/complete": self._parse_model_call,
         }.get(method)
         try:
             if parse is None:
@@ -902,6 +915,39 @@ class JsonRpcAdapter(HookRegistrationMixin):
             metadata={"source": origin, "bridge": "jsonrpc", "backend": self.backend["name"]},
         )
         return lambda request_id, run: self._approve(request_id, run, request)
+
+    def _parse_model_call(self, params: JsonObject) -> _Handler:
+        test_model = self._test_model
+        if test_model is None:
+            raise JsonRpcError(UNSUPPORTED, "model/complete: Kedi asked for no test model")
+        messages, tools = params.get("messages"), params.get("tools", [])
+        if not isinstance(messages, list) or not isinstance(tools, list):
+            raise JsonRpcError(INVALID_PARAMS, "model/complete needs lists of messages and tools")
+        output = params.get("output")
+        call = ModelCall(
+            run_id=str(params.get("runId")),
+            model=params.get("model") if isinstance(params.get("model"), str) else None,
+            system=params.get("system") if isinstance(params.get("system"), str) else None,
+            messages=tuple(messages),
+            tools=tuple(tools),
+            output=output if isinstance(output, dict) else None,
+        )
+
+        async def complete(request_id: int | str, run: _Run) -> None:
+            try:
+                answer = test_model(call)
+                if inspect.isawaitable(answer):
+                    answer = await answer
+                message = _assistant_message(answer)
+            except asyncio.CancelledError:
+                self._connection.respond(request_id, error=JsonRpcError(CANCELLED, "the run ended"))
+                raise
+            except Exception as exc:  # the script failed: the run fails with its error
+                self._stop(request_id, run, exc)
+                return
+            self._connection.respond(request_id, result={"message": message})
+
+        return complete
 
     def _parse_history(self, params: JsonObject) -> _Handler:
         messages = params.get("messages")
@@ -1347,6 +1393,7 @@ class _Peer:
     mcp_transports: frozenset[str]
     transcript: bool
     sessions: bool
+    test_model: bool
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -1462,7 +1509,41 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         frozenset(transports),
         transcript,
         flags["supports_stateful_history"],
+        advertised.get(TEST_MODEL) is True,
     )
+
+
+@dataclass(frozen=True)
+class ModelCall:
+    """One model request a bridge in test mode hands Kedi with ``model/complete``.
+
+    ``messages`` are the conversation in Kedi's transcript schema, ``tools`` the tools the
+    model may call (``name``, ``description``, ``inputSchema``), and ``output`` the run's
+    output (``schema`` and ``toolName``, or ``None`` for text).
+    """
+
+    run_id: str
+    model: str | None
+    system: str | None
+    messages: tuple[JsonObject, ...]
+    tools: tuple[JsonObject, ...]
+    output: JsonObject | None
+
+
+TestModel = Callable[[ModelCall], "str | JsonObject | Awaitable[str | JsonObject]"]
+"""A test model: the assistant's text, or its message (``{"parts": [...]}``) in Kedi's schema."""
+
+
+def _assistant_message(answer: Any) -> JsonObject:
+    """A test model's answer as an assistant message in Kedi's transcript schema."""
+
+    if isinstance(answer, str):
+        return {"role": "assistant", "parts": [{"type": "text", "text": answer}]}
+    if not isinstance(answer, dict) or not isinstance(answer.get("parts"), list):
+        raise TypeError("a test model returns the assistant's text or a {'parts': [...]} message")
+    message = {"role": "assistant", **answer}
+    (checked,) = _check_transcript([message], {})
+    return checked
 
 
 def _media_table(content: Sequence[JsonObject]) -> dict[str, JsonObject]:
@@ -1648,4 +1729,11 @@ def reference_bridge_command(
     return ["node", str(REFERENCE_BRIDGE), "--base-url", base_url, "--mode", mode, *flags]
 
 
-__all__ = ["REFERENCE_BRIDGE", "JsonRpcAdapter", "JsonRpcDisconnected", "reference_bridge_command"]
+__all__ = [
+    "REFERENCE_BRIDGE",
+    "JsonRpcAdapter",
+    "JsonRpcDisconnected",
+    "ModelCall",
+    "TestModel",
+    "reference_bridge_command",
+]

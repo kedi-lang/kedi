@@ -8,7 +8,7 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 
 Kedi to bridge:
 
-- ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
+- ``initialize`` ``{protocolVersion, client, testModel?}`` returns ``{protocolVersion, backend, kind,
   capabilities, mediaKinds?, settings?, effort?, mcp?}``: ``settings`` names the
   ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps, ``mcp``
   ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``). Kedi sends nothing else before
@@ -74,6 +74,10 @@ Bridge to Kedi:
   each model request: the conversation so far, in Kedi's transcript schema. It returns
   ``{messages}``, what the program's history processor made of it; send that instead. Such a run
   answers with ``transcript``, the whole conversation, rather than the turn's ``messages``.
+- ``model/complete`` ``{runId, model, system, messages, tools, output}`` (with the ``testModel``
+  capability, when ``initialize`` asked for it): one model request, sent to Kedi instead of the
+  bridge's model, ``messages`` in Kedi's transcript schema. It returns ``{message}``, the
+  assistant's message in that schema, which the bridge treats as its model's reply.
 - ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
   totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
   it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
@@ -151,6 +155,8 @@ the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 NATIVE_TOOLS: Final = "nativeTools"
+TEST_MODEL: Final = "testModel"
+"""The bridge can send its model requests to Kedi (``model/complete``) when Kedi asks."""
 TRANSCRIPT: Final = "transcript"
 """Kedi holds the conversation: runs carry ``history``, results return ``messages``."""
 MCP_TRANSPORTS: Final = frozenset({"stdio", "http", "sse"})
