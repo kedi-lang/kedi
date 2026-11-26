@@ -21,7 +21,7 @@ example has a README with setup, commands, evaluation sets and results.
 
 | Task | Model | Kedi surface | Joins as | Download | Measured |
 | --- | --- | --- | --- | --- | --- |
-| Typed fields from text | Cactus Needle 3 | `[refund: Refund] << ...` | Pydantic AI model | 34 MB | schema-valid 24/24, every field right 15/24, 0.16 s, 193 MB peak |
+| Typed fields from text | Cactus Needle 3 | `[refund: Refund] << ...` | Pydantic AI model | 34 MB | schema-valid 24/24, every field right 15/24 or 12/24 depending on the process, 0.16 s, 193 MB peak |
 | Typed records from images | Qwen3-VL-2B on llama.cpp's `llama-server` | `[receipt: Receipt] << Read the receipt in <<photo>>.` | Pydantic AI's OpenAI chat model on the local server | 1.5 GB | every field right 18/18, the same as `gemini-3.5-flash-lite` on the same program; 3.8 s, 2.4 GiB server peak |
 | Reading text in images | Cactus Mirage | `[writing] << Read the writing in <<photo>>.` | LangChain, `image_inputs` | 21 MB | character error rate 0.002, 0.15 s, 267 MB peak |
 | Turkish speech | EMA Lightning | `[speech: Audio] << <sentence>` | LangChain, `audio_outputs` | 34 MB, plus PyTorch | real-time factor 0.064, 481 MB peak |
@@ -88,7 +88,7 @@ measurements:
   [Rendered Request](../adapter-development/rendered-request.md)), not from the
   framework's messages. Pydantic AI's messages also carry a transport note from
   Kedi's Pydantic adapter. With that note, Needle read "1,299.00 euros" as 1.299
-  on every run; without it, every amount was right.
+  on every run; without it, Needle read it correctly in all 16 processes we ran.
 - **Drop the artifact tools when nothing is large.** Kedi offers its artifact
   tools to every model by default. Qwen3-VL-2B called `read_artifact` until its
   retries ran out, on every receipt. With `> artifacts:` and `enabled: false`,
@@ -99,6 +99,9 @@ measurements:
   up. Schema validation alone cannot catch these misreads.
 - **Measure before relying on it.** A consistent answer can still be wrong:
   Needle gave the same wrong reason on every run.
+- **Repeat across processes, not only within one.** Within a process, Needle's
+  answers never changed. Across 16 processes, it read one request's amount as
+  75.00 in 6 and as the shoe size, 42, in 10.
 
 ## Offline Runs
 

@@ -74,12 +74,18 @@ Measured on 2026-11-26, on an Apple M1 with 8 GB of RAM and Python 3.12, over 3 
 | Field accuracy | order id 24/24, amount 24/24, customer 21/24, reason 15/24 | 24/24 for every field |
 | Task completion (every field right) | 15/24 | 24/24 |
 | Correct route | 18/24 | 24/24 |
-| Identical answers across the 3 runs | 8/8 requests | 8/8 requests |
+| Identical answers across the 3 runs, within one process | 8/8 requests | 8/8 requests |
 | Warm latency (median per request) | 0.16 s | 1.0 s |
 | Load from cache | 0.2 s; the first load, with its download, took 10.6 s | none |
 | Peak process memory | 193 MB | 137 MB, the Kedi process only |
 
 Needle's errors repeat on every run:
+
+- **One amount varies between processes.** Within a process, Needle's answers never
+  changed. Across 16 separate processes, though, it read request 8's amount as 75.00 in 6
+  and as 42, the shoe size, in 10. 42 is not an amount the message states in euros, so the
+  route check sends it to a person. When it reads 42, task completion drops to 12/24 and
+  the correct route to 15/24. Measure across processes, not only within one.
 
 - **A name at the end of a message.** "... I paid 120 euros. Lena Fischer" gives "Fischer".
 - **Reasons.** "you sent a red toaster" reads as damaged instead of wrong_item, and "I changed
@@ -102,10 +108,12 @@ wrapper. Every earlier version did worse:
 - **Reason descriptions.** Describing each reason value also helped.
 - **The transport note.** The earlier wrapper read Pydantic AI's messages, and so also sent a
   transport note that the Pydantic adapter adds for chat models. With that note, Needle read
-  "1,299.00 euros" as 1.299 on every run. Without it, every amount is right.
+  "1,299.00 euros" as 1.299 on every run. Without it, Needle read it correctly in all 16
+  processes we ran.
 
 **Cloud comparison.** The same program, inputs and scoring ran on the free tier, with
-`--delay 5` to stay under the per-minute quota. Only the model changed. One answer took a
+`--delay 5` to stay under the per-minute quota. The cloud leg needs Pydantic AI's Google
+provider, `uv pip install "pydantic-ai-slim[google]"`, and `GOOGLE_API_KEY`. Only the model changed. One answer took a
 second attempt. A run without the delay hit the quota after 21 calls; `run.py` reports
 such quota errors as runtime failures, apart from the model's answers.
 
