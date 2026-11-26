@@ -1,0 +1,175 @@
+{
+  "description": "Handshakes Kedi refuses, and the one it accepts. refuses is the SDK's diagnostic code; kediSays is a part of Kedi's refusal message.",
+  "cases": [
+    {
+      "name": "subagents-need-governed",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "subagents": true
+        }
+      },
+      "refuses": "KB001",
+      "kediSays": "subagents need governed"
+    },
+    {
+      "name": "live-input-needs-subagents",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "governed": true,
+          "liveInput": true
+        }
+      },
+      "refuses": "KB002",
+      "kediSays": "liveInput needs subagents"
+    },
+    {
+      "name": "interrupt-needs-live-input",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "governed": true,
+          "subagents": true,
+          "interrupt": true
+        }
+      },
+      "refuses": "KB003",
+      "kediSays": "interrupt needs liveInput"
+    },
+    {
+      "name": "media-input-needs-kinds",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "mediaInput": true
+        }
+      },
+      "refuses": "KB004",
+      "kediSays": "mediaKinds"
+    },
+    {
+      "name": "settings-not-kedis-own",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {},
+        "settings": [
+          "temperature",
+          "context_limit"
+        ]
+      },
+      "refuses": "KB005",
+      "kediSays": "context_limit"
+    },
+    {
+      "name": "unknown-effort-level",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {},
+        "effort": [
+          "low",
+          "turbo"
+        ]
+      },
+      "refuses": "KB006",
+      "kediSays": "effort must list levels"
+    },
+    {
+      "name": "mcp-needs-native-tools",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {},
+        "mcp": {
+          "transports": [
+            "stdio"
+          ]
+        }
+      },
+      "refuses": "KB007",
+      "kediSays": "mcp needs nativeTools"
+    },
+    {
+      "name": "unknown-mcp-transport",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "nativeTools": true
+        },
+        "mcp": {
+          "transports": [
+            "carrier-pigeon"
+          ]
+        }
+      },
+      "refuses": "KB009",
+      "kediSays": "mcp.transports must list"
+    },
+    {
+      "name": "valid",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "tools": true,
+          "governed": true,
+          "subagents": true,
+          "liveInput": true,
+          "interrupt": true,
+          "mediaInput": true
+        },
+        "mediaKinds": [
+          "image"
+        ],
+        "settings": [
+          "temperature"
+        ],
+        "effort": [
+          "low",
+          "high"
+        ]
+      },
+      "refuses": null,
+      "kediSays": null
+    },
+    {
+      "name": "tools-without-structured-output",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-harness",
+        "capabilities": {
+          "tools": true
+        }
+      },
+      "refuses": null,
+      "kediSays": null
+    }
+  ]
+}

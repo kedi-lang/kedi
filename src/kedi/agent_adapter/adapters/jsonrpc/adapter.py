@@ -1462,7 +1462,8 @@ def _negotiate(handshake: JsonObject) -> _Peer:
     capabilities = AdapterCapabilities(
         supports_structured_output=flags["supports_structured_output"],
         supports_tool_registration=tools,
-        supports_artifacts=tools,
+        # Artifacts take structured output too; without it, a program that uses them is refused.
+        supports_artifacts=tools and flags["supports_structured_output"],
         supports_native_structured_output=flags["supports_native_structured_output"],
         supports_native_tool_calling=flags["supports_native_tool_calling"],
         supports_stream_events=flags["supports_stream_events"],
