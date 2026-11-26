@@ -10,9 +10,12 @@ The Kedi side is the same as for a cloud model:
 - [`transcribe.kedi`](transcribe.kedi) transcribes with an audio prompt, `[text] << Transcribe <<clip>>.`.
 
 Only the adapter's model changes. [`speech_models.py`](speech_models.py) wraps each local
-engine as a LangChain chat model: a speech model declares `audio_outputs` and answers with
-WAV bytes, and a transcriber declares `audio_inputs` and answers with text. That is the
-contract Kedi's LangChain adapter already uses for cloud speech models.
+engine as a LangChain chat model. That is the contract Kedi's LangChain adapter already uses
+for cloud speech models:
+
+- **Speech models** declare `audio_outputs` and answer with WAV bytes.
+- **Transcribers** declare `audio_inputs` and answer with text. They also declare
+  `tool_calling: False`, so a typed capture or a program tool fails with a clear error.
 
 | Role | Model | Package | License | Download | Output |
 |---|---|---|---|---|---|

@@ -102,12 +102,16 @@ class Phonon(LocalSpeech):
 class Transcriber(BaseChatModel):
     """Transcribes the audio clip in the last user turn; ``language`` skips detection."""
 
-    profile: Any = {"audio_inputs": True}
+    # No tool calling: Kedi then offers no tools, and binds one only for a program tool or a
+    # typed capture, which a transcriber refuses.
+    profile: Any = {"audio_inputs": True, "tool_calling": False, "structured_output": False}
     language: str | None = None
 
     def bind_tools(self, tools: Any, **_: Any) -> Transcriber:
-        # A transcriber answers with what it hears and calls no tools, so Kedi's are unused.
-        return self
+        raise NotImplementedError(
+            f"{self._llm_type} answers with what it hears: it takes no tools and no typed "
+            "output, so capture untyped text, for example [text] << Transcribe <<clip>>."
+        )
 
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any

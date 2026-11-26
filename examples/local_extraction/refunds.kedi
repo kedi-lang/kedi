@@ -19,13 +19,19 @@ instructions, which suits a small local model.
 ###
 Approve small refunds for damaged or wrong items automatically; send the rest to a person.
 This is ordinary Kedi and Python logic: the model only reads, it does not decide. An amount
-that does not appear in the message, a misread "1,299.00" for example, goes to a person.
+the message does not state in euros, a misread "1,299.00" for example, goes to a person.
 ###
 @route(refund: Refund, message: str) -> str:
   = ```
-  amount = refund.amount
-  grounded = any(text in message for text in (f"{amount:g}", f"{amount:.2f}", f"{amount:,.2f}"))
-  automatic = grounded and refund.reason in ("damaged", "wrong_item") and amount <= 300
+  import re
+
+  money = r"€\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:EUR|euros?)\b"
+  stated = {
+      round(float((before or after).replace(",", "")), 2)
+      for before, after in re.findall(money, message, flags=re.IGNORECASE)
+  }
+  grounded = round(refund.amount, 2) in stated
+  automatic = grounded and refund.reason in ("damaged", "wrong_item") and refund.amount <= 300
   return "approve" if automatic else "review"
   ```
 

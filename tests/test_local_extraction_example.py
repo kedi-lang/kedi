@@ -82,6 +82,19 @@ def test_an_amount_missing_from_the_message_goes_to_a_person(needle: Any) -> Non
     )
 
 
+def test_an_amount_that_is_not_a_stated_euro_amount_goes_to_a_person(needle: Any) -> None:
+    # 81 appears in the message only as part of the order id D-0081.
+    needle.answers.append(
+        {"customer": "Daniel Okafor", "order_id": "D-0081", "amount": 81.0, "reason": "damaged"}
+    )
+    assert run(needle, SOFA)["route"] == "review"
+    needle.answers.append(
+        {"customer": "Aiko Tanaka", "order_id": "C-5530", "amount": 34.5, "reason": "wrong_item"}
+    )
+    message = "Aiko Tanaka here: order C-5530 is the wrong kettle. Refund of €34.50 please."
+    assert run(needle, message)["route"] == "approve"
+
+
 def test_a_retry_extracts_from_kedis_prompt_not_the_retry_text(needle: Any) -> None:
     needle.answers += [
         None,
@@ -92,13 +105,23 @@ def test_a_retry_extracts_from_kedis_prompt_not_the_retry_text(needle: Any) -> N
     assert first["prompt"] == second["prompt"]
 
 
-def test_needle_answers_only_with_structured_output(needle: Any) -> None:
-    runtime = compile_program(
-        parse_program("[reply] << Say hello.\n= <reply>\n"),
-        adapter=PydanticAdapter(needle.NeedleModel()),
-    )
+@pytest.mark.parametrize(
+    ("source", "error"),
+    [
+        ("[reply] << Say hello.\n= <reply>\n", "answers only with structured output"),
+        (
+            "@shout(text: str) -> str:\n  > tool:\n      risk: read_only\n  = `text.upper()`\n"
+            "> use: shout\n[n: int] << Count.\n= `n`\n",
+            r"calls no tools; remove \['shout'\]",
+        ),
+    ],
+    ids=["untyped", "program tool"],
+)
+def test_needle_refuses_what_it_cannot_do(needle: Any, source: str, error: str) -> None:
+    runtime = compile_program(parse_program(source), adapter=PydanticAdapter(needle.NeedleModel()))
     try:
-        with pytest.raises(Exception, match="answers only with structured output"):
+        with pytest.raises(Exception, match=error):
             runtime.run_main()
     finally:
         asyncio.run(runtime.aclose())
+    assert needle.calls == []

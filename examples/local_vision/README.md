@@ -10,10 +10,14 @@ The model only reads. Parsing and the check are deterministic, so a misread show
 failed check, not as a plausible wrong number.
 
 [`vision_model.py`](vision_model.py) wraps [Cactus
-Mirage](https://huggingface.co/Cactus-Compute/mirage) as a LangChain chat model. Its profile
-declares `image_inputs`, so Kedi's LangChain adapter sends the image as an image part.
-Mirage returns each text region with a box, and the wrapper puts the regions in reading
-order, one line per row.
+Mirage](https://huggingface.co/Cactus-Compute/mirage) as a LangChain chat model:
+
+- **Images in.** Its profile declares `image_inputs`, so Kedi's LangChain adapter sends the
+  image as an image part.
+- **Text out.** Mirage returns each text region with a box, and the wrapper puts the regions
+  in reading order, one line per row.
+- **No tools or typed output.** The profile also declares `tool_calling: False`, so Kedi
+  offers the reader no tools. A typed capture or a program tool fails with a clear error.
 
 | Model | Package | License | Download |
 |---|---|---|---|

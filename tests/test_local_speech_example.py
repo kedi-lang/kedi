@@ -93,6 +93,21 @@ def test_whisper_hears_the_clip_after_leading_silence(speech_models: Any) -> Non
     assert len(samples) == silence + 1600 and not samples[:silence].any()
 
 
+def test_a_transcriber_refuses_a_typed_capture(speech_models: Any) -> None:
+    clip = run(EXAMPLE / "speak.kedi", LangChainAdapter(speech_models.EmaLightning()), sentence="x")
+    runtime = compile_program(
+        parse_program("> import: media\n[n: int] << Count the words in <<clip>>.\n= `n`\n"),
+        adapter=LangChainAdapter(speech_models.Whisper(language="tr")),
+        runtime_globals={"clip": clip},
+    )
+    try:
+        with pytest.raises(Exception, match="no tools and no typed output"):
+            runtime.run_main()
+    finally:
+        asyncio.run(runtime.aclose())
+    assert speech_models.heard == []
+
+
 def test_round_trip_scores_words_without_punctuation() -> None:
     sys.path.insert(0, str(EXAMPLE))
     try:

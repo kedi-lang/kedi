@@ -6,7 +6,8 @@ prompts that reference an image, ``<<photo>>``. The model profile declares ``ima
 so Kedi sends the image itself; Mirage returns each text region with a box, and this module
 puts them in reading order, one line per row.
 
-It answers in text and calls no tools; reading Latin script only, as Mirage does.
+It answers in text, reading Latin script only, as Mirage does. A typed capture or a program
+tool fails with a clear error.
 """
 
 from __future__ import annotations
@@ -28,15 +29,19 @@ os.environ["DO_NOT_TRACK"] = "1"
 class MirageReader(BaseChatModel):
     """Answers with the writing in the image of the last user turn, line by line."""
 
-    profile: Any = {"image_inputs": True}
+    # No tool calling: Kedi then offers no tools, and binds one only for a program tool or a
+    # typed capture, which this reader refuses.
+    profile: Any = {"image_inputs": True, "tool_calling": False, "structured_output": False}
 
     @property
     def _llm_type(self) -> str:
         return "cactus-mirage"
 
     def bind_tools(self, tools: Any, **_: Any) -> MirageReader:
-        # A reader answers with what it reads and calls no tools, so Kedi's are unused.
-        return self
+        raise NotImplementedError(
+            "MirageReader answers with the text it reads: it takes no tools and no typed "
+            "output, so capture untyped text, for example [writing] << Read <<photo>>."
+        )
 
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any

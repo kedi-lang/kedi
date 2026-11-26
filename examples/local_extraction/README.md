@@ -9,8 +9,8 @@ machine.
 - **A `~Refund` type.** Each field is described, and the reason is one of four values.
 - **`read_request`.** A typed raw invoke, `[refund: Refund] << Refund request: <message>`.
 - **`route`.** It approves small refunds for damaged or wrong items automatically and sends
-  the rest to a person. It also sends a request to a person when the extracted amount does
-  not appear in the message.
+  the rest to a person. It also sends a request to a person when the extracted amount is not
+  one the message states in euros, such as a number taken from an order id.
 
 The model only reads; the program decides.
 
@@ -18,11 +18,12 @@ The model only reads; the program decides.
 [Cactus Needle 3](https://huggingface.co/Cactus-Compute/needle3) as a Pydantic AI model:
 
 - **What Needle gets.** Kedi asks for the `Refund` through an output tool. The wrapper hands
-  that tool's schema to Needle's extraction, with Kedi's prompt and system text unchanged,
-  and answers with the tool call.
+  that tool's schema to Needle's extraction, with the request Kedi rendered for this call
+  (`current_request().render()`), and answers with the tool call.
 - **Validation.** Kedi and Pydantic AI validate the result, so Cactus's own repair is off.
-- **What Needle does not do.** It answers only with structured output: it does not call
-  Kedi's other tools, and an untyped `<<` prompt fails with a clear error.
+- **What Needle does not do.** It answers only with structured output. An untyped `<<` prompt
+  or a program tool from `> use:` fails with a clear error. Kedi's artifact tools, offered
+  to every model, go unused.
 
 | Model | Package | License | Download |
 |---|---|---|---|
@@ -45,7 +46,7 @@ Without them, Cactus sends a usage event to its servers on each extraction.
 
 ```bash
 python examples/local_extraction/run.py              # Needle 3, offline, 3 runs over 8 requests
-python examples/local_extraction/run.py --cloud google:gemini-3.8-flash
+python examples/local_extraction/run.py --cloud google:gemini-3.5-flash-lite
 ```
 
 The second command runs the same program, inputs and scoring on a cloud model. It is a
@@ -66,42 +67,53 @@ Measured on 2026-11-26, on an Apple M1 with 8 GB of RAM and Python 3.12, over 3 
 8 requests. Outbound networking was denied with
 `sandbox-exec -p '(version 1)(allow default)(deny network*)'`.
 
-| Measure | Result |
-|---|---|
-| Schema-valid answers | 24/24 |
-| Field accuracy | order id 24/24, customer 21/24, amount 21/24, reason 15/24 |
-| Task completion (every field right) | 12/24 |
-| Correct route | 18/24 |
-| Identical answers across the 3 runs | 8/8 requests |
-| Warm latency (median per request) | 0.16 s |
-| Load from cache | 0.1 s; the first load, with its download, took 10.6 s |
-| Peak process memory | 195 MB |
+| Measure | Needle 3, local | `gemini-3.5-flash-lite`, cloud |
+|---|---|---|
+| Runtime failures | 0/24 | 0/24 |
+| Schema-valid answers | 24/24, all on the first attempt | 24/24, 23 on the first attempt |
+| Field accuracy | order id 24/24, amount 24/24, customer 21/24, reason 15/24 | 24/24 for every field |
+| Task completion (every field right) | 15/24 | 24/24 |
+| Correct route | 18/24 | 24/24 |
+| Identical answers across the 3 runs | 8/8 requests | 8/8 requests |
+| Warm latency (median per request) | 0.16 s | 1.0 s |
+| Load from cache | 0.2 s; the first load, with its download, took 10.6 s | none |
+| Peak process memory | 193 MB | 137 MB, the Kedi process only |
 
-The errors, which repeat on every run:
+Needle's errors repeat on every run:
 
-- **"1,299.00 euros" read as 1.299.** The route check catches this: 1.299 does not appear
-  in the message, so the request goes to a person instead of being approved.
 - **A name at the end of a message.** "... I paid 120 euros. Lena Fischer" gives "Fischer".
 - **Reasons.** "you sent a red toaster" reads as damaged instead of wrong_item, and "I changed
   my mind" reads as damaged instead of other. The second one is approved automatically.
   The amount check cannot catch a wrong reason, so a reason this model reads needs a person
   or a stronger model before it triggers an action.
 
-**How the program shape changed the scores.** These numbers come from an iteration on the
-program, and the earlier shapes did worse:
+**What changed the scores.** These numbers come from an iteration on the program and the
+wrapper. Every earlier version did worse:
 
-| Program | Field accuracy (first run) | Route |
+| Version | Field accuracy (first run) | Route |
 |---|---|---|
 | A `>>` template capture, with Kedi's template instructions | 16/32 | 3/8 |
 | A typed raw invoke | 25/32 | 5/8 |
 | The same, with a description for each reason and the amount check | 27/32 | 6/8 |
+| The same, with only Kedi's rendered request sent to Needle | 28/32 | 6/8 |
 
-The template instructions are written for capable models, and they confuse a model this
-small. A typed raw invoke sends just the message. Describing each reason value also helped.
-The wrapper still sends Kedi's text unchanged: the program, not the transport, was changed.
+- **Template instructions.** They are written for capable models, and they confuse a model
+  this small. A typed raw invoke sends just the message.
+- **Reason descriptions.** Describing each reason value also helped.
+- **The transport note.** The earlier wrapper read Pydantic AI's messages, and so also sent a
+  transport note that the Pydantic adapter adds for chat models. With that note, Needle read
+  "1,299.00 euros" as 1.299 on every run. Without it, every amount is right.
 
-**Cloud comparison.** The cloud leg could not be measured on 2026-11-26. The free-tier Gemini
-quota answered 429 after one request.
+**Cloud comparison.** The same program, inputs and scoring ran on the free tier, with
+`--delay 5` to stay under the per-minute quota. Only the model changed. One answer took a
+second attempt. A run without the delay hit the quota after 21 calls; `run.py` reports
+such quota errors as runtime failures, apart from the model's answers.
+
+**Typed decisions.** For booleans, choices and probabilities with decision evidence, Kedi's
+existing local path is [Local Laya](https://docs.kedi-lang.org/agent-adapters/laya/). The
+refund reason, the field Needle gets wrong most often, is a finite choice of the kind Laya
+evaluates; this example does not measure Laya. It covers open fields such as names and
+amounts.
 
 ## Files
 
