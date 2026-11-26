@@ -30,6 +30,7 @@ WORKFLOWS = {
     "flappy_kedi",
     "local_speech",
     "local_extraction",
+    "local_vision",
 }
 
 

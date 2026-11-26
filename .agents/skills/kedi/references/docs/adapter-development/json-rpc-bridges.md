@@ -148,6 +148,11 @@ history of its own outside `state`, so the two sides never disagree. A turn
 with another model, tools or settings is another lane (see
 [Conversations and History](conversations.md)) and starts from `null`.
 
+`state` travels in every `run`, so it counts against the 8 MiB frame. Keep large
+values, such as media the conversation already sent, out of it: store an id the
+backend can resolve instead of the bytes. A run whose frame would exceed the
+limit fails with `-32600` before it is sent.
+
 ### Media
 
 With `mediaInput`, a prompt's media arrives in `userContent`, laid out as
