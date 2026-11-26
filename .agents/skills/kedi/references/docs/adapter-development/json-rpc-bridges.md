@@ -49,7 +49,7 @@ it has not exited within the timeout.
 
 | Method | Direction | Params | Result |
 |---|---|---|---|
-| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) |
+| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`, `mcp`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) and [MCP Servers](#mcp-servers) |
 | `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"content": [...]}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
@@ -57,6 +57,7 @@ it has not exited within the timeout.
 | `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
+| `artifact/admit` | bridge → Kedi | `runId`, `callId`, `tool`, `origin`, `result` | `result`: what the model sees, the result itself or Kedi's artifact reference; see [MCP Servers](#mcp-servers) |
 | `hook/invoke` | bridge → Kedi | `runId`, `event`, `callId`, `tool`, `origin`, `arguments`, optional `inputSchema`, `result`, `error` (`type`, `message`), `interrupted` | for `pre_tool_use`: `decision` (`continue`, `edit` with `arguments`, or `deny` with `reason`); otherwise `{}`; see [Hooks](#hooks) |
 | `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
 | `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
@@ -107,6 +108,8 @@ actions the bridge parses.
 | `settings` | the profile's `> settings:` the bridge listed in `initialize`, as name and value |
 | `effort` | the profile's `> effort:` level, or `null` |
 | `hooks` | the tool events that have handlers, for a bridge with `nativeTools`: send `hook/invoke` for these only (see [Hooks](#hooks)); empty otherwise |
+| `mcpServers` | the profile's `> mcp:` servers: `transport`, `command`, `args`, `env`, `url`, `headers` |
+| `admitResults` | for a bridge with `nativeTools`: whether each of its tools' results goes through `artifact/admit` before the model sees it |
 | `system` | the system text: send it verbatim as the system or developer message |
 | `instructionParts` | the same text as parts, each with `identity`, `source` and `content` |
 | `user` | the prompt: send it verbatim as the user turn |
@@ -261,6 +264,33 @@ model provider runs. With no handlers, `hooks` is empty and nothing is sent.
 A hook that fails or times out stops the run, as for Kedi tools: a failing
 hook is a failing safety or audit control. Kedi refuses `hook/invoke` from a
 bridge without `nativeTools`.
+
+### MCP Servers
+
+A bridge with `nativeTools` lists in `initialize` the `> mcp:` transports it
+connects, in `mcp` `{"transports": [...]}`: `stdio`, `http` (streamable HTTP)
+and `sse`. Kedi refuses, before the run, a server whose transport the bridge
+did not list, and every server for a bridge that lists none. Each run carries
+the profile's servers in `mcpServers`; connect them for the run, offer their
+tools to the model, and close them when the run ends.
+
+An MCP tool is the bridge's own tool, so each call goes through the steps a
+Kedi tool's wrapper takes, in this order:
+
+1. `hook/invoke` `pre_tool_use` with `origin` `mcp`, when the run's `hooks`
+   lists it;
+2. `approval/request` with `origin` `mcp` and `risk` `mutating`: a server
+   cannot declare its tools read-only to Kedi;
+3. `budget/admit` with `toolAttempt`, for a governed bridge;
+4. the call itself, then `hook/invoke` `post_tool_use` or
+   `post_tool_use_failure`;
+5. `artifact/admit` with the result, when the run's `admitResults` is true:
+   send the model the `result` Kedi returns. For a large result it is an
+   artifact reference, and the model reads the rest with Kedi's artifact tools.
+
+`artifact/admit` applies to every result of a bridge tool, not only MCP ones.
+Kedi's tool-attempt budget still refuses profiles with MCP servers, as for
+every adapter.
 
 ### Subagents
 
@@ -419,7 +449,9 @@ and tries `fallbackModels` when a request fails. With `--image-output` it asks
 image models to draw (OpenRouter's chat completions with `modalities`
 `image`), and with `--audio-output` audio models to speak (OpenAI's chat
 completions audio); `reference_bridge_command(..., image_output=True,
-audio_output=True)` passes them. Start a new bridge from it.
+audio_output=True)` passes them. In native mode it connects `stdio` MCP
+servers for each run, taking each MCP call through the steps above. Start a new
+bridge from it.
 
 ## Conformance
 

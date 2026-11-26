@@ -28,7 +28,7 @@ from jsonschema.validators import validator_for
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
-from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
+from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported, McpServerSpec
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS, speech_voice
 from ....effort import EFFORT_VALUES
 from ....errors import KediExecutionError
@@ -81,7 +81,11 @@ from ...subagents import SubagentExecutionRequest, SubagentUsageLimits, accept_s
 from ...subagents.context import current_subagent_execution
 from ...subagents.control import AgentInput, LiveInput, controlled_attempt, current_live_input
 from ...tools.errors import correctable_tool_error
-from ...tools.execution import validate_tool_arguments
+from ...tools.execution import (
+    admit_current_artifact_result,
+    current_artifact_admission,
+    validate_tool_arguments,
+)
 from ...tools.specs import ToolSpec
 from .connection import Connection
 from .protocol import (
@@ -91,6 +95,7 @@ from .protocol import (
     HOOK_EVENTS,
     INTERRUPTED,
     INVALID_PARAMS,
+    MCP_TRANSPORTS,
     MEDIA_KINDS,
     METHOD_NOT_FOUND,
     NATIVE_TOOLS,
@@ -186,6 +191,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
                 "settings",
                 "image_output",
                 "audio_output",
+                "mcp",
+                "native_artifacts",
             }
         ),
         supports_profile_override=True,
@@ -195,7 +202,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
         hooks=HookCapabilities.full(tool_bridge="kedi", tool_origins=frozenset({"kedi"})),
         supports_effort=None,
         supports_settings=None,
-        supports_mcp=False,
+        supports_mcp=None,
+        supports_native_artifacts=None,
     )
 
     def __init__(
@@ -261,6 +269,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
         self.media_kinds, self.native_tools = peer.media_kinds, peer.native_tools
         self.effort_levels = peer.effort_levels
         """The ``> effort:`` levels the bridge maps to its backend."""
+        self.mcp_transports = peer.mcp_transports
+        """The MCP transports the bridge connects for ``> mcp:`` servers."""
         self.hook_origins = peer.hook_origins
         """The sources of the bridge's own tools: it reports their calls with hook/invoke."""
 
@@ -299,10 +309,17 @@ class JsonRpcAdapter(HookRegistrationMixin):
             name
             for name, present in (
                 ("effort", profile.effort is not None and profile.effort not in self.effort_levels),
-                ("mcp", bool(profile.mcp_servers)),
             )
             if present
         ]
+        # The bridge connects the servers whose transports it listed.
+        unsupported += sorted(
+            {
+                f"mcp ({server.transport})"
+                for server in profile.mcp_servers
+                if server.transport not in self.mcp_transports
+            }
+        )
         # Kedi applies its own settings; the bridge applies the names it listed.
         unsupported += sorted(
             set(profile.settings) - KEDI_RUNTIME_SETTING_KEYS - self.capabilities.settings
@@ -522,6 +539,9 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "session": None,
             "subagent": None if child is None else _lineage(child, parent_run_id, limits),
             "hooks": self._hook_events(),
+            "mcpServers": [_mcp_server(server) for server in self.active_profile.mcp_servers],
+            # Results of the bridge's own tools go through artifact/admit before the model.
+            "admitResults": self.native_tools and current_artifact_admission() is not None,
         }
         commit: Callable[[Any], None] | None = None
         if child is not None and self.capabilities.supports_stateful_history:
@@ -692,6 +712,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "budget/admit": self._parse_admission,
             "approval/request": self._parse_approval,
             "hook/invoke": self._parse_hook,
+            "artifact/admit": self._parse_artifact,
         }.get(method)
         try:
             if parse is None:
@@ -748,17 +769,20 @@ class JsonRpcAdapter(HookRegistrationMixin):
             raise JsonRpcError(UNSUPPORTED, "approval/request needs the nativeTools capability")
         tool, arguments = params.get("tool"), params.get("arguments")
         risk, description = params.get("risk"), params.get("description")
+        origin = params.get("origin", "adapter_native")
         if (
             not isinstance(params.get("runId"), str)
             or not isinstance(tool, str)
             or not isinstance(arguments, dict)
             or risk not in TOOL_RISKS
             or not isinstance(description, str | None)
+            or origin not in self.hook_origins
         ):
             raise JsonRpcError(
                 INVALID_PARAMS,
                 "approval/request needs a string runId and tool, object arguments, a risk "
-                f"of {', '.join(sorted(TOOL_RISKS))}, and an optional string description",
+                f"of {', '.join(sorted(TOOL_RISKS))}, an optional string description, and an "
+                f"origin of {', '.join(sorted(self.hook_origins))}",
             )
         request = ApprovalRequest.create(
             tool_name=tool,
@@ -766,9 +790,35 @@ class JsonRpcAdapter(HookRegistrationMixin):
             risk=cast(ToolRisk, risk),
             adapter_shortname=self.shortname,
             description=description,
-            metadata={"source": "jsonrpc-bridge", "backend": self.backend["name"]},
+            metadata={"source": origin, "bridge": "jsonrpc", "backend": self.backend["name"]},
         )
         return lambda request_id, run: self._approve(request_id, run, request)
+
+    def _parse_artifact(self, params: JsonObject) -> _Handler:
+        if not self.native_tools:
+            raise JsonRpcError(UNSUPPORTED, "artifact/admit needs the nativeTools capability")
+        tool, call_id = params.get("tool"), params.get("callId")
+        if not isinstance(tool, str) or not isinstance(call_id, str) or "result" not in params:
+            raise JsonRpcError(
+                INVALID_PARAMS, "artifact/admit needs a string tool and callId, and a result"
+            )
+        result = params["result"]
+        return lambda request_id, run: self._admit_result(request_id, run, tool, call_id, result)
+
+    async def _admit_result(
+        self, request_id: int | str, run: _Run, tool: str, call_id: str, result: Any
+    ) -> None:
+        """What the model sees of a bridge tool's result: it, or Kedi's artifact reference."""
+
+        try:
+            visible = await admit_current_artifact_result(result, tool_name=tool, call_id=call_id)
+        except asyncio.CancelledError:
+            self._connection.respond(request_id, error=JsonRpcError(CANCELLED, "the run ended"))
+            raise
+        except Exception as exc:  # a result too large to admit at all fails the run
+            self._stop(request_id, run, exc)
+            return
+        self._connection.respond(request_id, result={"result": to_jsonable_python(visible)})
 
     def _parse_hook(self, params: JsonObject) -> _Handler:
         event, origin, tool = params.get("event"), params.get("origin"), params.get("tool")
@@ -1044,6 +1094,20 @@ def _bridge_error(error: JsonObject) -> Exception:
     return kind(str(error.get("message") or ""))
 
 
+def _mcp_server(server: McpServerSpec) -> JsonObject:
+    """A ``> mcp:`` server, as the bridge connects it."""
+
+    spec = server.normalized()
+    return {
+        "transport": spec.transport,
+        "command": spec.command,
+        "args": list(spec.args),
+        "env": dict(spec.env or {}),
+        "url": spec.url,
+        "headers": dict(spec.headers or {}),
+    }
+
+
 def _bridge_tool(**_: Any) -> Any:
     """A bridge's own tool runs in the bridge; Kedi only describes it for hooks."""
 
@@ -1130,6 +1194,7 @@ class _Peer:
     native_tools: bool
     effort_levels: frozenset[str]
     hook_origins: frozenset[HookToolOrigin]
+    mcp_transports: frozenset[str]
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -1163,12 +1228,19 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         raise JsonRpcError(INVALID_PARAMS, f"settings lists Kedi's own settings: {', '.join(own)}")
     if not isinstance(effort, list) or not set(effort) <= EFFORT_VALUES:
         raise JsonRpcError(INVALID_PARAMS, f"effort must list levels of {sorted(EFFORT_VALUES)}")
+    mcp = handshake.get("mcp", {})
+    transports = mcp.get("transports", []) if isinstance(mcp, dict) else None
+    if not isinstance(transports, list) or not set(transports) <= MCP_TRANSPORTS:
+        raise JsonRpcError(
+            INVALID_PARAMS, f"mcp.transports must list transports of {sorted(MCP_TRANSPORTS)}"
+        )
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
     # A bridge that runs tools of its own reports their calls to Kedi's hooks.
-    origins: frozenset[HookToolOrigin] = (
-        frozenset({"adapter_native", "provider_builtin"}) if native_tools else frozenset()
+    native: tuple[HookToolOrigin, ...] = ("adapter_native", "provider_builtin")
+    origins = frozenset[HookToolOrigin](
+        (*(native if native_tools else ()), *(("mcp",) if transports else ()))
     )
     subagents = flags["supports_subagents"]
     live_input, interrupt = (
@@ -1179,6 +1251,11 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         (subagents and not governed, "subagents need governed: Kedi admits each child request"),
         (live_input and not subagents, "liveInput needs subagents"),
         (interrupt and not live_input, "interrupt needs liveInput"),
+        (
+            bool(transports) and not native_tools,
+            "mcp needs nativeTools: MCP tools are the bridge's own, so approval, hooks and "
+            "artifacts apply",
+        ),
     ):
         if unmet:
             raise JsonRpcError(INVALID_PARAMS, problem)
@@ -1213,7 +1290,9 @@ def _negotiate(handshake: JsonObject) -> _Peer:
             tool_bridge="native" if origins else "kedi",
             tool_origins=frozenset({"kedi", *origins}),
         ),
-        supports_mcp=False,
+        supports_mcp=bool(transports),
+        # A bridge with tools of its own admits their results with artifact/admit.
+        supports_native_artifacts=native_tools,
     )
     return _Peer(
         kind,
@@ -1223,6 +1302,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         native_tools,
         frozenset(effort),
         origins,
+        frozenset(transports),
     )
 
 
