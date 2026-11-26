@@ -562,7 +562,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
             commit = partial(conversation.result_state.__setitem__, "bridge")
         self._runs[run_id] = run
         try:
-            with agent_event_run(self.shortname) as run.events:
+            with self._quoting_bridge(), agent_event_run(self.shortname) as run.events:
                 attempt = self._attempts(run, params, validator, required, accept, commit)
                 control = current_live_input()
                 if control is None or not self.capabilities.supports_live_subagent_input:
@@ -610,6 +610,9 @@ class JsonRpcAdapter(HookRegistrationMixin):
                     and "state" in data
                 ):
                     commit(data["state"])
+                if run.failure is not None:
+                    # Kedi stopped the run; what the bridge reported stays attached.
+                    raise run.failure from self._quoted(error)
                 raise
             finally:
                 if run.failure is not None:
@@ -640,6 +643,23 @@ class JsonRpcAdapter(HookRegistrationMixin):
             governed = bool(self.capabilities.supports_request_budget)
             report_invocation(_usage(result.get("usage"), requests_counted=governed))
         return result
+
+    def _quoted(self, error: JsonRpcError) -> JsonRpcError:
+        """``error`` with the bridge's last stderr lines; a disconnect already quotes them."""
+
+        if not isinstance(error, JsonRpcDisconnected) and not error.stderr:
+            error.stderr = self._connection.stderr_tail
+        return error
+
+    @contextmanager
+    def _quoting_bridge(self) -> Generator[None, None, None]:
+        """A bridge failure leaving the run carries the bridge's stderr."""
+
+        try:
+            yield
+        except JsonRpcError as error:
+            self._quoted(error)
+            raise
 
     def _hook_events(self) -> list[str]:
         """The tool events with handlers: the bridge sends hook/invoke for these only."""

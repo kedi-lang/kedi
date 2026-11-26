@@ -1695,3 +1695,75 @@ def test_an_admission_still_running_when_the_run_ends_is_cancelled(
     while f"admit reply {CANCELLED}" not in adapter._connection.stderr_tail:
         assert time.monotonic() < deadline
         time.sleep(0.05)
+
+
+def wait_for_stderr(adapter: JsonRpcAdapter, line: str) -> None:
+    deadline = time.monotonic() + 10
+    while line not in adapter._connection.stderr_tail:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def test_a_bridge_failure_quotes_the_harness_error_and_stderr(adapters: list) -> None:
+    adapter = peer("harness-errors")
+    adapters.append(adapter)
+    error = failure("[r] << Fail.\n= <r>\n", adapter)
+    assert isinstance(error, JsonRpcError)
+    text = str(error)
+    assert text.startswith("the harness failed\n")
+    assert "harness error: ProviderError: 429 rate limited" in text
+    assert "  caused by: HTTPError: Too Many Requests" in text
+    assert "bridge stderr:\n  [harness] retrying the provider\n  [harness] giving up" in text
+    # What Kedi sends a bridge stays the bare message.
+    assert error.to_json() == {"code": -32002, "message": "the harness failed"}
+
+
+def test_kedis_own_error_keeps_what_the_bridge_reported(adapters: list) -> None:
+    adapter = peer("harness-errors")
+    adapters.append(adapter)
+    runtime = compile_program(
+        parse_program("> budget:\n    request_limit: 1\n[r] << Spend.\n= <r>\n"), adapter=adapter
+    )
+    try:
+        with pytest.raises(KediExecutionError) as caught:
+            runtime.run_main()
+    finally:
+        asyncio.run(runtime.aclose())
+    error = caught.value
+    assert isinstance(error, RunBudgetExceeded)
+    bridge = error.__cause__
+    assert isinstance(bridge, JsonRpcError) and bridge.code == RUN_FAILED
+    # Kedi's error names its cause first, then what the harness said behind it.
+    rendered = error.render()
+    assert rendered.index("Run request budget exhausted") < rendered.index("from the bridge:")
+    assert "  harness error: ProviderError: 429 rate limited" in rendered
+    assert "  bridge stderr:" in rendered
+
+
+def test_a_bridge_error_without_a_report_renders_as_before() -> None:
+    plain = JsonRpcError(RUN_FAILED, "model endpoint answered 500")
+    assert plain.bridge_report is None and str(plain) == "model endpoint answered 500"
+    odd = JsonRpcError(RUN_FAILED, "failed", {"harness": {"message": "no type"}})
+    assert odd.bridge_report == "harness error: Error: no type"
+
+
+def test_kedis_error_rendering_quotes_at_most_four_bridge_causes() -> None:
+    from kedi.error_rendering import _bridge_causes
+
+    top = RuntimeError("Kedi stopped it")
+    current: BaseException = top
+    for number in range(6):
+        # A cause without a report (a plain error) is passed over, not quoted.
+        cause: BaseException = (
+            ValueError("plain")
+            if number == 1
+            else JsonRpcError(RUN_FAILED, f"bridge {number}", {"harness": {"message": "x"}})
+        )
+        current.__cause__ = cause
+        current = cause
+    lines = _bridge_causes(top)
+    assert [line for line in lines if line.startswith("from the bridge:")] == [
+        "from the bridge: bridge 0",
+        "from the bridge: bridge 2",
+        "from the bridge: bridge 3",
+    ]

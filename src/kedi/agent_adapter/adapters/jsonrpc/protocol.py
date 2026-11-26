@@ -154,16 +154,47 @@ BUDGET_DIMENSIONS: Final = {"request": "request", "toolAttempt": "tool_attempt"}
 TOOL_RISKS: Final = frozenset({"read_only", "mutating", "sensitive"})
 
 
+STDERR_LINES: Final = 5
+"""How many of the bridge's last stderr lines a bridge failure quotes."""
+
+
 class JsonRpcError(RuntimeError):
-    """A JSON-RPC error response, or a protocol failure Kedi raises with one of the codes."""
+    """A JSON-RPC error response, or a protocol failure Kedi raises with one of the codes.
+
+    A bridge's error may carry the harness's own failure in ``data.harness``: ``{type,
+    message, cause?}``, ``cause`` being another such object. Kedi quotes it, and the bridge's
+    last stderr lines, so the harness's error is never lost behind Kedi's.
+    """
 
     def __init__(self, code: int, message: str, data: Any = None) -> None:
         super().__init__(message)
         self.code = code
         self.data = data
+        self.stderr: tuple[str, ...] = ()
+        """The bridge's last stderr lines when the failure surfaced."""
 
     def to_json(self) -> JsonObject:
-        return {"code": self.code, "message": str(self)}
+        return {"code": self.code, "message": self.args[0]}
+
+    @property
+    def bridge_report(self) -> str | None:
+        """The harness's error and the bridge's stderr, or ``None`` when there is neither."""
+
+        lines: list[str] = []
+        harness = self.data.get("harness") if isinstance(self.data, dict) else None
+        prefix = "harness error"
+        while isinstance(harness, dict) and len(lines) < 8:
+            kind, message = harness.get("type"), harness.get("message")
+            lines.append(f"{prefix}: {kind or 'Error'}: {message or ''}".rstrip(": "))
+            harness, prefix = harness.get("cause"), "  caused by"
+        if self.stderr:
+            lines.append("bridge stderr:")
+            lines.extend(f"  {line}" for line in self.stderr[-STDERR_LINES:])
+        return "\n".join(lines) or None
+
+    def __str__(self) -> str:
+        report = self.bridge_report
+        return self.args[0] if report is None else f"{self.args[0]}\n{report}"
 
 
 class JsonRpcDisconnected(JsonRpcError):

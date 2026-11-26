@@ -168,8 +168,29 @@ def _render_error_footer(
     title = _error_title(error)
     detail = _error_detail(error)
     console.print(Text(title, style=_role_style(style, "error_title")))
-    if detail:
-        console.print(Text(f"  {detail}", style=_role_style(style, "error_detail")))
+    failure = error.original if error.original is not None else error
+    lines = [*(detail.splitlines() if detail else ()), *_bridge_causes(failure)]
+    for line in lines:
+        console.print(Text(f"  {line}", style=_role_style(style, "error_detail")))
+
+
+def _bridge_causes(exc: BaseException) -> list[str]:
+    """What an adapter bridge reported behind ``exc``: Kedi's error never hides the harness's.
+
+    A cause with a ``bridge_report`` (a JSON-RPC bridge's error) adds its message and report.
+    """
+
+    lines: list[str] = []
+    cause = exc.__cause__
+    for _ in range(4):
+        if cause is None:
+            break
+        report = getattr(cause, "bridge_report", None)
+        if isinstance(report, str):
+            message = cause.args[0] if cause.args else type(cause).__name__
+            lines += [f"from the bridge: {message}", *report.splitlines()]
+        cause = cause.__cause__
+    return lines
 
 
 def _error_title(error: KediExecutionError) -> str:
