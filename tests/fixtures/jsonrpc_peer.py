@@ -49,6 +49,9 @@ def handshake() -> dict[str, Any]:
         result["kind"] = "agent-framework"
     elif SCENARIO == "events":
         result["capabilities"] = {**CAPABILITIES, "events": True}
+    elif SCENARIO.startswith("media"):
+        result["capabilities"] = {**CAPABILITIES, "mediaInput": True}
+        result["mediaKinds"] = {"media": ["image"], "media-bad-kinds": ["smell"]}.get(SCENARIO, [])
     elif SCENARIO == "nameless":
         result["backend"] = {}
     elif SCENARIO == "capabilities-list":
@@ -126,6 +129,13 @@ def run(request_id: int, params: dict[str, Any]) -> None:
             }
         )
         send({"id": request_id, "result": {"text": final}})
+        return
+    if SCENARIO == "media":
+        parts = [
+            {key: value for key, value in part.items() if key != "data"} | {"bytes": "data" in part}
+            for part in params["userContent"] or []
+        ]
+        send({"id": request_id, "result": {"text": json.dumps(parts, sort_keys=True)}})
         return
     if SCENARIO == "bad-error-code":
         send({"id": request_id, "error": {"code": "x", "message": "untyped failure"}})

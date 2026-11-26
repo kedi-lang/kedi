@@ -9,6 +9,7 @@ answer and, when it is wrong, sends its own correction as a continuation of the 
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import inspect
 import shlex
@@ -25,6 +26,7 @@ from pydantic_core import to_jsonable_python
 
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
+from ....media import MediaError
 from ...approvals.policy import ToolApprovalDenied
 from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
@@ -39,6 +41,8 @@ from ...request import (
     call_request,
     output_validator,
 )
+from ...request.context import take_prompt_media
+from ...request.media import MediaAttachment, attachment_content
 from ...request.prompts import output_correction, protocol_correction, required_tools_correction
 from ...tools.errors import correctable_tool_error
 from ...tools.execution import validate_tool_arguments
@@ -48,6 +52,7 @@ from .protocol import (
     CANCELLED,
     CAPABILITIES,
     INVALID_PARAMS,
+    MEDIA_KINDS,
     METHOD_NOT_FOUND,
     PROTOCOL_VERSION,
     RUN_FAILED,
@@ -95,8 +100,9 @@ class JsonRpcAdapter:
         supports_tool_registration=None,
         supports_artifacts=None,
         supports_stream_events=None,
+        supports_media_input=None,
         negotiated_capabilities=frozenset(
-            {"structured_output", "tool_registration", "artifacts", "stream_events"}
+            {"structured_output", "tool_registration", "artifacts", "stream_events", "media_input"}
         ),
         supports_profile_override=True,
         supports_model_override=True,
@@ -148,7 +154,7 @@ class JsonRpcAdapter:
                 {"protocolVersion": PROTOCOL_VERSION, "client": {"name": "kedi"}},
                 timeout=initialize_timeout,
             )
-            self.kind, self.backend, self.capabilities = _negotiate(handshake)
+            self.kind, self.backend, self.capabilities, self.media_kinds = _negotiate(handshake)
         except BaseException:
             self._connection.close(timeout=1)
             raise
@@ -263,6 +269,13 @@ class JsonRpcAdapter:
             tools=tools,
         )
         rendered = request.render()
+        # The first native run in a Kedi call takes the prompt's media; nested runs get none.
+        attachments = take_prompt_media()
+        user_content = (
+            _user_content(rendered.user, attachments, self.media_kinds, self.backend["name"])
+            if attachments
+            else None
+        )
         validator = output_validator(request.output, request=request)
         run_id = uuid4().hex
         run = _Run(
@@ -283,6 +296,7 @@ class JsonRpcAdapter:
                 for part in rendered.instruction_parts
             ],
             "user": rendered.user,
+            "userContent": user_content,
             "output": None
             if rendered.output_json_schema is None
             else {"schema": rendered.output_json_schema, "toolName": rendered.output_tool_name},
@@ -454,8 +468,10 @@ def _call(tool: ToolSpec, arguments: JsonObject) -> Any:
     return tool.fn(**validate_tool_arguments(tool, arguments))
 
 
-def _negotiate(handshake: JsonObject) -> tuple[AgentAdapterKind, JsonObject, AdapterCapabilities]:
-    """The bridge's kind, identity and capabilities, or an error naming what is wrong."""
+def _negotiate(
+    handshake: JsonObject,
+) -> tuple[AgentAdapterKind, JsonObject, AdapterCapabilities, frozenset[str]]:
+    """The bridge's kind, identity, capabilities and media kinds, or what is wrong."""
 
     version = handshake.get("protocolVersion")
     if version != PROTOCOL_VERSION:
@@ -473,6 +489,11 @@ def _negotiate(handshake: JsonObject) -> tuple[AgentAdapterKind, JsonObject, Ada
     if not isinstance(advertised, dict):
         raise JsonRpcError(INVALID_PARAMS, "capabilities must be an object")
     flags = {flag: advertised.get(name) is True for name, flag in CAPABILITIES.items()}
+    kinds = handshake.get("mediaKinds", [])
+    if not isinstance(kinds, list) or not set(kinds) <= MEDIA_KINDS:
+        raise JsonRpcError(INVALID_PARAMS, f"mediaKinds must list kinds of {sorted(MEDIA_KINDS)}")
+    if flags["supports_media_input"] and not kinds:
+        raise JsonRpcError(INVALID_PARAMS, "mediaInput needs mediaKinds")
     tools = flags["supports_tool_registration"]
     capabilities = AdapterCapabilities(
         supports_structured_output=flags["supports_structured_output"],
@@ -481,13 +502,43 @@ def _negotiate(handshake: JsonObject) -> tuple[AgentAdapterKind, JsonObject, Ada
         supports_native_structured_output=flags["supports_native_structured_output"],
         supports_native_tool_calling=flags["supports_native_tool_calling"],
         supports_stream_events=flags["supports_stream_events"],
+        supports_media_input=flags["supports_media_input"],
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,
         supports_settings=False,
         supports_mcp=False,
     )
-    return kind, backend, capabilities
+    return kind, backend, capabilities, frozenset(kinds)
+
+
+def _user_content(
+    prompt: str, attachments: Sequence[MediaAttachment], kinds: frozenset[str], bridge: str
+) -> list[JsonObject]:
+    """The user turn as Kedi lays it out, each attachment where its label puts it."""
+
+    parts: list[JsonObject] = []
+    for piece in attachment_content(prompt, attachments):
+        if isinstance(piece, str):
+            parts.append({"type": "text", "text": piece})
+            continue
+        media = piece.media
+        if media.kind not in kinds:
+            raise MediaError(f"{piece.name}: bridge {bridge!r} does not take {media.kind} input")
+        part: JsonObject = {
+            "type": "media",
+            "name": piece.name,
+            "kind": media.kind,
+            "mediaType": media.media_type,
+        }
+        if media.data is not None:
+            part["data"] = base64.b64encode(media.data).decode("ascii")
+        elif media.url is not None:
+            part["url"] = media.url
+        else:
+            raise MediaError(f"{piece.name}: a provider file id cannot cross a JSON-RPC bridge")
+        parts.append(part)
+    return parts
 
 
 def _check_answer(

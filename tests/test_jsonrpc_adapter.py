@@ -74,6 +74,7 @@ def test_the_reference_bridge_in_javascript_passes_the_conformance_kit(mode: str
     )
     assert report.passed, report.render()
     assert report.harness_text == []
+    assert {result.name: result.status for result in report.results}["media"] == "passed"
 
 
 def test_for_conformance_runs_the_reference_bridge() -> None:
@@ -539,3 +540,72 @@ def test_the_reference_bridge_reports_commentary_events() -> None:
         server.shutdown()
     messages = [(e.phase, e.content) for e in events if isinstance(e, AgentMessageEvent)]
     assert messages == [("commentary", "Checking."), ("final", "Sunny.")]
+
+
+PIXEL = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+def test_prompt_media_crosses_the_bridge_in_kedis_layout(adapters: list) -> None:
+    adapter = peer("media")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_media_input and adapter.media_kinds == {"image"}
+    source = (
+        f'> import: media\n[chart: Image] = `image("{PIXEL}")`\n'
+        '[icon: Image] = `image("https://example.com/icon.png")`\n'
+        "[reply] << Compare <<chart>> with <<icon>>.\n= <reply>\n"
+    )
+    parts = json.loads(run(source, adapter))
+    assert [part["type"] for part in parts] == ["text", "media", "text", "media", "text"]
+    chart, icon = parts[1], parts[3]
+    assert chart == {
+        "type": "media",
+        "name": "chart",
+        "kind": "image",
+        "mediaType": "image/png",
+        "bytes": True,
+    }
+    assert icon["url"] == "https://example.com/icon.png" and icon["bytes"] is False
+    assert parts[0]["text"].startswith('<attachments>\n<image id="chart" type="image/png">')
+    assert parts[-1]["text"].endswith("Compare chart with icon.")
+
+
+def test_media_the_bridge_cannot_send_is_refused_before_the_run(adapters: list) -> None:
+    from kedi.media import Audio, Image, MediaError
+
+    adapter = peer("media")
+    adapters.append(adapter)
+    sound = Audio(media_type="audio/wav", data=b"RIFF0000WAVEfmt ")
+    stored = Image(media_type="image/png", file_id="file-1", provider="openai")
+    for kind, value, message in (
+        ("Audio", sound, "sound: bridge 'peer' does not take audio input"),
+        ("Image", stored, "a provider file id cannot cross a JSON-RPC bridge"),
+    ):
+        source = (
+            f"> import: media\n[sound: {kind}] = `value`\n[reply] << Hear <<sound>>.\n= <reply>\n"
+        )
+        with pytest.raises(Exception) as caught:
+            run(source, adapter, value=value)
+        error = getattr(caught.value, "original", None) or caught.value
+        assert isinstance(error, MediaError) and message in str(error)
+    # A bridge that did not negotiate media gets none: Kedi refuses before the call.
+    plain = peer("default")
+    adapters.append(plain)
+    error = failure(
+        f'> import: media\n[c: Image] = `image("{PIXEL}")`\n[r] << See <<c>>.\n= <r>\n', plain
+    )
+    assert "does not accept media input" in str(error)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "message"),
+    [
+        ("media-no-kinds", "mediaInput needs mediaKinds"),
+        ("media-bad-kinds", "mediaKinds must list"),
+    ],
+)
+def test_media_capabilities_must_name_their_kinds(scenario: str, message: str) -> None:
+    with pytest.raises(JsonRpcError, match=message):
+        peer(scenario)

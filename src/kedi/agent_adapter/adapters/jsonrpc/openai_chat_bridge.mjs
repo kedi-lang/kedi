@@ -66,6 +66,15 @@ async function complete(body, signal) {
   return (await response.json()).choices[0].message;
 }
 
+function userParts(content) {
+  // Kedi's layout of the user turn: text parts and images where their labels put them.
+  return content.map((part) => {
+    if (part.type === "text") return { type: "text", text: part.text };
+    const url = part.data === undefined ? part.url : `data:${part.mediaType};base64,${part.data}`;
+    return { type: "image_url", image_url: { url } };
+  });
+}
+
 function answerText(answer) {
   // A previous answer, replayed before Kedi's correction, as the model wrote it.
   if ("invalid" in answer) return answer.invalid;
@@ -81,7 +90,7 @@ async function callTool(runId, id, name, args) {
 async function run(params, signal) {
   const messages = [];
   if (params.system) messages.push({ role: "system", content: params.system });
-  messages.push({ role: "user", content: params.user });
+  messages.push({ role: "user", content: params.userContent ? userParts(params.userContent) : params.user });
   if (params.continuation) {
     messages.push({ role: "assistant", content: answerText(params.continuation.answer) });
     messages.push({ role: "user", content: params.continuation.message });
@@ -170,7 +179,9 @@ async function handle(message) {
           nativeStructuredOutput: native,
           nativeToolCalling: native,
           events: true,
+          mediaInput: true,
         },
+        mediaKinds: ["image"],
       },
     });
     return;

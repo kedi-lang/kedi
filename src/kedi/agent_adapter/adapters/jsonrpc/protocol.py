@@ -9,10 +9,11 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
-  capabilities}``. Kedi sends nothing else before it completes.
-- ``run`` ``{runId, callKind, promptKind, model, effort, settings, system, instructionParts,
-  user, output, tools, continuation}`` returns ``{text}`` or ``{data}``, optionally with
-  ``usage``.
+  capabilities, mediaKinds?}``. Kedi sends nothing else before it completes.
+- ``run`` ``{runId, callKind, promptKind, model, system, instructionParts, user, userContent,
+  output, tools, continuation}`` returns ``{text}`` or ``{data}``, optionally with ``usage``.
+  ``userContent`` is ``null``, or the user turn with its media: ``{type: "text", text}`` and
+  ``{type: "media", name, kind, mediaType, data | url}`` parts, ``data`` in base64.
 - ``run/cancel`` (notification) ``{runId}``: stop the run; it answers with ``CANCELLED``.
 - ``shutdown`` ``{}``: finish and exit; Kedi then closes stdin.
 
@@ -33,6 +34,7 @@ PROTOCOL_VERSION: Final = 1
 MAX_FRAME_BYTES: Final = 8 * 1024 * 1024
 
 JsonObject: TypeAlias = dict[str, Any]
+MEDIA_KINDS: Final = frozenset({"image", "audio", "video", "document"})
 BridgeKind: TypeAlias = Literal["agent-framework", "agent-harness"]
 
 # JSON-RPC 2.0 reserved codes, then Kedi's.
@@ -58,11 +60,13 @@ CAPABILITIES: Final = {
     "nativeStructuredOutput": "supports_native_structured_output",
     "nativeToolCalling": "supports_native_tool_calling",
     "events": "supports_stream_events",
+    "mediaInput": "supports_media_input",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
 
-Anything else, such as media, sessions or cancellation guarantees, is not part of version 1
-and stays unavailable whatever the bridge says.
+Anything else, such as sessions, live input or cancellation guarantees, is not part of
+version 1 and stays unavailable whatever the bridge says. ``mediaInput`` needs ``mediaKinds``,
+the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 
@@ -88,6 +92,7 @@ class JsonRpcDisconnected(JsonRpcError):
 __all__ = [
     "CANCELLED",
     "CAPABILITIES",
+    "MEDIA_KINDS",
     "INTERNAL_ERROR",
     "INVALID_PARAMS",
     "INVALID_REQUEST",

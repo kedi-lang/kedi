@@ -40,7 +40,7 @@ it has not exited within the timeout.
 
 | Method | Direction | Params | Result |
 |---|---|---|---|
-| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities` |
+| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds` |
 | `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage` |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
@@ -60,11 +60,12 @@ backend name is refused, and the process is stopped.
 | `nativeStructuredOutput` | the backend takes the output schema natively |
 | `nativeToolCalling` | the backend takes tool definitions natively |
 | `events` | the bridge sends `run/event` notifications |
+| `mediaInput` | the bridge sends prompt media to its model; `mediaKinds` lists the kinds (`image`, `audio`, `video`, `document`) |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
-before sending anything. Version 1 has no media, sessions or live input: a
-bridge cannot enable them by advertising them.
+before sending anything. Version 1 has no sessions or live input: a bridge
+cannot enable them by advertising them.
 
 Without `nativeStructuredOutput` or `nativeToolCalling`, Kedi adds its
 `protocol.output` and `protocol.tools` parts to the system text (see
@@ -81,6 +82,7 @@ actions the bridge parses.
 | `system` | the system text: send it verbatim as the system or developer message |
 | `instructionParts` | the same text as parts, each with `identity`, `source` and `content` |
 | `user` | the prompt: send it verbatim as the user turn |
+| `userContent` | `null`, or the user turn with its media; see [Media](#media) |
 | `output` | `null` for text, or `schema` (the output JSON Schema) and `toolName` |
 | `tools` | each tool's `name`, `description`, `inputSchema`, `outputSchema` and `requiredBeforeOutput` |
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
@@ -128,6 +130,27 @@ the model wrote along the way. Events arrive in stream order before the run's
 answer. Events for a run that is not in progress, of an unknown `type`, or
 without the fields above are ignored, as are all events from a bridge that did
 not negotiate `events`.
+
+### Media
+
+With `mediaInput`, a prompt's media arrives in `userContent`, laid out as
+Kedi lays out every multimodal user turn (see
+[Multimodal Input](multimodal-input.md)): text parts, and each attachment where
+its label puts it.
+
+```json
+[
+  {"type": "text", "text": "<attachments>\n<image id=\"chart\" type=\"image/png\">"},
+  {"type": "media", "name": "chart", "kind": "image", "mediaType": "image/png", "data": "iVBORw0..."},
+  {"type": "text", "text": "</image>\n</attachments>\nDescribe chart in one sentence."}
+]
+```
+
+`data` is base64; a media value given by URL arrives as `url` instead. Send
+`userContent` in place of `user`, each part as the backend's native part. Kedi
+refuses, before the run, a kind outside `mediaKinds` and a provider file id,
+which cannot cross a bridge. A frame holds at most 8 MiB, so send large media
+by URL.
 
 ### Errors
 
