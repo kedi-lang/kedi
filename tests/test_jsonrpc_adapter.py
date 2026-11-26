@@ -1277,3 +1277,25 @@ def test_the_reference_bridge_falls_back_and_applies_settings_and_effort() -> No
             assert [exchange.body["model"] for exchange in endpoint.take()] == ["broken"]
         finally:
             adapter.close()
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
+
+
+def test_the_reference_bridge_keeps_line_separators_inside_a_frame(adapters: list) -> None:
+    # Kedi writes U+2028 and U+2029 unescaped; a frame ends at LF only.
+    prompt = "one two three\rfour"
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True)
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        assert asyncio.run(adapter.invoke(prompt=prompt)) == "done"
+        (exchange,) = endpoint.take()
+        assert prompt in _strings(exchange.body["messages"])

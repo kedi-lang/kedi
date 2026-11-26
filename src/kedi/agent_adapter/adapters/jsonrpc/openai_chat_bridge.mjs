@@ -14,7 +14,6 @@
 //        [--api-key-env NAME] [--max-steps N]
 // stdout carries only protocol frames; diagnostics go to stderr.
 
-import { createInterface } from "node:readline";
 
 const PROTOCOL_VERSION = 1;
 const RUN_FAILED = -32002;
@@ -296,8 +295,7 @@ async function handle(message) {
   send({ id, error: { code: METHOD_NOT_FOUND, message: `unknown method ${method}` } });
 }
 
-const lines = createInterface({ input: process.stdin });
-lines.on("line", (line) => {
+function receive(line) {
   if (!line.trim()) return;
   const message = JSON.parse(line);
   if (message.method === "run/cancel") {
@@ -321,5 +319,19 @@ lines.on("line", (line) => {
   pending.delete(message.id);
   if (message.error) waiter.reject(new RpcError(message.error.code, message.error.message));
   else waiter.resolve(message.result);
+}
+
+// Frames end at LF only. node:readline also ends lines at CR, U+2028 and U+2029, which JSON
+// strings may hold unescaped, so it would split a frame whose text has one.
+let buffered = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffered += chunk;
+  let end;
+  while ((end = buffered.indexOf("\n")) !== -1) {
+    const line = buffered.slice(0, end);
+    buffered = buffered.slice(end + 1);
+    receive(line);
+  }
 });
-lines.on("close", () => process.exit(0));
+process.stdin.on("end", () => process.exit(0));
