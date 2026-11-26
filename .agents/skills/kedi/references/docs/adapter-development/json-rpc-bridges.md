@@ -49,7 +49,7 @@ it has not exited within the timeout.
 
 | Method | Direction | Params | Result |
 |---|---|---|---|
-| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`, `mcp`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) and [MCP Servers](#mcp-servers) |
+| `initialize` | Kedi → bridge | `protocolVersion`, `client`, optional `testModel` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`, `mcp`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) and [MCP Servers](#mcp-servers) |
 | `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"content": [...]}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
@@ -57,6 +57,7 @@ it has not exited within the timeout.
 | `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
+| `model/complete` | bridge → Kedi | `runId`, `model`, `system`, `messages` (Kedi's schema), `tools`, `output` | `message`: the assistant's message in Kedi's schema; see [Test Model](#test-model) |
 | `history/process` | bridge → Kedi | `runId`, `messages` (the conversation so far, in Kedi's schema) | `messages`: what the program's history processor kept; see [History Processing](#history-processing) |
 | `media/get` | bridge → Kedi | `runId`, `ref` | `kind`, `mediaType`, and `data` (base64) or `url`; see [Transcript](#transcript) |
 | `artifact/admit` | bridge → Kedi | `runId`, `callId`, `tool`, `origin`, `result` | `result`: what the model sees, the result itself or Kedi's artifact reference; see [MCP Servers](#mcp-servers) |
@@ -533,6 +534,49 @@ completions audio); `reference_bridge_command(..., image_output=True,
 audio_output=True)` passes them. In native mode it connects `stdio` MCP
 servers for each run, taking each MCP call through the steps above. Start a new
 bridge from it.
+
+## Test Model
+
+A bridge that declares `testModel` can have Kedi answer its model requests,
+for tests with no model endpoint, no network and no cost. Kedi asks for it with
+`testModel: true` in `initialize`; the bridge then sends each model request,
+admitted as usual, as `model/complete` instead of calling its model:
+
+| Field | Content |
+|---|---|
+| `messages` | the conversation as the model would get it, in Kedi's transcript schema; media may be inline (`kind`, `mediaType`, `data` or `url`) |
+| `system` | the system text the bridge sends its model |
+| `tools` | the tools the model may call: `name`, `description`, `inputSchema` |
+| `output` | `schema` and `toolName` for a structured run, `null` for text |
+
+Kedi answers with `message`, the assistant's reply in Kedi's schema (`text`,
+`toolCall`, `reasoning` parts), which the bridge treats as its model's.
+Without `testModel`, Kedi refuses a test model at the handshake.
+
+In Python, `JsonRpcAdapter(command, test_model=script)` takes the script, a
+function, sync or async, in the style of Pydantic AI's `FunctionModel`: it
+receives a `ModelCall` and returns the assistant's text, or a message with
+`parts`. Because it sees exactly what the bridge would send its model, a test
+can check the bridge's prompt, tools and history as well as script its answers:
+
+```python
+from kedi.agent_adapter.adapters.jsonrpc import JsonRpcAdapter, ModelCall
+
+
+def script(call: ModelCall):
+    if not any(message["role"] == "tool" for message in call.messages):
+        return {"parts": [{"type": "toolCall", "id": "t1", "name": "lookup",
+                           "arguments": {"query": "Lyon"}}]}
+    return "Found it."
+
+
+adapter = JsonRpcAdapter(["node", "my_bridge.mjs"], test_model=script)
+```
+
+A harness usually has a scripted model of its own to build this on: pi's
+`@earendil-works/pi-ai` faux provider takes a function of the transcript, and
+a proxy that a bridge runs in front of a harness can answer from Kedi instead
+of forwarding.
 
 ## Conformance
 

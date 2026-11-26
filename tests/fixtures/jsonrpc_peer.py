@@ -58,6 +58,8 @@ def handshake() -> dict[str, Any]:
     elif SCENARIO == "transcript":
         result["capabilities"] = {**CAPABILITIES, "transcript": True, "mediaInput": True}
         result["mediaKinds"] = ["image"]
+    elif SCENARIO == "test-model":
+        result["capabilities"] = {**CAPABILITIES, "testModel": True}
     elif SCENARIO == "both-histories":
         result["capabilities"] = {**CAPABILITIES, "transcript": True, "sessions": True}
     elif SCENARIO == "harness-errors":
@@ -572,6 +574,23 @@ def run(request_id: int, params: dict[str, Any]) -> None:
         return
     if SCENARIO == "transcript":
         transcript_probe(request_id, params)
+        return
+    if SCENARIO == "test-model":
+        call = {"runId": params["runId"], "model": "m", "system": None, "tools": [], "output": None}
+        call["messages"] = [{"role": "user", "parts": [{"type": "text", "text": params["user"]}]}]
+        if params["user"] == "Answer early.":
+            # Answer the run while Kedi's test model still runs: Kedi cancels it.
+            def wait_for_model() -> None:
+                reply = call_kedi("model/complete", call)
+                sys.stderr.write(f"model reply {reply.get('error', {}).get('code')}\n")
+                sys.stderr.flush()
+
+            threading.Thread(target=wait_for_model, daemon=True).start()
+            time.sleep(0.2)
+            send({"id": request_id, "result": {"text": "answered early"}})
+            return
+        reply = call_kedi("model/complete", call)
+        send({"id": request_id, "result": {"text": json.dumps(reply)}})
         return
     if SCENARIO == "both-histories":
         # Which mode Kedi chose: a harness keeps its session unless the program needs Kedi's.

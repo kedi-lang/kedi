@@ -1975,3 +1975,84 @@ def test_a_processor_still_running_when_the_run_ends_is_cancelled(adapters: list
     )
     assert run(source, adapter, recent=slow) == "answered early"
     wait_for_stderr(adapter, f"process reply {CANCELLED}")
+
+
+def test_a_test_model_answers_the_reference_bridges_model_requests(adapters: list) -> None:
+    from kedi.agent_adapter.adapters.jsonrpc import ModelCall
+
+    calls: list[ModelCall] = []
+
+    async def script(call: ModelCall) -> Any:
+        calls.append(call)
+        if not any(message["role"] == "tool" for message in call.messages):
+            return {
+                "parts": [
+                    {"type": "toolCall", "id": "t1", "name": "lookup", "arguments": {"query": "q"}}
+                ]
+            }
+        return "It is found-q."
+
+    # No model endpoint at all: the bridge sends every request to Kedi.
+    adapter = JsonRpcAdapter(reference_bridge_command("http://127.0.0.1:9/v1"), test_model=script)
+    adapters.append(adapter)
+    with adapter.tool_scope((lookup_tool(),)):
+        assert asyncio.run(adapter.invoke(prompt="Look it up.")) == "It is found-q."
+    first, second = calls
+    # The script sees what the bridge would send its model, in Kedi's schema.
+    assert [tool["name"] for tool in first.tools] == ["lookup"]
+    assert first.messages[-1] == {
+        "role": "user",
+        "parts": [{"type": "text", "text": "Look it up."}],
+    }
+    assert [message["role"] for message in second.messages] == ["user", "assistant", "tool"]
+    assert "found-q" in json.dumps(second.messages[-1])
+
+
+def test_a_test_model_gives_structured_answers_and_sees_the_output_schema(adapters: list) -> None:
+    from kedi.agent_adapter.adapters.jsonrpc import ModelCall
+
+    seen: list[ModelCall] = []
+
+    def script(call: ModelCall) -> str:
+        seen.append(call)
+        return json.dumps({"capital": "Ankara"})
+
+    adapter = JsonRpcAdapter(reference_bridge_command("http://127.0.0.1:9/v1"), test_model=script)
+    adapters.append(adapter)
+    assert run(">> The capital of Turkey is [capital: str].\n= <capital>\n", adapter) == "Ankara"
+    (call,) = seen
+    assert call.output is not None and "capital" in json.dumps(call.output["schema"])
+    assert call.system is not None
+
+
+def test_a_bridge_without_a_test_model_refuses_one(adapters: list) -> None:
+    with pytest.raises(JsonRpcError, match="bridge 'peer' has no test model"):
+        peer("default", test_model=lambda call: "hi")
+    plain = peer("default")
+    adapters.append(plain)
+    with pytest.raises(JsonRpcError, match="model/complete: Kedi asked for no test model"):
+        plain._parse_model_call({"runId": "r", "messages": []})
+
+
+def test_a_test_models_answer_is_checked_and_its_failure_stops_the_run(adapters: list) -> None:
+    adapter = peer("test-model", test_model=lambda call: 42)
+    adapters.append(adapter)
+    with pytest.raises(JsonRpcError, match="model/complete needs lists of messages and tools"):
+        adapter._parse_model_call({"runId": "r", "messages": "hi"})
+    with pytest.raises(Exception, match="a test model returns the assistant's text"):
+        adapter.invoke_sync(prompt="Ask.")
+    checked = peer("test-model", test_model=lambda call: {"parts": [{"type": "hologram"}]})
+    adapters.append(checked)
+    with pytest.raises(Exception, match=r"parts\[0\] must be one of"):
+        checked.invoke_sync(prompt="Ask.")
+
+
+def test_a_test_model_still_running_when_the_run_ends_is_cancelled(adapters: list) -> None:
+    async def slow(call: Any) -> str:
+        await asyncio.sleep(30)
+        raise AssertionError("the test model should have been cancelled")
+
+    adapter = peer("test-model", test_model=slow)
+    adapters.append(adapter)
+    assert adapter.invoke_sync(prompt="Answer early.") == "answered early"
+    wait_for_stderr(adapter, f"model reply {CANCELLED}")

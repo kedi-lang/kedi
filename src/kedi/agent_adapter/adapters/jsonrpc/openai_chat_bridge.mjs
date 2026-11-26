@@ -41,6 +41,8 @@ const apiKey = process.env[option("api-key-env", "OPENAI_API_KEY")] ?? "unused";
 const maxSteps = Number(option("max-steps", "8"));
 const native = mode === "native";
 const imageOutput = native && process.argv.includes("--image-output");
+// Set by initialize: Kedi's test model answers the model requests (model/complete).
+let testMode = false;
 const audioOutput = native && process.argv.includes("--audio-output");
 
 function log(...parts) {
@@ -91,6 +93,7 @@ async function complete(runId, body, models, signal) {
       // Kedi fails the run with its own error; the request is never sent.
       throw new RpcError(RUN_FAILED, admission.reason);
     }
+    if (testMode) return reported(runId, await testCompletion(runId, { ...body, model }));
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
@@ -102,6 +105,52 @@ async function complete(runId, body, models, signal) {
     log(failure.message);
   }
   throw failure;
+}
+
+async function testCompletion(runId, body) {
+  // One request answered by Kedi's test model, in Kedi's schema both ways.
+  const [system, ...rest] = body.messages[0]?.role === "system" ? body.messages : [null, ...body.messages];
+  const format = body.response_format?.json_schema;
+  const answer = await request("model/complete", {
+    runId,
+    model: body.model,
+    system: system?.content ?? null,
+    messages: rest.map(chatToKedi),
+    tools: (body.tools ?? []).map((tool) => ({
+      name: tool.function.name,
+      description: tool.function.description,
+      inputSchema: tool.function.parameters,
+    })),
+    output: format ? { schema: format.schema, toolName: format.name } : null,
+  });
+  const parts = answer.message.parts;
+  const text = parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+  const calls = parts
+    .filter((part) => part.type === "toolCall")
+    .map((part) => ({
+      id: part.id,
+      type: "function",
+      function: { name: part.name, arguments: JSON.stringify(part.arguments) },
+    }));
+  const message = { role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls } : {}) };
+  return { choices: [{ message }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+}
+
+function chatToKedi(message) {
+  // A chat message in Kedi's schema; a test model gets media inline.
+  if (message.role !== "user" || typeof message.content === "string") {
+    return message.role === "user" ? { role: "user", parts: [{ type: "text", text: message.content }] } : toKedi(message);
+  }
+  return {
+    role: "user",
+    parts: message.content.map((part) => {
+      if (part.type === "text") return { type: "text", text: part.text };
+      const found = /^data:([^;,]+);base64,(.*)$/s.exec(part.image_url.url);
+      return found
+        ? { type: "media", kind: "image", mediaType: found[1], data: found[2] }
+        : { type: "media", kind: "image", url: part.image_url.url };
+    }),
+  };
 }
 
 function reported(runId, reply) {
@@ -489,6 +538,7 @@ function produced(media, message, output) {
 async function handle(message) {
   const { id, method, params } = message;
   if (method === "initialize") {
+    testMode = params.testModel === true;
     send({
       id,
       result: {
@@ -516,6 +566,8 @@ async function handle(message) {
           modelFallback: true,
           imageOutput,
           audioOutput,
+          // Kedi's test model can answer the model requests instead of the endpoint.
+          testModel: true,
         },
         settings: Object.keys(SETTINGS),
         effort: EFFORT,
