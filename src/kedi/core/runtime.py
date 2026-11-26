@@ -66,6 +66,10 @@ if TYPE_CHECKING:
 DEFAULT_LOOP_ITERATION_LIMIT = 10_000
 
 
+async def _nothing_to_close() -> None:
+    """The cleanup of an adapter without ``aclose``."""
+
+
 class KediRuntime:
     """Isolated kedi runtime with its own registry and environment."""
 
@@ -95,6 +99,12 @@ class KediRuntime:
         self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}
         # Adapters whose connection the runtime launched for a profile command; closed with it.
         self._connection_adapters: dict[tuple[Any, ...], AgentAdapter[Any]] = {}
+        from kedi.package_adapters import PackageAdapterTable
+
+        # The adapters this module's imported packages declare (> import: pi, then > agent: pi).
+        self.package_adapters = PackageAdapterTable()
+        # Package adapters built for profiles, by package adapter and model; closed with us.
+        self._package_adapter_instances: dict[tuple[Any, ...], AgentAdapter[Any]] = {}
         self._connection_lock = Lock()
         # Outstanding produce Futures are owned by one outer invocation. Concurrent runs on the
         # same runtime must never drain or surface one another's work.
@@ -288,6 +298,10 @@ class KediRuntime:
                 # Connection adapters own a process and close it (AdapterFactory.owns_connection).
                 cleanups.append(cast("Any", adapter).aclose)
             runtime._connection_adapters.clear()
+            for adapter in runtime._package_adapter_instances.values():
+                # A package's bridge or adapter closes with us, if it has anything to close.
+                cleanups.append(getattr(adapter, "aclose", _nothing_to_close))
+            runtime._package_adapter_instances.clear()
         await _run_cleanups(cleanups)
 
     # Decorators
@@ -668,6 +682,9 @@ class KediRuntime:
             if self.adapter is None:
                 raise RuntimeError("No adapter provided to KediRuntime")
             return self.adapter
+        package_adapter = getattr(profile, "package_adapter", None)
+        if package_adapter is not None:
+            return self._package_adapter(package_adapter, getattr(profile, "model", None))
 
         from kedi.agent_adapter.registry import adapter_factory, build_adapter, owns_connection
 
@@ -694,6 +711,19 @@ class KediRuntime:
         if selected is None:
             selected = build_adapter(shortname, model)
             self._selected_adapters[cache_key] = selected
+        return selected
+
+    def _package_adapter(self, package_adapter: Any, model: str | None) -> AgentAdapter[Any]:
+        """The adapter an imported package declares, built once per model and closed with us."""
+
+        from kedi.agent_adapter.registry import build_package_adapter
+
+        cache_key = (package_adapter, model)
+        with self._connection_lock:
+            selected = self._package_adapter_instances.get(cache_key)
+            if selected is None:
+                selected = build_package_adapter(package_adapter, model)
+                self._package_adapter_instances[cache_key] = selected
         return selected
 
     def _connection_adapter(self, shortname: str, profile: Any) -> AgentAdapter[Any]:

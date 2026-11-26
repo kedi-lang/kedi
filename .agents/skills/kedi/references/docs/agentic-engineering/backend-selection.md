@@ -106,6 +106,21 @@ bridge. `> agent: rpc:` accepts bridges that negotiate `agent-harness`; select
 an `agent-framework` bridge from Python with
 `compile_program(adapter=JsonRpcAdapter(...))`.
 
+## Package Adapters
+
+An installed package can expose adapters of its own (see
+[Package Manifests](../modules-and-packaging/package-manifests.md#adapters)).
+Importing it makes them selectable in the importing module:
+
+```kedi
+> import: pi
+> agent: pi
+```
+
+A package adapter takes no connection body: the package says how to launch it.
+Its kind is the one the package declares, so a package can also offer an
+agent-framework bridge through `> adapter:`.
+
 ## A2A Endpoints
 
 Bind a remote A2A harness to its endpoint and credential reference:

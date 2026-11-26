@@ -16,7 +16,7 @@ from kedi.agent_profile.compile import (
 )
 from kedi.agent_profile.definitions import ProfileDefinition
 from kedi.core import KediRuntime
-from kedi.errors import KediTraceFrame
+from kedi.errors import KediExecutionError, KediTraceFrame
 from kedi.executors.base import SupportsIncrementalPrelude
 from kedi.forms import Form, FormActivation, provided_names
 from kedi.groups import module_name
@@ -412,6 +412,11 @@ class ProgramCompiler:
                     module_path,
                     self._load_imported_program,
                 )
+                # An installed package's adapters become selectable in this module only.
+                try:
+                    self.rt.package_adapters.register_import(module_import.module, module_path)
+                except ValueError as exc:
+                    raise KediExecutionError(f"> import: {module_import.module}: {exc}") from exc
                 self._validate_selected_import_before_execution(
                     module_import,
                     module_path,

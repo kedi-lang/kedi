@@ -37,6 +37,7 @@ from ..artifacts import ArtifactPolicy
 from ..decisions import DecisionInfo, DecisionRecord
 from ..lang.ast import Span
 from ..media import Audio, Document, Image, Media, Video
+from ..package_adapters import PackageAdapter
 from ..run_budget import RunBudget
 
 SNAPSHOT_FORMAT = "kedi.interactive-session"
@@ -427,6 +428,7 @@ def encode_profile(
         else list(profile.fallback_models),
         "adapter_kind": profile.adapter_kind,
         "adapter_shortname": profile.adapter_shortname,
+        "package_adapter": _encode_package_adapter(profile.package_adapter),
         "agent_command": list(profile.agent_command)
         if isinstance(profile.agent_command, tuple)
         else profile.agent_command,
@@ -562,6 +564,7 @@ def decode_profile(
         fallback_models=encoded.get("fallback_models"),
         adapter_kind=encoded.get("adapter_kind"),
         adapter_shortname=encoded.get("adapter_shortname"),
+        package_adapter=_decode_package_adapter(encoded.get("package_adapter")),
         agent_command=command,
         a2a_connection=_decode_a2a_connection(encoded.get("a2a_connection")),
         effort=encoded.get("effort"),
@@ -615,6 +618,33 @@ def decode_profile(
         history_processing=_decode_dataclass(
             HistoryProcessingSettings, encoded.get("history_processing")
         ),
+    )
+
+
+def _encode_package_adapter(adapter: PackageAdapter | None) -> dict[str, Any] | None:
+    if adapter is None:
+        return None
+    return {
+        "package": adapter.package,
+        "name": adapter.name,
+        "kind": adapter.kind,
+        "class_path": adapter.class_path,
+        "command": None if adapter.command is None else list(adapter.command),
+    }
+
+
+def _decode_package_adapter(value: Any) -> PackageAdapter | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or value.get("kind") not in ("agent", "adapter"):
+        raise SessionLoadError("Invalid package adapter in profile snapshot")
+    command = value.get("command")
+    return PackageAdapter(
+        package=str(value["package"]),
+        name=str(value["name"]),
+        kind=value["kind"],
+        class_path=value.get("class_path"),
+        command=None if command is None else tuple(command),
     )
 
 

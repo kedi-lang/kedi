@@ -31,9 +31,36 @@ or executable statements. Comments are allowed.
 | `author` | no | metadata text |
 | `contact` | no | metadata text |
 | `license` | no | metadata text |
+| `adapters` | no | one block of adapter entries (below) |
 
 Unknown fields, duplicate scalar fields, a second dependency block, or a second
 package directive fail validation.
+
+## Adapters
+
+```kedi
+> package: pi:
+  source: src/pi
+  adapters:
+    pi:
+      kind: agent
+      command: node bridge.mjs
+    pi_local:
+      kind: adapter
+      class: kedi_pi:LocalAdapter
+```
+
+| Entry field | Required | Validation |
+| --- | --- | --- |
+| shortname | yes | `[a-z][a-z0-9_]*`, not a built-in adapter's (`pydantic`, `langchain`, `claude`, `codex`, `acp`, `a2a`, `rpc`, `dspy`) |
+| `kind` | yes | `agent` (selected with `> agent:`, an agent harness) or `adapter` (selected with `> adapter:`, an agent framework) |
+| `command` | one of `command` or `class` | a shell-style command line; arguments naming regular files of `source` become absolute paths |
+| `class` | one of `command` or `class` | `module:Class`, a Python adapter class built with `Class(model=...)` |
+
+Unknown entry fields, duplicate shortnames or fields, and a second adapters
+block fail validation. Nothing is imported or launched when a package is
+installed or imported; Kedi builds the adapter when a program selects it, and
+refuses it if its kind differs from the declared one.
 
 ## Python Requirement
 

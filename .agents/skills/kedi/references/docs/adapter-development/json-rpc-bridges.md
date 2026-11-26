@@ -514,6 +514,29 @@ When a Kedi call is cancelled or exceeds `request_timeout`, Kedi sends
 `run/cancel` and stops waiting. The notification is a request: it does not
 prove that the backend stopped or that side effects were undone.
 
+## Shipping a Bridge as a Package
+
+A [Kedi package](../modules-and-packaging/package-manifests.md#adapters) can
+carry a bridge and give it a shortname. Put the bridge in the package's source
+tree and declare it as a command:
+
+```kedi
+> package: pi:
+  version: 0.1.0
+  source: src/pi
+  adapters:
+    pi:
+      kind: agent
+      command: node bridge.mjs
+```
+
+After `kedi add pi`, `> import: pi` followed by `> agent: pi` launches
+`node <installed source>/bridge.mjs`. The kind must match the bridge's
+`kind`: `agent` for an `agent-harness`, `adapter` for an `agent-framework`.
+A bridge for a JavaScript harness can be bundled into one file that needs only
+Node; [kedi-lang/json-rpc](https://github.com/kedi-lang/json-rpc) builds the pi
+bridge that way.
+
 ## Reference Bridge
 
 `kedi.agent_adapter.adapters.jsonrpc.REFERENCE_BRIDGE` is a bridge in

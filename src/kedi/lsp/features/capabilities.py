@@ -76,6 +76,7 @@ from kedi.lsp.features.symbols import (
     _use_single_target_span,
     _use_tool_entry_spans,
 )
+from kedi.package_adapters import PackageAdapterTable, program_package_adapters
 
 _NO_MEDIA = MediaNames()
 
@@ -738,6 +739,19 @@ def _hooks_capability_diagnostics(
     ]
 
 
+_IMPORTED_ADAPTERS: tuple[tuple[object, ...], PackageAdapterTable] | None = None
+
+
+def _imported_adapters(prog: Program | ProgramWithValidation) -> PackageAdapterTable:
+    """The package adapters ``prog`` imports, read once per set of imports."""
+
+    global _IMPORTED_ADAPTERS
+    key = (prog.loc.source_path if prog.loc else None, *(item.module for item in prog.imports))
+    if _IMPORTED_ADAPTERS is None or _IMPORTED_ADAPTERS[0] != key:
+        _IMPORTED_ADAPTERS = (key, program_package_adapters(prog))
+    return _IMPORTED_ADAPTERS[1]
+
+
 def _adapter_selection_diagnostics(
     prog: Program | ProgramWithValidation,
     *,
@@ -756,13 +770,34 @@ def _adapter_selection_diagnostics(
     directive = "agent" if expected_kind == "agent-harness" else "adapter"
     kind_label = "agent harness" if expected_kind == "agent-harness" else "agent framework"
     span = _directive_name_span(prog, loc, shortname) or loc
+    imported = _imported_adapters(prog)
+    package_adapter = imported.get(shortname)
+    if package_adapter is not None:
+        if package_adapter.adapter_kind == expected_kind:
+            return []
+        return [
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-KIND",
+                source="kedi",
+                message=(
+                    f"> {directive}: cannot select {shortname!r}; package "
+                    f"{package_adapter.package!r} declares it as an {package_adapter.kind}, "
+                    f"selected with > {package_adapter.directive}:."
+                ),
+            )
+        ]
     try:
         factory = adapter_factory(shortname)
     except Exception:
         known = ", ".join(
-            name
-            for name in known_adapter_shortnames()
-            if adapter_factory(name).kind == expected_kind
+            [
+                name
+                for name in known_adapter_shortnames()
+                if adapter_factory(name).kind == expected_kind
+            ]
+            + [f"{name} (imported)" for name in imported.names(expected_kind)]
         )
         return [
             lsp.Diagnostic(

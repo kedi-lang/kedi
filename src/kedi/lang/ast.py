@@ -841,6 +841,18 @@ class ModuleExport:
 
 
 @dataclass
+class PackageAdapterDecl:
+    """One ``adapters:`` entry of a package manifest: a shortname importers may select."""
+
+    name: str
+    kind: Optional[str] = None
+    class_path: Optional[str] = None
+    command: Optional[str] = None
+    field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class PackageMetadata:
     name: str
     author: Optional[str] = None
@@ -850,6 +862,7 @@ class PackageMetadata:
     python_requirement: Optional[str] = None
     license: Optional[str] = None
     python_dependencies: List[str] = field(default_factory=list)
+    adapters: dict[str, PackageAdapterDecl] = field(default_factory=dict)
     field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
