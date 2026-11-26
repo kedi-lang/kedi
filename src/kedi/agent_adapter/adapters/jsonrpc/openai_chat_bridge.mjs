@@ -93,7 +93,17 @@ async function complete(runId, body, models, signal) {
       // Kedi fails the run with its own error; the request is never sent.
       throw new RpcError(RUN_FAILED, admission.reason);
     }
-    if (testMode) return reported(runId, await testCompletion(runId, { ...body, model }, signal));
+    if (testMode) {
+      // Kedi's test model failing is a model failing: the next model is tried, as for a fetch.
+      try {
+        return reported(runId, await testCompletion(runId, { ...body, model }, signal));
+      } catch (error) {
+        if (signal.aborted) throw error;
+        failure = new RpcError(RUN_FAILED, `model ${model} failed: ${error.message ?? error}`);
+        log(failure.message);
+        continue;
+      }
+    }
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
