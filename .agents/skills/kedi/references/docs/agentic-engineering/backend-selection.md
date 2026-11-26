@@ -29,7 +29,7 @@ typed tools through the framework's model interface.
 = <answer>
 ```
 
-Built-in harness shortnames are `claude`, `codex`, `acp`, and `a2a`. Harnesses are
+Built-in harness shortnames are `claude`, `codex`, `acp`, `a2a`, and `rpc`. Harnesses are
 appropriate when the underlying agent owns its tool loop, repository context,
 or protocol session.
 
@@ -87,6 +87,24 @@ sequence of strings. The connection body binds the command to the `acp` harness.
 ACP commands are always explicit. Use `> agent: acp:` syntax or construct
 `ACPAdapter(command=...)` in Python. Plain `> agent: acp`, CLI command options,
 and environment command fallbacks are unsupported.
+
+## JSON-RPC Bridges
+
+A backend in any language that speaks Kedi's
+[JSON-RPC protocol](../adapter-development/json-rpc-bridges.md) is selected the
+same way:
+
+```kedi
+> agent: rpc:
+    command: node my_bridge.mjs
+```
+
+Kedi launches one bridge for each distinct command, completes its handshake
+before the first call, and stops it when the runtime closes. The bridge
+negotiates its capabilities, so `> requires:` is checked against the launched
+bridge. `> agent: rpc:` accepts bridges that negotiate `agent-harness`; select
+an `agent-framework` bridge from Python with
+`compile_program(adapter=JsonRpcAdapter(...))`.
 
 ## A2A Endpoints
 

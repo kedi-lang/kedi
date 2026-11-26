@@ -14,6 +14,8 @@ class AdapterFactory:
     shortname: str
     kind: AgentAdapterKind
     build: Callable[[str | None, Mapping[str, Any]], AgentAdapter[Any]]
+    owns_connection: bool = False
+    """Each profile command selects its own instance, which the runtime closes."""
 
 
 def _pydantic(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
@@ -52,6 +54,20 @@ def _a2a(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
     return A2AAdapter(model=model, **dict(kwargs))
 
 
+def _rpc(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.jsonrpc import JsonRpcAdapter
+
+    options = dict(kwargs)
+    adapter = JsonRpcAdapter(options.pop("command"), model=model, **options)
+    if adapter.kind != "agent-harness":
+        adapter.close()
+        raise KediExecutionError(
+            f"> agent: rpc: the bridge {adapter.backend['name']!r} is an {adapter.kind} bridge; "
+            "select it from Python with compile_program(adapter=JsonRpcAdapter(...))"
+        )
+    return adapter
+
+
 def _pydantic_capabilities() -> AdapterCapabilities:
     from .adapters.pydantic import PydanticAdapter
 
@@ -88,6 +104,12 @@ def _a2a_capabilities() -> AdapterCapabilities:
     return A2AAdapter.capabilities
 
 
+def _rpc_capabilities() -> AdapterCapabilities:
+    from .adapters.jsonrpc import JsonRpcAdapter
+
+    return JsonRpcAdapter.capabilities
+
+
 _ADAPTERS: dict[str, AdapterFactory] = {
     "pydantic": AdapterFactory("pydantic", "agent-framework", _pydantic),
     "langchain": AdapterFactory("langchain", "agent-framework", _langchain),
@@ -95,6 +117,7 @@ _ADAPTERS: dict[str, AdapterFactory] = {
     "codex": AdapterFactory("codex", "agent-harness", _codex),
     "acp": AdapterFactory("acp", "agent-harness", _acp),
     "a2a": AdapterFactory("a2a", "agent-harness", _a2a),
+    "rpc": AdapterFactory("rpc", "agent-harness", _rpc, owns_connection=True),
 }
 
 _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
@@ -104,7 +127,15 @@ _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
     "codex": _codex_capabilities,
     "acp": _acp_capabilities,
     "a2a": _a2a_capabilities,
+    "rpc": _rpc_capabilities,
 }
+
+
+def owns_connection(shortname: str) -> bool:
+    """Whether a profile's command selects its own instance of this adapter."""
+
+    factory = _ADAPTERS.get(shortname)
+    return factory is not None and factory.owns_connection
 
 
 def known_adapter_shortnames() -> tuple[str, ...]:

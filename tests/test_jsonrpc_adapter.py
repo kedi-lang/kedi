@@ -469,3 +469,73 @@ def test_tool_calls_still_running_when_the_run_ends_are_cancelled() -> None:
             time.sleep(0.05)
     finally:
         adapter.close()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "messages"),
+    [
+        ("events", [("commentary", "Looking it up."), ("final", "echo: Say hello.")]),
+        # A bridge that did not negotiate events is not listened to.
+        ("events-unadvertised", [("final", "echo: Say hello.")]),
+    ],
+)
+def test_bridge_events_reach_kedis_observers_attributed_to_the_run(
+    scenario: str, messages: list[tuple[str, str]]
+) -> None:
+    from kedi.agent_adapter.events import (
+        AgentMessageEvent,
+        AgentRunStateEvent,
+        observe_agent_events,
+    )
+
+    events: list[Any] = []
+    with peer(scenario) as adapter, observe_agent_events(events.append):
+        assert run(ECHO, adapter) == "echo: Say hello."
+    assert [(e.phase, e.content) for e in events if isinstance(e, AgentMessageEvent)] == messages
+    assert [e.state for e in events if isinstance(e, AgentRunStateEvent)] == [
+        "started",
+        "completed",
+    ]
+    assert len({event.run_id for event in events}) == 1
+    assert {event.adapter for event in events} == {"rpc"}
+
+
+def test_the_reference_bridge_reports_commentary_events() -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from kedi.agent_adapter.events import AgentMessageEvent, observe_agent_events
+
+    class Model(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            if any(message["role"] == "tool" for message in body["messages"]):
+                message: dict[str, Any] = {"role": "assistant", "content": "Sunny."}
+            else:
+                call = {"id": "c1", "type": "function", "function": {"name": "forecast"}}
+                call["function"]["arguments"] = "{}"
+                message = {"role": "assistant", "content": "Checking.", "tool_calls": [call]}
+            data = json.dumps({"choices": [{"index": 0, "message": message}]}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    events: list[Any] = []
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    source = "@forecast() -> str:\n  = sunny\n\n> approval: allow\n> use: forecast\n" + ECHO
+    try:
+        with (
+            JsonRpcAdapter(reference_bridge_command(base_url), model="m") as adapter,
+            observe_agent_events(events.append),
+        ):
+            assert run(source, adapter) == "Sunny."
+    finally:
+        server.shutdown()
+    messages = [(e.phase, e.content) for e in events if isinstance(e, AgentMessageEvent)]
+    assert messages == [("commentary", "Checking."), ("final", "Sunny.")]

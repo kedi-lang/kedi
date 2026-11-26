@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import shlex
 from collections.abc import Coroutine, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -25,6 +26,7 @@ from pydantic_core import to_jsonable_python
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
 from ...approvals.policy import ToolApprovalDenied
+from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
 from ...hooks import HookDeniedError
 from ...invocation import InvocationUsage, report_invocation
@@ -72,6 +74,7 @@ class _Run:
     attempted: set[str] = field(default_factory=set)
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
     failure: BaseException | None = None
+    events: AgentMessageResolver | None = None
 
     def start(self, coroutine: Coroutine[Any, Any, None]) -> None:
         """Start a callback on the run's loop; called in the run's context."""
@@ -84,11 +87,27 @@ class _Run:
 class JsonRpcAdapter:
     """An adapter whose backend is a bridge process speaking Kedi's JSON-RPC protocol."""
 
-    shortname = "jsonrpc"
+    shortname = "rpc"
+    kind: AgentAdapterKind = "agent-harness"
+    capabilities = AdapterCapabilities(
+        # Negotiated per bridge in initialize; an instance replaces these with the bridge's.
+        supports_structured_output=None,
+        supports_tool_registration=None,
+        supports_artifacts=None,
+        supports_stream_events=None,
+        negotiated_capabilities=frozenset(
+            {"structured_output", "tool_registration", "artifacts", "stream_events"}
+        ),
+        supports_profile_override=True,
+        supports_model_override=True,
+        supports_effort=False,
+        supports_settings=False,
+        supports_mcp=False,
+    )
 
     def __init__(
         self,
-        command: Sequence[str],
+        command: str | Sequence[str],
         *,
         model: str | None = None,
         env: Mapping[str, str] | None = None,
@@ -104,6 +123,7 @@ class JsonRpcAdapter:
         bounds each run; ``output_retries`` is how many corrections Kedi sends per call.
         """
 
+        self.command = tuple(shlex.split(command) if isinstance(command, str) else command)
         self._model = model
         self._request_timeout = request_timeout
         self._output_retries = output_retries
@@ -115,8 +135,9 @@ class JsonRpcAdapter:
             f"jsonrpc_tools_{id(self)}", default=()
         )
         self._connection = Connection(
-            command,
+            self.command,
             handler=self._on_request,
+            notifications=self._on_notification,
             env=env,
             cwd=cwd,
             max_inbound_requests=max_inbound_requests,
@@ -278,27 +299,42 @@ class JsonRpcAdapter:
             "continuation": None,
         }
         self._runs[run_id] = run
-        correction: str | None = None
         try:
-            for _ in range(self._output_retries + 1):
-                try:
-                    result = await self._request_run(params)
-                finally:
-                    if run.failure is not None:
-                        raise run.failure
-                answer, correction = _check_answer(result, validator, required, run)
-                if correction is None:
-                    return answer
-                params = {**params, "continuation": {"answer": result, "message": correction}}
-            raise JsonRpcError(
-                INVALID_PARAMS,
-                f"bridge {self.backend['name']!r} gave no valid answer after "
-                f"{self._output_retries} corrections; the last: {correction}",
-            )
+            with agent_event_run(self.shortname) as run.events:
+                answer = await self._attempts(run, params, validator, required)
+                if run.events is not None and isinstance(answer, str):
+                    run.events.complete_run(final_text=answer)
+                return answer
         finally:
             self._runs.pop(run_id, None)
             for task in run.tasks:
                 task.cancel()
+
+    async def _attempts(
+        self,
+        run: _Run,
+        params: JsonObject,
+        validator: TypeAdapter[Any] | None,
+        required: set[str],
+    ) -> Any:
+        """Ask the bridge, then send Kedi's corrections, until an answer is valid."""
+
+        correction: str | None = None
+        for _ in range(self._output_retries + 1):
+            try:
+                result = await self._request_run(params)
+            finally:
+                if run.failure is not None:
+                    raise run.failure
+            answer, correction = _check_answer(result, validator, required, run)
+            if correction is None:
+                return answer
+            params = {**params, "continuation": {"answer": result, "message": correction}}
+        raise JsonRpcError(
+            INVALID_PARAMS,
+            f"bridge {self.backend['name']!r} gave no valid answer after "
+            f"{self._output_retries} corrections; the last: {correction}",
+        )
 
     async def _request_run(self, params: JsonObject) -> JsonObject:
         try:
@@ -355,6 +391,27 @@ class JsonRpcAdapter:
             coroutine.close()
             error = JsonRpcError(UNKNOWN_RUN, "tool/call names a run that has ended")
             self._connection.respond(request_id, error=error)
+
+    def _on_notification(self, method: str, params: JsonObject) -> None:
+        """A bridge notification, on the reader thread: a run event, in stream order."""
+
+        if method != "run/event" or not self.capabilities.supports_stream_events:
+            return
+        run_id = params.get("runId")
+        run = self._runs.get(run_id) if isinstance(run_id, str) else None
+        events = run.events if run is not None else None
+        if events is None:
+            return  # nobody observes events, or the run is over
+        kind, message_id, text = params.get("type"), params.get("messageId"), params.get("text")
+        phase = params.get("phase") if params.get("phase") in ("commentary", "final") else None
+        if kind == "tool.boundary":
+            events.mark_tool_boundary()
+        elif kind == "message.delta" and isinstance(message_id, str) and isinstance(text, str):
+            events.append_delta(message_id, text, explicit_phase=phase)
+        elif kind == "message.completed" and isinstance(message_id, str):
+            events.complete_message(
+                message_id, text if isinstance(text, str) else None, explicit_phase=phase
+            )
 
     async def _call_tool(
         self, request_id: int | str, run: _Run, name: str, arguments: JsonObject
@@ -423,6 +480,7 @@ def _negotiate(handshake: JsonObject) -> tuple[AgentAdapterKind, JsonObject, Ada
         supports_artifacts=tools,
         supports_native_structured_output=flags["supports_native_structured_output"],
         supports_native_tool_calling=flags["supports_native_tool_calling"],
+        supports_stream_events=flags["supports_stream_events"],
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,

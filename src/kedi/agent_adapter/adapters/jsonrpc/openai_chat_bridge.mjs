@@ -111,6 +111,19 @@ async function run(params, signal) {
           return { invalid: message.content ?? "", error: String(error) };
         }
       }
+      if (message.content) {
+        // The model's text alongside its tool calls, for Kedi's event observers.
+        send({
+          method: "run/event",
+          params: {
+            runId: params.runId,
+            type: "message.completed",
+            messageId: `step-${step}`,
+            text: message.content,
+            phase: "commentary",
+          },
+        });
+      }
       messages.push({ role: "assistant", content: message.content ?? null, tool_calls: calls });
       for (const call of calls) {
         const content = await callTool(
@@ -156,6 +169,7 @@ async function handle(message) {
           tools: true,
           nativeStructuredOutput: native,
           nativeToolCalling: native,
+          events: true,
         },
       },
     });

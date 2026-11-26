@@ -14,6 +14,9 @@ with JsonRpcAdapter(["node", "my_bridge.mjs"], model="my-model") as adapter:
     runtime.run_main()
 ```
 
+From Kedi source, `> agent: rpc:` with a `command:` body launches a bridge (see
+[Backend Selection](../agentic-engineering/backend-selection.md#json-rpc-bridges)).
+
 The adapter launches the command and owns the process. Readiness is
 structural: the constructor is the handshake, so an adapter object always has
 its negotiated capabilities, and a bridge that fails `initialize` is stopped
@@ -41,6 +44,7 @@ it has not exited within the timeout.
 | `run` | Kedi → bridge | see below | `{"text": ...}` or `{"data": ...}`, optional `usage` |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
+| `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
 | `shutdown` | Kedi → bridge | `{}` | `{}`; then Kedi closes stdin |
 
 The protocol version is `1`. A bridge that answers `initialize` with another
@@ -55,11 +59,12 @@ backend name is refused, and the process is stopped.
 | `tools` | the bridge lets its model call the run's `tools` through `tool/call` |
 | `nativeStructuredOutput` | the backend takes the output schema natively |
 | `nativeToolCalling` | the backend takes tool definitions natively |
+| `events` | the bridge sends `run/event` notifications |
 
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
-before sending anything. Version 1 has no media, events, sessions or live
-input: a bridge cannot enable them by advertising them.
+before sending anything. Version 1 has no media, sessions or live input: a
+bridge cannot enable them by advertising them.
 
 Without `nativeStructuredOutput` or `nativeToolCalling`, Kedi adds its
 `protocol.output` and `protocol.tools` parts to the system text (see
@@ -104,6 +109,25 @@ budget, stops the run: Kedi answers the call with `-32002`, sends
 with `-32003`. Calls run concurrently on
 the run's event loop, so a tool may itself start a nested run on the same
 bridge while the outer run waits.
+
+### Events
+
+With `events`, a bridge reports what its model writes during a run, and Kedi
+publishes it to its event observers (see
+[Events, Streaming, and Telemetry](events.md)) under the Kedi run it belongs to:
+
+| `type` | Fields | Meaning |
+|---|---|---|
+| `message.delta` | `messageId`, `text`, optional `phase` | a chunk of a message |
+| `message.completed` | `messageId`, optional `text` and `phase` | the message is complete; `text` replaces the chunks |
+| `tool.boundary` | — | the model called a tool: messages so far are commentary |
+
+`phase` is `commentary` or `final`. Kedi starts and ends the run itself, and
+publishes the run's answer as its final message, so a bridge reports only what
+the model wrote along the way. Events arrive in stream order before the run's
+answer. Events for a run that is not in progress, of an unknown `type`, or
+without the fields above are ignored, as are all events from a bridge that did
+not negotiate `events`.
 
 ### Errors
 

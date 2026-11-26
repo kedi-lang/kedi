@@ -247,15 +247,17 @@ def _eval_adapter_selection(
             raise KediExecutionError(
                 "agent connection fields cannot be combined with the legacy command form"
             )
-        if shortname == "acp":
+        if shortname in ("acp", "rpc"):
+            label = shortname.upper()
             values = _agent_connection_values(rt, connection_fields, env=env)
             unknown = set(values).difference({"command"})
             if unknown:
                 raise KediExecutionError(
-                    f"ACP agent connection has unsupported field(s): {', '.join(sorted(unknown))}"
+                    f"{label} agent connection has unsupported field(s): "
+                    f"{', '.join(sorted(unknown))}"
                 )
             if "command" not in values:
-                raise KediExecutionError("ACP agent connection requires 'command'")
+                raise KediExecutionError(f"{label} agent connection requires 'command'")
             command = _normalize_agent_command(values["command"], directive_name="agent command")
         elif shortname == "a2a":
             a2a_connection = _eval_a2a_connection(rt, connection_fields, env=env)

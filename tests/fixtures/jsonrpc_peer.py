@@ -45,6 +45,10 @@ def handshake() -> dict[str, Any]:
         result["protocolVersion"] = 2
     elif SCENARIO == "kind":
         result["kind"] = "robot"
+    elif SCENARIO == "framework":
+        result["kind"] = "agent-framework"
+    elif SCENARIO == "events":
+        result["capabilities"] = {**CAPABILITIES, "events": True}
     elif SCENARIO == "nameless":
         result["backend"] = {}
     elif SCENARIO == "capabilities-list":
@@ -95,6 +99,33 @@ def run(request_id: int, params: dict[str, Any]) -> None:
         threading.Thread(target=wait_for_tool, daemon=True).start()
         time.sleep(0.2)
         send({"id": request_id, "result": {"text": "answered early"}})
+        return
+    if SCENARIO in ("events", "events-unadvertised"):
+        run_id = params["runId"]
+        for event in (
+            {"type": "message.delta", "messageId": "m1", "text": "Looking"},
+            {"type": "message.delta", "messageId": "m1", "text": " it up."},
+            {"type": "message.completed", "messageId": "m1", "phase": "commentary"},
+            {"type": "tool.boundary"},
+            {"type": "message.delta", "messageId": "m2"},  # no text: ignored
+            {"type": "telepathy", "messageId": "m3", "text": "?"},  # unknown: ignored
+        ):
+            send({"method": "run/event", "params": {"runId": run_id, **event}})
+        send({"method": "run/event", "params": {"runId": "other", "type": "tool.boundary"}})
+        send({"method": "run/event", "params": []})
+        final = f"echo: {user}"
+        send(
+            {
+                "method": "run/event",
+                "params": {
+                    "runId": run_id,
+                    "type": "message.completed",
+                    "messageId": "m4",
+                    "text": final,
+                },
+            }
+        )
+        send({"id": request_id, "result": {"text": final}})
         return
     if SCENARIO == "bad-error-code":
         send({"id": request_id, "error": {"code": "x", "message": "untyped failure"}})
