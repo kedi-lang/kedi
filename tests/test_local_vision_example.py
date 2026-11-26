@@ -175,3 +175,57 @@ def test_the_shared_program_flags_a_receipt_that_does_not_add_up() -> None:
     answer = {key: truth[key] for key in ("merchant", "items", "total")}
     result, _ = record("bakery", answer)
     assert result["adds_up"] is False
+
+
+PAIRS = EXAMPLE / "same_purchase.kedi"
+
+
+def compare_pair(first: str, second: str, answer: dict[str, bool]) -> tuple[Any, dict[str, Any]]:
+    """Run same_purchase.kedi on a scripted model; return the result and what it received."""
+
+    from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart, UserPromptPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from kedi.agent_adapter import PydanticAdapter
+
+    seen: dict[str, Any] = {}
+
+    def answer_the_comparison(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        (part,) = [
+            part
+            for message in messages
+            for part in getattr(message, "parts", ())
+            if isinstance(part, UserPromptPart)
+        ]
+        seen["images"] = [item.data for item in part.content if isinstance(item, BinaryContent)]
+        seen["text"] = "".join(item for item in part.content if isinstance(item, str))
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, answer)])
+
+    def photo(key: str) -> Image:
+        return Image.from_bytes((EXAMPLE / "receipts" / f"{key}.png").read_bytes(), "image/png")
+
+    runtime = compile_program(
+        parse_program(PAIRS.read_text(), source_path=str(PAIRS)),
+        adapter=PydanticAdapter(FunctionModel(answer_the_comparison)),
+        runtime_globals={"first": photo(first), "second": photo(second)},
+    )
+    try:
+        return runtime.run_main(), seen
+    finally:
+        asyncio.run(runtime.aclose())
+
+
+def test_two_receipts_reach_the_model_under_their_own_names() -> None:
+    result, seen = compare_pair("cafe", "books", {"same_shop": False, "same_total": False})
+    assert result["duplicate"] is False
+    assert seen["images"] == [
+        (EXAMPLE / "receipts" / name).read_bytes() for name in ("cafe.png", "books.png")
+    ]
+    assert "Do the receipts first and second show" in seen["text"]
+
+
+def test_the_same_receipt_twice_is_attached_once_under_its_first_name() -> None:
+    result, seen = compare_pair("cafe", "cafe", {"same_shop": True, "same_total": True})
+    assert result["duplicate"] is True
+    assert seen["images"] == [(EXAMPLE / "receipts" / "cafe.png").read_bytes()]
+    assert "Do the receipts first and first show" in seen["text"]
