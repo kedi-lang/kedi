@@ -9,8 +9,9 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
-  capabilities, mediaKinds?, settings?, effort?}``: ``settings`` names the ``> settings:`` the
-  backend applies, ``effort`` the ``> effort:`` levels it maps. Kedi sends nothing else before
+  capabilities, mediaKinds?, settings?, effort?, hooks?}``: ``settings`` names the
+  ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps, ``hooks``
+  ``{origins}`` the sources of its own tools whose calls it reports with ``hook/invoke``. Kedi sends nothing else before
   it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
   instructionParts, user, userContent, output, tools, continuation, session, subagent}``
@@ -53,6 +54,13 @@ Bridge to Kedi:
   ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
   reason}``, or ``{decision: "edit", arguments, reason}``: the bridge runs the edited
   arguments, after another ``approval/request`` if their risk is higher.
+- ``hook/invoke`` ``{runId, event, callId, tool, origin, arguments, inputSchema?, result?,
+  error?, interrupted?}`` (for an ``origin`` the handshake's ``hooks.origins`` lists), around
+  each call of a bridge tool: ``pre_tool_use`` before its ``approval/request``, then
+  ``post_tool_use`` with its ``result`` or ``post_tool_use_failure`` with ``error`` ``{type,
+  message}``. ``pre_tool_use`` returns ``{decision: "continue"}``, ``{decision: "edit",
+  arguments}`` or ``{decision: "deny", reason}``; the others return ``{}``. Kedi runs the
+  program's hooks for Kedi tools itself, at ``tool/call``.
 - ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
   totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
   it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
@@ -130,6 +138,10 @@ the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
 NATIVE_TOOLS: Final = "nativeTools"
+HOOK_ORIGINS: Final = frozenset({"adapter_native", "mcp", "provider_builtin"})
+"""Sources of a bridge's own tools; Kedi's tools are hooked by Kedi."""
+HOOK_EVENTS: Final = frozenset({"pre_tool_use", "post_tool_use", "post_tool_use_failure"})
+
 BUDGET_DIMENSIONS: Final = {"request": "request", "toolAttempt": "tool_attempt"}
 """``budget/admit`` dimensions and Kedi's run budget dimensions."""
 TOOL_RISKS: Final = frozenset({"read_only", "mutating", "sensitive"})

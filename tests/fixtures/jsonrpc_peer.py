@@ -55,6 +55,14 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "events": True}
     elif SCENARIO == "sessions":
         result["capabilities"] = {**CAPABILITIES, "sessions": True}
+    elif SCENARIO == "hooked":
+        result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
+        result["hooks"] = {"origins": ["adapter_native"]}
+    elif SCENARIO == "hooks-not-native":
+        result["hooks"] = {"origins": ["adapter_native"]}
+    elif SCENARIO == "hooks-unknown-origin":
+        result["capabilities"] = {**CAPABILITIES, "nativeTools": True}
+        result["hooks"] = {"origins": ["kedi"]}
     elif SCENARIO == "drawing":
         result["capabilities"] = {
             **CAPABILITIES,
@@ -313,6 +321,43 @@ def drawing(request_id: int, params: dict[str, Any]) -> None:
     send({"id": request_id, "result": answers.get(user, {"content": made})})
 
 
+def hooked(request_id: int, params: dict[str, Any]) -> None:
+    """The bridge's own shell tool, with the program's hooks around each call."""
+
+    run_id, user = params["runId"], params["user"]
+    call = {"runId": run_id, "callId": "c1", "tool": "shell", "origin": "adapter_native"}
+    if user == "Answer early.":
+        # Answer the run while Kedi still runs a hook: Kedi cancels it.
+        def wait_for_hook() -> None:
+            hook = {**call, "event": "pre_tool_use", "arguments": {"command": "ls"}}
+            reply = call_kedi("hook/invoke", hook)
+            sys.stderr.write(f"hook reply {reply.get('error', {}).get('code')}\n")
+            sys.stderr.flush()
+
+        threading.Thread(target=wait_for_hook, daemon=True).start()
+        time.sleep(0.2)
+        send({"id": request_id, "result": {"text": "answered early"}})
+        return
+    command = {"Run ls.": "ls", "Run rm.": "rm -rf /", "Run a failing command.": "false"}[user]
+    pre = call_kedi(
+        "hook/invoke", {**call, "event": "pre_tool_use", "arguments": {"command": command}}
+    )
+    seen: dict[str, Any] = {"pre": pre}
+    if "error" in pre or pre["result"]["decision"] == "deny":
+        send({"id": request_id, "result": {"text": json.dumps(seen)}})
+        return
+    arguments = pre["result"].get("arguments", {"command": command})
+    approval = {"runId": run_id, "callId": "c1", "tool": "shell", "risk": "mutating"}
+    seen["approval"] = call_kedi("approval/request", {**approval, "arguments": arguments})
+    if arguments["command"] == "false":
+        error = {"type": "CalledProcessError", "message": "exit status 1"}
+        post = {**call, "event": "post_tool_use_failure", "arguments": arguments, "error": error}
+    else:
+        post = {**call, "event": "post_tool_use", "arguments": arguments, "result": "a b"}
+    seen["post"] = call_kedi("hook/invoke", post)
+    send({"id": request_id, "result": {"text": json.dumps(seen)}})
+
+
 def kedi_tools(params: dict[str, Any]) -> list[str]:
     return [tool["name"] for tool in params["tools"] if "artifact" not in tool["name"]]
 
@@ -327,6 +372,9 @@ def run(request_id: int, params: dict[str, Any]) -> None:
         return
     if SCENARIO == "drawing":
         drawing(request_id, params)
+        return
+    if SCENARIO == "hooked":
+        hooked(request_id, params)
         return
     if SCENARIO == "configured":
         keys = ("model", "fallbackModels", "settings", "effort")

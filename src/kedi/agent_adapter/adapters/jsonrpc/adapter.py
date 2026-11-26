@@ -45,9 +45,15 @@ from ...approvals.policy import (
 from ...conversation import AdapterConversationContext
 from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
-from ...hooks import HookDeniedError
+from ...hooks import HookDeniedError, HookHandler, HookRegistrationMixin, hooked_agent_run
+from ...hooks.tool_wrapper import (
+    dispatch_post_tool_use,
+    dispatch_post_tool_use_failure,
+    dispatch_pre_tool_use,
+    with_hook_lifecycle,
+)
 from ...invocation import InvocationUsage, report_invocation
-from ...meta import AdapterCapabilities, AgentAdapterKind
+from ...meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities, HookToolOrigin
 from ...output_schema import OutputCorrection
 from ...request import (
     JsonSchemaOutput,
@@ -80,6 +86,8 @@ from .protocol import (
     BUDGET_DIMENSIONS,
     CANCELLED,
     CAPABILITIES,
+    HOOK_EVENTS,
+    HOOK_ORIGINS,
     INTERRUPTED,
     INVALID_PARAMS,
     MEDIA_KINDS,
@@ -136,7 +144,7 @@ _Handler = Callable[[int | str, _Run], Coroutine[Any, Any, None]]
 """Serves one bridge request for a run; started on the run's loop, in its context."""
 
 
-class JsonRpcAdapter:
+class JsonRpcAdapter(HookRegistrationMixin):
     """An adapter whose backend is a bridge process speaking Kedi's JSON-RPC protocol."""
 
     shortname = "rpc"
@@ -181,6 +189,9 @@ class JsonRpcAdapter:
         ),
         supports_profile_override=True,
         supports_model_override=True,
+        # Kedi runs the prompt hooks and its tools' hooks at tool/call; a bridge reports its own
+        # tools' events with hook/invoke.
+        hooks=HookCapabilities.full(tool_bridge="kedi", tool_origins=frozenset({"kedi"})),
         supports_effort=None,
         supports_settings=None,
         supports_mcp=False,
@@ -197,6 +208,7 @@ class JsonRpcAdapter:
         initialize_timeout: float = 30,
         output_retries: int = 1,
         max_inbound_requests: int = 64,
+        hook_handler: HookHandler | None = None,
     ) -> None:
         """Launch ``command`` and complete the handshake; raises if the bridge is not ready.
 
@@ -205,6 +217,7 @@ class JsonRpcAdapter:
         """
 
         self.command = tuple(shlex.split(command) if isinstance(command, str) else command)
+        self._init_hook_registration(hook_handler)
         self._model = model
         self._request_timeout = request_timeout
         self._output_retries = output_retries
@@ -247,6 +260,8 @@ class JsonRpcAdapter:
         self.media_kinds, self.native_tools = peer.media_kinds, peer.native_tools
         self.effort_levels = peer.effort_levels
         """The ``> effort:`` levels the bridge maps to its backend."""
+        self.hook_origins = peer.hook_origins
+        """The sources of the bridge's own tools whose events it reports with hook/invoke."""
 
     @classmethod
     async def launch(cls, command: Sequence[str], **options: Any) -> Self:
@@ -341,6 +356,7 @@ class JsonRpcAdapter:
         finally:
             self._conversation.reset(token)
 
+    @hooked_agent_run("prompt")
     async def invoke(
         self,
         *,
@@ -351,6 +367,7 @@ class JsonRpcAdapter:
     ) -> str:
         return await self._run(prompt, TextOutput(), instructions, limits=limits)
 
+    @hooked_agent_run("template")
     async def produce_subagent(
         self,
         *,
@@ -373,6 +390,7 @@ class JsonRpcAdapter:
         output = JsonSchemaOutput(schema=output_schema)
         return await self._run(template, output, instructions, limits=limits, accept=accept)
 
+    @hooked_agent_run("template")
     async def produce(
         self,
         *,
@@ -661,6 +679,7 @@ class JsonRpcAdapter:
             "tool/call": self._parse_tool_call,
             "budget/admit": self._parse_admission,
             "approval/request": self._parse_approval,
+            "hook/invoke": self._parse_hook,
         }.get(method)
         try:
             if parse is None:
@@ -691,7 +710,9 @@ class JsonRpcAdapter:
             raise JsonRpcError(
                 INVALID_PARAMS, "tool/call needs a string runId and name, and object arguments"
             )
-        return lambda request_id, run: self._call_tool(request_id, run, name, arguments)
+        call_id = params.get("callId")
+        call_id = call_id if isinstance(call_id, str) else uuid4().hex
+        return lambda request_id, run: self._call_tool(request_id, run, name, arguments, call_id)
 
     def _parse_admission(self, params: JsonObject) -> _Handler:
         if not self.capabilities.supports_request_budget:
@@ -737,6 +758,82 @@ class JsonRpcAdapter:
         )
         return lambda request_id, run: self._approve(request_id, run, request)
 
+    def _parse_hook(self, params: JsonObject) -> _Handler:
+        event, origin, tool = params.get("event"), params.get("origin"), params.get("tool")
+        call_id, arguments = params.get("callId"), params.get("arguments")
+        if origin not in self.hook_origins:
+            raise JsonRpcError(
+                UNSUPPORTED,
+                f"hook/invoke for {origin!r} tools needs it in the handshake's hooks.origins",
+            )
+        if (
+            event not in HOOK_EVENTS
+            or not isinstance(tool, str)
+            or not isinstance(call_id, str)
+            or not isinstance(arguments, dict)
+        ):
+            raise JsonRpcError(
+                INVALID_PARAMS,
+                f"hook/invoke needs an event of {', '.join(sorted(HOOK_EVENTS))}, a string tool "
+                "and callId, and object arguments",
+            )
+        spec = ToolSpec(
+            fn=_bridge_tool,
+            name=tool,
+            json_schema=params.get("inputSchema")
+            if isinstance(params.get("inputSchema"), dict)
+            else None,
+            metadata={"source": origin, "backend": self.backend["name"]},
+        )
+        call = _HookCall(
+            event=cast(str, event),
+            spec=spec,
+            arguments=arguments,
+            call_id=call_id,
+            origin=cast("HookToolOrigin", origin),
+            result=params.get("result"),
+            error=params.get("error"),
+            interrupted=params.get("interrupted") is True,
+        )
+        return lambda request_id, run: self._hook(request_id, run, call)
+
+    async def _hook(self, request_id: int | str, run: _Run, call: _HookCall) -> None:
+        """Run the program's hooks for a call of the bridge's own tool, as Kedi's tools get."""
+
+        fields: dict[str, Any] = {
+            "adapter_shortname": self.shortname,
+            "tool_call_id": call.call_id,
+            "origin": call.origin,
+            "native_tool_name": call.spec.name,
+        }
+        try:
+            reply: JsonObject = {}
+            if call.event == "pre_tool_use":
+                arguments = await dispatch_pre_tool_use(call.spec, call.arguments, **fields)
+                reply = {"decision": "continue"}
+                if arguments != call.arguments:
+                    reply = {"decision": "edit", "arguments": to_jsonable_python(arguments)}
+            elif call.event == "post_tool_use":
+                await dispatch_post_tool_use(call.spec, call.arguments, call.result, **fields)
+            else:
+                error = call.error if isinstance(call.error, dict) else {}
+                await dispatch_post_tool_use_failure(
+                    call.spec,
+                    call.arguments,
+                    _bridge_error(error),
+                    interrupted=call.interrupted,
+                    **fields,
+                )
+        except HookDeniedError as exc:
+            reply = {"decision": "deny", "reason": exc.message}
+        except asyncio.CancelledError:
+            self._connection.respond(request_id, error=JsonRpcError(CANCELLED, "the run ended"))
+            raise
+        except Exception as exc:  # a failing or timed-out hook is a failing control: stop
+            self._stop(request_id, run, exc)
+            return
+        self._connection.respond(request_id, result=reply)
+
     def _on_notification(self, method: str, params: JsonObject) -> None:
         """A bridge notification, on the reader thread: a run event, in stream order."""
 
@@ -766,7 +863,7 @@ class JsonRpcAdapter:
             )
 
     async def _call_tool(
-        self, request_id: int | str, run: _Run, name: str, arguments: JsonObject
+        self, request_id: int | str, run: _Run, name: str, arguments: JsonObject, call_id: str
     ) -> None:
         """Run one Kedi tool as the reference adapter does, and answer the bridge."""
 
@@ -783,9 +880,11 @@ class JsonRpcAdapter:
         except KediExecutionError as exc:
             self._stop(request_id, run, exc)
             return
+        # The program's tool hooks run around the call, before Kedi's approval and budgets.
+        hooked = with_hook_lifecycle(tool, adapter_shortname=self.shortname, tool_call_id=call_id)
         try:
             # Sync tools run off the loop; Kedi's wrapper applies approval and budgets.
-            value = await asyncio.to_thread(_call, tool, arguments)
+            value = await asyncio.to_thread(_call, hooked, arguments)
             if inspect.isawaitable(value):
                 value = await value
             reply = {"ok": True, "result": to_jsonable_python(value, fallback=str)}
@@ -907,6 +1006,37 @@ async def _decide_approval(
     return ApprovalDecision.allow(reason=reason)
 
 
+@dataclass(frozen=True)
+class _HookCall:
+    """One ``hook/invoke`` for a call of the bridge's own tool."""
+
+    event: str
+    spec: ToolSpec
+    arguments: JsonObject
+    call_id: str
+    origin: HookToolOrigin
+    result: Any = None
+    error: Any = None
+    interrupted: bool = False
+
+
+def _bridge_error(error: JsonObject) -> Exception:
+    """A bridge tool's failure as an exception of the type the bridge named.
+
+    ``post_tool_use_failure`` reports the error's type name and message.
+    """
+
+    name = error.get("type")
+    kind = type(name if isinstance(name, str) and name else "Error", (Exception,), {})
+    return kind(str(error.get("message") or ""))
+
+
+def _bridge_tool(**_: Any) -> Any:
+    """A bridge's own tool runs in the bridge; Kedi only describes it for hooks."""
+
+    raise RuntimeError("a bridge tool runs in the bridge")
+
+
 def _lineage(
     child: SubagentExecutionRequest, parent_run_id: str | None, limits: SubagentUsageLimits | None
 ) -> JsonObject:
@@ -986,6 +1116,7 @@ class _Peer:
     media_kinds: frozenset[str]
     native_tools: bool
     effort_levels: frozenset[str]
+    hook_origins: frozenset[HookToolOrigin]
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -1019,6 +1150,12 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         raise JsonRpcError(INVALID_PARAMS, f"settings lists Kedi's own settings: {', '.join(own)}")
     if not isinstance(effort, list) or not set(effort) <= EFFORT_VALUES:
         raise JsonRpcError(INVALID_PARAMS, f"effort must list levels of {sorted(EFFORT_VALUES)}")
+    hooks = handshake.get("hooks", {})
+    origins = hooks.get("origins", []) if isinstance(hooks, dict) else None
+    if not isinstance(origins, list) or not set(origins) <= HOOK_ORIGINS:
+        raise JsonRpcError(
+            INVALID_PARAMS, f"hooks.origins must list sources of {sorted(HOOK_ORIGINS)}"
+        )
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
@@ -1031,6 +1168,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         (subagents and not governed, "subagents need governed: Kedi admits each child request"),
         (live_input and not subagents, "liveInput needs subagents"),
         (interrupt and not live_input, "interrupt needs liveInput"),
+        (bool(origins) and not native_tools, "hooks for a bridge's own tools need nativeTools"),
     ):
         if unmet:
             raise JsonRpcError(INVALID_PARAMS, problem)
@@ -1061,9 +1199,21 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         supports_model_fallback=flags["supports_model_fallback"],
         supports_image_output=flags["supports_image_output"],
         supports_audio_output=flags["supports_audio_output"],
+        hooks=HookCapabilities.full(
+            tool_bridge="native" if origins else "kedi",
+            tool_origins=frozenset({"kedi", *origins}),
+        ),
         supports_mcp=False,
     )
-    return _Peer(kind, backend, capabilities, frozenset(kinds), native_tools, frozenset(effort))
+    return _Peer(
+        kind,
+        backend,
+        capabilities,
+        frozenset(kinds),
+        native_tools,
+        frozenset(effort),
+        frozenset(cast("list[HookToolOrigin]", origins)),
+    )
 
 
 def _user_content(

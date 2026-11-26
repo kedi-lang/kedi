@@ -49,7 +49,7 @@ it has not exited within the timeout.
 
 | Method | Direction | Params | Result |
 |---|---|---|---|
-| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) |
+| `initialize` | Kedi → bridge | `protocolVersion`, `client` | `protocolVersion`, `backend` (`name`, `version`), `kind`, `capabilities`, `mediaKinds`, `settings`, `effort`, `hooks`; see [Settings, Effort and Fallback](#settings-effort-and-fallback) and [Hooks](#hooks) |
 | `run` | Kedi → bridge | see below | `{"text": ...}`, `{"data": ...}` or `{"content": [...]}`, optional `usage`, and `state` in a session |
 | `run/cancel` | Kedi → bridge (notification) | `runId` | — |
 | `run/input` | Kedi → bridge | `runId`, `items` (`id`, `text`) | `{"delivered": true}` or `{"delivered": false}`; see [Live Input and Interrupts](#live-input-and-interrupts) |
@@ -57,6 +57,7 @@ it has not exited within the timeout.
 | `run/usage` | bridge → Kedi (notification) | `runId`, `inputTokens`, `outputTokens`, optional `totalTokens`, `cacheReadTokens`, `cacheWriteTokens` | — |
 | `tool/call` | bridge → Kedi | `runId`, `callId`, `name`, `arguments` | `{"ok": true, "result": ...}` or `{"ok": false, "error": ...}` |
 | `budget/admit` | bridge → Kedi | `runId`, `dimension` | `{"admitted": true}`, or `admitted: false` with `dimension` and `reason`, and for a run budget `limit`, `consumed` and `scopeDepth`; see [Budgets](#budgets) |
+| `hook/invoke` | bridge → Kedi | `runId`, `event`, `callId`, `tool`, `origin`, `arguments`, optional `inputSchema`, `result`, `error` (`type`, `message`), `interrupted` | for `pre_tool_use`: `decision` (`continue`, `edit` with `arguments`, or `deny` with `reason`); otherwise `{}`; see [Hooks](#hooks) |
 | `approval/request` | bridge → Kedi | `runId`, `tool`, `arguments`, `risk`, optional `callId` and `description` | `decision` (`allow`, `deny` or `edit`), optional `reason`, and `arguments` for `edit`; see [Approval](#approval) |
 | `run/event` | bridge → Kedi (notification) | `runId`, `type`, see [Events](#events) | — |
 | `shutdown` | Kedi → bridge | `{}` | `{}`; then Kedi closes stdin |
@@ -234,6 +235,30 @@ approval prompt or a failing approval handler stops the run, as for Kedi tools.
 
 Kedi's own tools need no `approval/request`: Kedi applies the policy at
 `tool/call`.
+
+### Hooks
+
+Kedi runs a program's hooks on every bridge: `user_prompt_submit` before the
+run is assembled, and the tool events around each Kedi tool at `tool/call`.
+The bridge needs nothing for these.
+
+For its own tools, a bridge with `nativeTools` lists in `initialize` the
+sources whose calls it reports, in `hooks` `{"origins": [...]}`:
+`adapter_native` for the backend's tools, `mcp` for its MCP servers' tools and
+`provider_builtin` for tools the model provider runs. It then sends
+`hook/invoke` around each such call:
+
+1. `pre_tool_use` with the call's `arguments`, before `approval/request`.
+   Kedi answers `continue`, `edit` with the `arguments` to run instead (ask
+   approval for those), or `deny` with a `reason` for the model; skip the call
+   then.
+2. After the call, `post_tool_use` with its `result`, or
+   `post_tool_use_failure` with `error` `{type, message}` and `interrupted`
+   when it was cancelled.
+
+A hook that fails or times out stops the run, as for Kedi tools: a failing
+hook is a failing safety or audit control. Without a source in
+`hooks.origins`, Kedi refuses `hook/invoke` for it.
 
 ### Subagents
 
