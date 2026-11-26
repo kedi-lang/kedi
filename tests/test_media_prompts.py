@@ -435,14 +435,17 @@ def test_history_reuses_attachments_by_id_and_content(workspace: Path, runner: A
     sent = [
         [
             name
-            for name in ("photo", "notes")
+            for name in ("photo", "photo_2", "notes")
             if any(isinstance(item, str) and f'id="{name}"' in item for item in request)
         ]
         for request in seen
     ]
-    # Turn 2 reuses both; a rebound name is attached again, also when it returns to old content.
-    assert sent == [["photo", "notes"], [], ["photo"], ["photo"]]
+    # A name means one media in a conversation: turn 2 reuses both, the rebound photo gets a
+    # new name, and the old content keeps its first name, which the history already holds.
+    assert sent == [["photo", "notes"], [], ["photo_2"], []]
     assert seen[1] == ["How many colors does photo have? Check notes."]
+    assert seen[2][-1].endswith("Describe photo_2.")
+    assert seen[3] == ["Describe photo again."]
 
 
 def test_history_processor_attaches_references_on_every_turn(workspace: Path) -> None:

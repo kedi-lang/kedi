@@ -131,6 +131,10 @@ class ConversationState:
             session_id=self.session_id,
             history=self.history,
         )
+        from kedi.agent_adapter.request.media import MediaNamer
+
+        # One namer for every request of the conversation: a name never means two media.
+        self.media_namer = MediaNamer()
         self._lock = RLock()
         self._turn_condition = Condition(self._lock)
         self._turns: list[ConversationTurn] = []
@@ -362,6 +366,8 @@ class ConversationState:
                     adapter_shortname, adapter_shortname
                 ),
                 "state": state,
+                # Names only: a restored conversation gives new media new names.
+                "media_names": sorted(self.media_namer.names),
             }
             json.dumps(checkpoint, allow_nan=False)
             return checkpoint
@@ -392,10 +398,16 @@ class ConversationState:
             if not isinstance(value.get("content"), str):
                 raise ValueError("conversation checkpoint turn content is invalid")
             parsed_turns.append(ConversationTurn(role=value["role"], content=value["content"]))
+        media_names = data.get("media_names", [])
+        if not isinstance(media_names, list) or not all(
+            isinstance(name, str) for name in media_names
+        ):
+            raise ValueError("conversation checkpoint media names must be a list of strings")
         state = _restore_lane_state(adapter_shortname, data.get("state"))
         conversation = cls(artifacts=artifacts)
         conversation._turns = parsed_turns
         conversation._cache_epoch = cache_epoch
+        conversation.media_namer.restore(media_names)
         if state:
             conversation._adapter_states[adapter_shortname] = state
             conversation._adapter_lane_identities[adapter_shortname] = lane_identity

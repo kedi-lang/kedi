@@ -39,8 +39,8 @@ GROUNDING_INSTRUCTION = (
 )
 
 MEDIA_OUTPUT_INSTRUCTION = (
-    "Where your answer holds an image, audio, video or document, write the name this request "
-    "gives it, such as photo_1 for <image photo_1>: one of the attachments, or one a tool "
+    "Where your answer or a tool argument holds an image, audio, video or document, write the "
+    "name it was given, such as photo_1 for <image photo_1>: an attachment, or media a tool "
     "returned."
 )
 

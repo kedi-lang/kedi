@@ -223,7 +223,12 @@ class NativeSubagentOwner:
                 output_adapter = TypeAdapter(child_profile.output_type)
             if media:
                 require_media_input(self.runtime._resolve_adapter(child_profile))
-        output_state = SubagentOutputState(output_adapter) if output_adapter is not None else None
+        # The result reaches the program as values: a media-typed capture names a child's media.
+        output_state = (
+            SubagentOutputState(output_adapter, names_media=True)
+            if output_adapter is not None
+            else None
+        )
         if wait_for_slot:
             await self.runtime._subagent_coordinator.wait_for_start_slot(self._concurrency)
         with (

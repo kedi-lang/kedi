@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from kedi.agent_adapter.request.context import tool_media_namer
+from kedi.agent_adapter.request.context import request_tool_media, tool_media_namer
 from kedi.agent_adapter.request.media import MediaAttachment
 from kedi.media import Media, contains_media, reference
 
@@ -96,7 +96,7 @@ def codemode_media(value: Any) -> ToolMedia | None:
     result are attached to it.
     """
 
-    named = tool_media_namer().attachments
+    named = request_tool_media()
     if not named:
         return None
     text = _result_text(value)

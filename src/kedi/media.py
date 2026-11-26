@@ -669,6 +669,11 @@ class Media:
             return media
         if media is not None:
             raise MediaError(f"{name} is {media.label}, not {cls._label()}")
+        if name in getattr(names, "restored", ()):
+            raise MediaError(
+                f"{name} is from before this conversation was restored; its media are not "
+                "kept, so it cannot be named"
+            )
         choices = [key for key, item in names.items() if isinstance(item, cls)]
         if not choices:
             raise MediaError(

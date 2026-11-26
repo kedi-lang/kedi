@@ -11,10 +11,12 @@ from kedi.agent_adapter.output_schema import (
     output_field_definition,
 )
 from kedi.agent_adapter.request.media import MediaAttachment, compose_prompt
+from kedi.agent_adapter.request.prompts import MEDIA_OUTPUT_INSTRUCTION
 from kedi.agent_adapter.subagents import normalize_final_schema
 from kedi.dynamic_models import build_dynamic_model
 from kedi.errors import KediExecutionError
 from kedi.lang.ast import OutputSegment, TaskStmt, TextSegment
+from kedi.media import type_holds_media
 
 from .evaluation import _segment_parts, merge_template_block_lines
 from .type_system import KediType
@@ -49,10 +51,15 @@ def prepare_subagent_task(
         )
         prompt_segments.append(TextSegment(text=marker, loc=segment.loc))
 
-    # A task prompt is a model prompt: ``<<x>>`` attaches media for the child to read.
+    # A task prompt is a model prompt: ``<<x>>`` attaches media for the child to read. The
+    # child is not the parent's conversation, so its names start fresh.
     prompt, media = compose_prompt(
         _segment_parts(rt, prompt_segments, env, context="task", prompt=True)
     )
+    if any(type_holds_media(field_type) for field_type in field_types.values()):
+        # The child answers a media capture by name and does not get the program's
+        # instructions, so the task prompt says so.
+        prompt = f"{prompt}\n\n{MEDIA_OUTPUT_INSTRUCTION}"
     schema = None
     output_adapter = None
     if field_types:

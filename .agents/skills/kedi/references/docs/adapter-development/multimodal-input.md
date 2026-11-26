@@ -204,6 +204,7 @@ value = TypeAdapter(output_type).validate_python(decoded, context=media_validati
 ```
 
 `media_validation_context()` holds the prompt's attachments and the media
-Kedi's tools returned so far; pass your own validation context to it to keep
-its keys. Kedi's own check after `produce` returns does not resolve names, so
+Kedi's tools returned so far, and in a conversation every media its requests
+named; pass your own validation context to it to keep its keys. Kedi's tool
+argument validators use it already. Kedi's own check after `produce` returns does not resolve names, so
 an adapter that skips this step refuses every media name.

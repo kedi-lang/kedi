@@ -63,6 +63,16 @@ def procedure_json_schema(
     return schema
 
 
+def procedure_parameter_types(
+    rt: KediRuntime,
+    proc: ProcedureDef,
+    local_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The Python type each procedure parameter declares (``str`` when it declares none)."""
+
+    return {name: _resolve_param_type(rt, proc, name, local_env) for name in proc.params}
+
+
 def procedure_return_type(
     rt: KediRuntime,
     proc: ProcedureDef,
