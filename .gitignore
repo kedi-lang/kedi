@@ -247,3 +247,6 @@ plans/
 
 # Recordings and measurements from the local speech example
 examples/local_speech/out/
+
+# Reports from the local extraction example
+examples/local_extraction/out/

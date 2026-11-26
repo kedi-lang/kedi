@@ -1,0 +1,34 @@
+~Refund(
+  customer: Annotated[str, "Full name of the customer who wrote the message"],
+  order_id: Annotated[str, "Order number exactly as written, for example A-4471"],
+  amount: Annotated[float, "Requested refund in euros"],
+  reason: Annotated[
+    Literal["damaged", "late", "wrong_item", "other"],
+    "damaged: arrived broken or faulty; late: arrived after the promised date; wrong_item: a different item, size or color than ordered; other: any other reason, such as a change of mind"
+  ]
+)
+
+###
+Read one refund request. A typed raw invoke sends the message itself, with no template
+instructions, which suits a small local model.
+###
+@read_request(message: str) -> Refund:
+  [refund: Refund] << Refund request: <message>
+  = `refund`
+
+###
+Approve small refunds for damaged or wrong items automatically; send the rest to a person.
+This is ordinary Kedi and Python logic: the model only reads, it does not decide. An amount
+that does not appear in the message, a misread "1,299.00" for example, goes to a person.
+###
+@route(refund: Refund, message: str) -> str:
+  = ```
+  amount = refund.amount
+  grounded = any(text in message for text in (f"{amount:g}", f"{amount:.2f}", f"{amount:,.2f}"))
+  automatic = grounded and refund.reason in ("damaged", "wrong_item") and amount <= 300
+  return "approve" if automatic else "review"
+  ```
+
+# run.py binds this file: `message` arrives as a global.
+[refund: Refund] = `read_request(message)`
+= `{"refund": refund, "route": route(refund, message)}`

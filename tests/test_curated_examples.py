@@ -29,6 +29,7 @@ WORKFLOWS = {
     "knapsack",
     "flappy_kedi",
     "local_speech",
+    "local_extraction",
 }
 
 
