@@ -37,10 +37,16 @@ from kedi.agent_adapter.approvals.policy import (
 )
 from kedi.agent_adapter.conformance import check_adapter
 from kedi.agent_adapter.conformance.check import SCENARIOS, _check_run, _run
-from kedi.agent_adapter.conformance.endpoint import RecordingEndpoint
+from kedi.agent_adapter.conformance.endpoint import RecordingEndpoint, Script
 from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import SubagentExecutionRequest, SubagentUsageLimits
+from kedi.agent_adapter.subagents.control import (
+    AgentInput,
+    LiveInput,
+    RunInterrupted,
+    live_input_scope,
+)
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compile import build_capture_env
 from kedi.agent_profile.evaluation import eval_profile_definition
@@ -123,6 +129,8 @@ def test_the_handshake_sets_kind_identity_and_instance_capabilities(adapters: li
         ("exit-on-init", "boom: missing API key"),
         # Kedi admits each of a child's requests against its limits: only a governed bridge.
         ("subagents-ungoverned", "subagents need governed"),
+        ("live-without-subagents", "liveInput needs subagents"),
+        ("interrupt-without-live", "interrupt needs liveInput"),
     ],
 )
 def test_a_bridge_that_fails_the_handshake_is_never_exposed(scenario: str, message: str) -> None:
@@ -1035,3 +1043,157 @@ def test_a_bridge_that_dies_during_a_child_releases_its_slot_once() -> None:
         assert coordinator._active_runs == 0
     finally:
         adapter.close()
+
+
+def test_live_input_reaches_a_running_child(adapters: list) -> None:
+    adapter = peer("live")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_live_subagent_input is True
+    assert adapter.capabilities.supports_subagent_interrupt is True
+    parent = manager_run(adapter, "Send input.")
+    assert parent["sent"]["result"]["result"]["status"] == "queued"
+    child = json.loads(parent["waited"]["result"]["result"]["task_summary"])
+    # Kedi's rendering of the input reached the child's bridge run while it ran.
+    (delivered,) = child["inputs"]
+    assert delivered.startswith("Kedi agent input:") and "Use the blue one." in delivered
+
+
+def test_an_interrupt_restarts_the_child_from_its_interrupted_state(adapters: list) -> None:
+    adapter = peer("live")
+    adapters.append(adapter)
+    parent = manager_run(adapter, "Interrupt.")
+    assert parent["sent"]["result"]["result"]["status"] == "interrupt_requested"
+    child = json.loads(parent["waited"]["result"]["result"]["task_summary"])
+    # The next attempt carries the input, and resumes from the interrupted attempt's state.
+    assert child["user"].startswith("Continue with the updated task input.")
+    assert "Use the blue one." in child["user"]
+    assert child["session"]["state"]["partial"]
+
+
+def test_per_request_usage_counts_tokens_and_holds_a_childs_token_limits() -> None:
+    adapter = peer("live")
+    try:
+        assert adapter.capabilities.supports_token_usage is True
+        source = SUBAGENTS + "\n> use: manager\n[r] << Count tokens.\n= <r>\n"
+        runtime = compile_program(parse_program(source), adapter=adapter)
+        try:
+            runtime.run_main()
+        finally:
+            asyncio.run(runtime.aclose())
+        record = runtime._subagent_coordinator.runs.snapshot()[-1]
+        # Two admitted requests; tokens from run/usage, not from the result's usage.
+        assert (record.requests, record.input_tokens, record.total_tokens) == (2, 6, 8)
+        limited = compile_program(
+            parse_program(source),
+            adapter=adapter,
+            subagent_usage_limits=SubagentUsageLimits(total_tokens_limit=5),
+        )
+        try:
+            waited = json.loads(limited.run_main())["waited"]["result"]["result"]
+        finally:
+            asyncio.run(limited.aclose())
+        assert waited["status"] == "failed"
+        assert "total token limit 5 exceeded" in waited["error"]
+    finally:
+        adapter.close()
+
+
+class HeldEndpoint(RecordingEndpoint):
+    """Holds the first model request until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.arrived = threading.Event()
+        self.release = threading.Event()
+
+    def _answer(self, protocol: Any, body: dict[str, Any]) -> dict[str, Any]:
+        if not self.arrived.is_set():
+            self.arrived.set()
+            self.release.wait(10)
+        return super()._answer(protocol, body)
+
+
+def lookup_tool() -> ToolSpec:
+    def lookup(query: str) -> str:
+        return f"found-{query}"
+
+    return ToolSpec(
+        fn=lookup,
+        name="lookup",
+        json_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+        risk="read_only",
+    )
+
+
+def test_the_reference_bridge_gives_live_input_to_its_next_request() -> None:
+    with HeldEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="lookup", arguments={"query": "q"})
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        control = LiveInput("child")
+        control.configure(input=True, interrupt=True)
+
+        async def attempt() -> str:
+            with live_input_scope(control), adapter.tool_scope((lookup_tool(),)):
+                running = asyncio.ensure_future(adapter.invoke(prompt="Look it up."))
+                await asyncio.to_thread(endpoint.arrived.wait, 10)
+                receipt = control.admit("Use the blue one.", sender_id="parent")
+                await asyncio.sleep(0.3)  # Kedi sends run/input while the request is held
+                endpoint.release.set()
+                answer = await running
+            assert receipt.message_id in control.delivered
+            return answer
+
+        try:
+            assert asyncio.run(attempt()) == "done"
+        finally:
+            endpoint.release.set()
+            adapter.close()
+        first, second = endpoint.take()
+        assert "Use the blue one." not in json.dumps(first.body)
+        assert "Use the blue one." in json.dumps(second.body)
+
+
+def test_the_reference_bridge_stops_an_interrupted_attempt() -> None:
+    with HeldEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True)
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        control = LiveInput("child")
+        control.configure(input=True, interrupt=True)
+
+        async def attempt() -> None:
+            with live_input_scope(control):
+                running = asyncio.ensure_future(adapter.invoke(prompt="Take your time."))
+                await asyncio.to_thread(endpoint.arrived.wait, 10)
+                control.admit("Stop.", sender_id="parent", interrupt=True)
+                await running
+
+        try:
+            with pytest.raises(RunInterrupted):
+                asyncio.run(attempt())
+        finally:
+            endpoint.release.set()
+            adapter.close()
+
+
+def test_the_reference_bridge_reports_each_requests_usage(adapters: list) -> None:
+    with RecordingEndpoint() as endpoint:
+        endpoint.script = Script(final="done", text=True, tool="lookup", arguments={"query": "q"})
+        adapter = JsonRpcAdapter(reference_bridge_command(f"{endpoint.base_url}/v1"))
+        adapters.append(adapter)
+        assert adapter.capabilities.supports_token_usage is True
+        usage: list[InvocationUsage] = []
+        with observe_invocations(usage.append), adapter.tool_scope((lookup_tool(),)):
+            assert asyncio.run(adapter.invoke(prompt="Look it up.")) == "done"
+        total = sum(usage, InvocationUsage())
+        # Two requests, each admitted and each reporting the endpoint's 1 + 1 tokens.
+        assert (total.requests, total.tool_calls, total.total_tokens) == (2, 1, 4)
+
+
+def test_input_a_bridge_refuses_waits_for_the_next_attempt(adapters: list) -> None:
+    adapter = peer("default")
+    adapters.append(adapter)
+    item = AgentInput(
+        message_id="m1", target_id="child", sender_id="parent", revision=0, message="Hi."
+    )
+    # Kedi counts the input undelivered, so the coordinator gives it to the next attempt.
+    assert asyncio.run(adapter._deliver("run-1", (item,))) is False

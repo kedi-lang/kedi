@@ -18,6 +18,7 @@ import { createInterface } from "node:readline";
 const PROTOCOL_VERSION = 1;
 const RUN_FAILED = -32002;
 const CANCELLED = -32003;
+const INTERRUPTED = -32006;
 const METHOD_NOT_FOUND = -32601;
 
 function option(name, fallback) {
@@ -57,6 +58,7 @@ function request(method, params) {
 }
 
 async function complete(runId, body, signal) {
+  // Returns the model's message; reports the request's token counts with run/usage.
   const admission = await request("budget/admit", { runId, dimension: "request" });
   if (!admission.admitted) {
     // Kedi fails the run with its RunBudgetExceeded; the request is never sent.
@@ -71,7 +73,18 @@ async function complete(runId, body, signal) {
   if (!response.ok) {
     throw new RpcError(RUN_FAILED, `model endpoint answered ${response.status}: ${await response.text()}`);
   }
-  return (await response.json()).choices[0].message;
+  const reply = await response.json();
+  const usage = reply.usage ?? {};
+  send({
+    method: "run/usage",
+    params: {
+      runId,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      totalTokens: usage.total_tokens,
+    },
+  });
+  return reply.choices[0].message;
 }
 
 function userParts(content) {
@@ -95,7 +108,8 @@ async function callTool(runId, id, name, args) {
   return JSON.stringify(reply);
 }
 
-async function run(params, signal) {
+async function run(params, state) {
+  const signal = state.controller.signal;
   const messages = [];
   if (params.system) messages.push({ role: "system", content: params.system });
   // In a session, Kedi hands back the state this bridge returned for the last turn.
@@ -125,8 +139,14 @@ async function run(params, signal) {
     const turn = [...messages.slice(turnStart), { role: "assistant", content }];
     return { ...result, state: { messages: [...history, ...turn] } };
   };
+  // What an interrupted attempt hands Kedi: the conversation so far, for the next attempt.
+  state.partial = () => (params.session ? { messages: [...history, ...messages.slice(turnStart)] } : null);
   for (let step = 0; step < maxSteps; step++) {
+    // Live input from Kedi joins the conversation before the next model request.
+    const delivering = state.inputs.splice(0);
+    for (const { texts } of delivering) for (const text of texts) messages.push({ role: "user", content: text });
     const message = await complete(params.runId, body, signal);
+    for (const { id } of delivering) send({ id, result: { delivered: true } });
     if (native) {
       const calls = message.tool_calls ?? [];
       if (!calls.length) {
@@ -202,6 +222,9 @@ async function handle(message) {
           governed: true,
           // Kedi runs its children here as ordinary runs; params.subagent says whose they are.
           subagents: true,
+          liveInput: true,
+          interrupt: true,
+          usage: true,
         },
         mediaKinds: ["image"],
       },
@@ -209,17 +232,33 @@ async function handle(message) {
     return;
   }
   if (method === "run") {
-    const controller = new AbortController();
-    runs.set(params.runId, controller);
+    const state = { controller: new AbortController(), inputs: [], interrupted: false, partial: () => null };
+    runs.set(params.runId, state);
     try {
-      send({ id, result: await run(params, controller.signal) });
+      send({ id, result: await run(params, state) });
     } catch (error) {
-      const code = controller.signal.aborted ? CANCELLED : (error.code ?? RUN_FAILED);
-      log("run failed:", error.message);
-      send({ id, error: { code, message: error.message } });
+      if (state.interrupted) {
+        const partial = state.partial();
+        send({ id, error: { code: INTERRUPTED, message: "interrupted", data: partial ? { state: partial } : {} } });
+      } else {
+        const code = state.controller.signal.aborted ? CANCELLED : (error.code ?? RUN_FAILED);
+        log("run failed:", error.message);
+        send({ id, error: { code, message: error.message } });
+      }
     } finally {
       runs.delete(params.runId);
+      // Input the model never saw goes back to Kedi for the next attempt.
+      for (const { id: inputId } of state.inputs) send({ id: inputId, result: { delivered: false } });
     }
+    return;
+  }
+  if (method === "run/input") {
+    const state = runs.get(params.runId);
+    if (!state) {
+      send({ id, result: { delivered: false } });
+      return;
+    }
+    state.inputs.push({ id, texts: params.items.map((item) => item.text) });
     return;
   }
   if (method === "shutdown") {
@@ -235,7 +274,15 @@ lines.on("line", (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
   if (message.method === "run/cancel") {
-    runs.get(message.params.runId)?.abort();
+    runs.get(message.params.runId)?.controller.abort();
+    return;
+  }
+  if (message.method === "run/interrupt") {
+    const state = runs.get(message.params.runId);
+    if (state) {
+      state.interrupted = true;
+      state.controller.abort();
+    }
     return;
   }
   if (message.method !== undefined) {

@@ -20,6 +20,13 @@ Kedi to bridge:
   ``userContent`` is ``null``, or the user turn with its media: ``{type: "text", text}`` and
   ``{type: "media", name, kind, mediaType, data | url}`` parts, ``data`` in base64.
 - ``run/cancel`` (notification) ``{runId}``: stop the run; it answers with ``CANCELLED``.
+- ``run/input`` ``{runId, items: [{id, text}]}`` (with ``liveInput``): input for a running
+  run, from its parent or a child. Add each ``text`` as a user turn before the next model
+  request, and answer ``{delivered: true}`` once a model request carries them, or
+  ``{delivered: false}`` if the run ends first: Kedi then gives them to the next attempt.
+- ``run/interrupt`` (notification) ``{runId}`` (with ``interrupt``): stop the current attempt
+  and answer the run with ``INTERRUPTED``, its ``data`` holding ``{state}`` in a session. The
+  conversation continues: Kedi starts another attempt with the new input.
 - ``shutdown`` ``{}``: finish and exit; Kedi then closes stdin.
 
 Bridge to Kedi:
@@ -37,6 +44,10 @@ Bridge to Kedi:
   ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
   reason}``, or ``{decision: "edit", arguments, reason}``: the bridge runs the edited
   arguments, after another ``approval/request`` if their risk is higher.
+- ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
+  totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
+  it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
+  result is then ignored.
 - ``run/event`` (notification, with the ``events`` capability) ``{runId, type, ...}``:
   ``message.delta`` ``{messageId, text, phase?}``, ``message.completed`` ``{messageId,
   text?, phase?}`` or ``tool.boundary``. ``phase`` is ``commentary`` or ``final``.
@@ -69,6 +80,8 @@ OVERLOADED: Final = -32004
 """The receiver has no capacity for another request; the sender may retry later."""
 UNKNOWN_RUN: Final = -32005
 """The ``runId`` names no run in progress on this connection."""
+INTERRUPTED: Final = -32006
+"""The run stopped after ``run/interrupt``; its conversation continues in another attempt."""
 
 CAPABILITIES: Final = {
     "structuredOutput": "supports_structured_output",
@@ -80,12 +93,17 @@ CAPABILITIES: Final = {
     "sessions": "supports_stateful_history",
     "governed": "supports_request_budget",
     "subagents": "supports_subagents",
+    "liveInput": "supports_live_subagent_input",
+    "interrupt": "supports_subagent_interrupt",
+    "usage": "supports_token_usage",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
 
 ``subagents`` lets Kedi run its children on the bridge, concurrently when they run in the
 background; it needs ``governed``, because Kedi admits each of a child's requests against its
-limits before the bridge sends it.
+limits before the bridge sends it. ``liveInput`` (``run/input``) needs ``subagents``, and
+``interrupt`` (``run/interrupt``) needs ``liveInput``. ``usage`` promises a ``run/usage`` for
+every model request, so a child's token limits hold.
 
 ``governed`` promises that every model request the bridge's backend makes goes through
 ``budget/admit`` first: SDK retries, tool-loop turns and internal calls too. A bridge that
@@ -93,8 +111,8 @@ cannot route one of them must disable it or not advertise ``governed``. ``native
 (``NATIVE_TOOLS``) says the backend runs tools of its own besides Kedi's; each call then
 needs ``approval/request``, and with ``governed`` also ``budget/admit``.
 
-Anything else, such as live input or cancellation guarantees, is not part of version 1 and
-stays unavailable whatever the bridge says. ``mediaInput`` needs ``mediaKinds``,
+Anything else, such as cancellation guarantees, is not part of version 1 and stays unavailable
+whatever the bridge says. ``mediaInput`` needs ``mediaKinds``,
 the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
@@ -132,6 +150,7 @@ __all__ = [
     "TOOL_RISKS",
     "INTERNAL_ERROR",
     "INVALID_PARAMS",
+    "INTERRUPTED",
     "INVALID_REQUEST",
     "MAX_FRAME_BYTES",
     "METHOD_NOT_FOUND",

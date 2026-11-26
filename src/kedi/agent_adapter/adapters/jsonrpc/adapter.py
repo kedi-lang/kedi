@@ -62,6 +62,7 @@ from ...request.media import MediaAttachment, attachment_content
 from ...request.prompts import output_correction, protocol_correction, required_tools_correction
 from ...subagents import SubagentExecutionRequest, SubagentUsageLimits, accept_subagent_output
 from ...subagents.context import current_subagent_execution
+from ...subagents.control import AgentInput, LiveInput, controlled_attempt, current_live_input
 from ...tools.errors import correctable_tool_error
 from ...tools.execution import validate_tool_arguments
 from ...tools.specs import ToolSpec
@@ -70,6 +71,7 @@ from .protocol import (
     BUDGET_DIMENSIONS,
     CANCELLED,
     CAPABILITIES,
+    INTERRUPTED,
     INVALID_PARAMS,
     MEDIA_KINDS,
     METHOD_NOT_FOUND,
@@ -101,6 +103,9 @@ class _Run:
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
     failure: BaseException | None = None
     events: AgentMessageResolver | None = None
+    live: LiveInput | None = None
+    """The live input of the Kedi call; the run's prompt may carry some of it."""
+    prompt: str = ""
 
     def start(self, coroutine: Coroutine[Any, Any, None]) -> None:
         """Start a callback on the run's loop; called in the run's context."""
@@ -137,8 +142,9 @@ class JsonRpcAdapter:
         supports_tool_attempt_budget=None,
         supports_subagents=None,
         supports_background_subagents=None,
-        # A run reports one total when it ends, so a child's token limits cannot be checked.
-        supports_token_usage=False,
+        supports_live_subagent_input=None,
+        supports_subagent_interrupt=None,
+        supports_token_usage=None,
         negotiated_capabilities=frozenset(
             {
                 "structured_output",
@@ -151,6 +157,9 @@ class JsonRpcAdapter:
                 "tool_attempt_budget",
                 "subagents",
                 "background_subagents",
+                "live_subagent_input",
+                "subagent_interrupt",
+                "token_usage",
             }
         ),
         supports_profile_override=True,
@@ -431,6 +440,8 @@ class JsonRpcAdapter:
             loop=asyncio.get_running_loop(),
             context=context,
             tools={tool.name: tool for tool in tools},
+            live=current_live_input(),
+            prompt=rendered.user,
         )
         required = {tool.name for tool in rendered.tools if tool.required_before_output}
         params: JsonObject = {
@@ -482,7 +493,20 @@ class JsonRpcAdapter:
         self._runs[run_id] = run
         try:
             with agent_event_run(self.shortname) as run.events:
-                answer = await self._attempts(run, params, validator, required, accept, commit)
+                attempt = self._attempts(run, params, validator, required, accept, commit)
+                control = current_live_input()
+                if control is None or not self.capabilities.supports_live_subagent_input:
+                    answer = await attempt
+                else:
+                    # Input for this run goes to the bridge while it runs; an interrupt stops
+                    # the attempt, and Kedi's coordinator starts the next one.
+                    interrupt = self.capabilities.supports_subagent_interrupt
+                    answer = await controlled_attempt(
+                        control,
+                        attempt,
+                        deliver=partial(self._deliver, run_id),
+                        stop=partial(self._interrupt, run_id) if interrupt else None,
+                    )
                 if run.events is not None and isinstance(answer, str):
                     run.events.complete_run(final_text=answer)
                 return answer
@@ -506,6 +530,17 @@ class JsonRpcAdapter:
         for _ in range(self._output_retries + 1):
             try:
                 result = await self._request_run(params)
+            except JsonRpcError as error:
+                # An interrupted attempt keeps the conversation so far for the next one.
+                data = error.data
+                if (
+                    error.code == INTERRUPTED
+                    and commit is not None
+                    and isinstance(data, dict)
+                    and "state" in data
+                ):
+                    commit(data["state"])
+                raise
             finally:
                 if run.failure is not None:
                     raise run.failure
@@ -529,10 +564,27 @@ class JsonRpcAdapter:
             # Cancellation is a request: the bridge stopping is not confirmed by it.
             self._connection.notify("run/cancel", {"runId": params["runId"]})
             raise
-        # A governed bridge's requests were counted as Kedi admitted them; Kedi counts tool calls.
-        governed = bool(self.capabilities.supports_request_budget)
-        report_invocation(_usage(result.get("usage"), requests_counted=governed))
+        if not self.capabilities.supports_token_usage:
+            # A governed bridge's requests were counted as Kedi admitted them; Kedi counts
+            # tool calls. With usage, each request's counts arrived in run/usage.
+            governed = bool(self.capabilities.supports_request_budget)
+            report_invocation(_usage(result.get("usage"), requests_counted=governed))
         return result
+
+    async def _deliver(self, run_id: str, items: tuple[AgentInput, ...]) -> bool:
+        """Hand live input to the running bridge run; true once its model has it."""
+
+        payload = [{"id": item.message_id, "text": item.render()} for item in items]
+        try:
+            reply = await self._connection.request("run/input", {"runId": run_id, "items": payload})
+        except JsonRpcError:
+            return False  # the run ended or the bridge refused: the next attempt gets them
+        return reply.get("delivered") is True
+
+    async def _interrupt(self, run_id: str) -> None:
+        """Ask the bridge to stop the attempt; the run's INTERRUPTED answer confirms it."""
+
+        self._connection.notify("run/interrupt", {"runId": run_id})
 
     def _on_request(self, request_id: int | str, method: str, params: JsonObject) -> None:
         """A bridge request, on the reader thread: start it as a task on the run's loop.
@@ -624,6 +676,13 @@ class JsonRpcAdapter:
     def _on_notification(self, method: str, params: JsonObject) -> None:
         """A bridge notification, on the reader thread: a run event, in stream order."""
 
+        if method == "run/usage" and self.capabilities.supports_token_usage:
+            run_id = params.get("runId")
+            run = self._runs.get(run_id) if isinstance(run_id, str) else None
+            if run is not None:
+                governed = bool(self.capabilities.supports_request_budget)
+                self._schedule_usage(run, _request_usage(params, requests_counted=governed))
+            return
         if method != "run/event" or not self.capabilities.supports_stream_events:
             return
         run_id = params.get("runId")
@@ -693,6 +752,10 @@ class JsonRpcAdapter:
             admit_run_operation(cast(BudgetDimension, BUDGET_DIMENSIONS[dimension]))
             step = InvocationUsage(requests=1) if dimension == "request" else None
             report_invocation(step or InvocationUsage(tool_calls=1))
+            if step is not None and run.live is not None:
+                # The model request about to go out carries the prompt, and any live input
+                # Kedi put in it: that input has reached the model.
+                run.live.confirm_contents((run.prompt,))
         except RunBudgetExceeded as exc:
             denial |= {"limit": exc.limit, "consumed": exc.consumed, "scopeDepth": exc.scope_depth}
             failure: KediExecutionError = exc
@@ -731,6 +794,19 @@ class JsonRpcAdapter:
         ceiling = () if child is None else tuple(child.approval_ceiling)
         local = self.active_profile.approval
         return (*ceiling, local) if local is not None or not ceiling else ceiling
+
+    def _schedule_usage(self, run: _Run, usage: InvocationUsage) -> None:
+        # After the run's earlier callbacks and before its answer: same queue, in order.
+        run.loop.call_soon_threadsafe(lambda: run.context.run(self._report_usage, run, usage))
+
+    def _report_usage(self, run: _Run, usage: InvocationUsage) -> None:
+        """One model request's counts; a child's token limit that they break ends the run."""
+
+        try:
+            report_invocation(usage)
+        except KediExecutionError as exc:
+            run.stop(exc)
+            self._connection.notify("run/cancel", {"runId": run.run_id})
 
     def _stop(self, request_id: int | str, run: _Run, failure: BaseException) -> None:
         """End the run with Kedi's ``failure`` and tell the bridge why its request failed."""
@@ -787,6 +863,23 @@ def _lineage(
             "totalTokens": remaining.total_tokens_limit,
         },
     }
+
+
+def _request_usage(params: JsonObject, *, requests_counted: bool) -> InvocationUsage:
+    """One model request's counts from ``run/usage``; a count left out is unknown."""
+
+    input_tokens, output_tokens = _count(params, "inputTokens"), _count(params, "outputTokens")
+    total = _count(params, "totalTokens")
+    if total is None and input_tokens is not None and output_tokens is not None:
+        total = input_tokens + output_tokens
+    return InvocationUsage(
+        requests=0 if requests_counted else 1,
+        input_tokens=input_tokens,
+        cache_read_tokens=_count(params, "cacheReadTokens"),
+        cache_write_tokens=_count(params, "cacheWriteTokens"),
+        output_tokens=output_tokens,
+        total_tokens=total,
+    )
 
 
 def _usage(usage: Any, *, requests_counted: bool = False) -> InvocationUsage:
@@ -858,11 +951,17 @@ def _negotiate(handshake: JsonObject) -> _Peer:
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
     subagents = flags["supports_subagents"]
-    if subagents and not governed:
-        raise JsonRpcError(
-            INVALID_PARAMS,
-            "subagents need governed: Kedi admits each of a child's requests against its limits",
-        )
+    live_input, interrupt = (
+        flags["supports_live_subagent_input"],
+        flags["supports_subagent_interrupt"],
+    )
+    for unmet, problem in (
+        (subagents and not governed, "subagents need governed: Kedi admits each child request"),
+        (live_input and not subagents, "liveInput needs subagents"),
+        (interrupt and not live_input, "interrupt needs liveInput"),
+    ):
+        if unmet:
+            raise JsonRpcError(INVALID_PARAMS, problem)
     capabilities = AdapterCapabilities(
         supports_structured_output=flags["supports_structured_output"],
         supports_tool_registration=tools,
@@ -876,10 +975,12 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         # count when it asks first.
         supports_request_budget=governed,
         supports_tool_attempt_budget=governed or not native_tools,
-        supports_token_usage=False,
+        supports_token_usage=flags["supports_token_usage"],
         supports_subagents=subagents,
         # Kedi runs a background child as another run on the same connection.
         supports_background_subagents=subagents,
+        supports_live_subagent_input=live_input,
+        supports_subagent_interrupt=interrupt,
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,
