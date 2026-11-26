@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Self, cast
+from typing import Any, Final, Self, cast
 from uuid import uuid4
 
 from jsonschema.validators import validator_for
@@ -102,6 +102,7 @@ from .protocol import (
     PROTOCOL_VERSION,
     RUN_FAILED,
     TOOL_RISKS,
+    TRANSCRIPT,
     UNKNOWN_RUN,
     UNSUPPORTED,
     JsonObject,
@@ -131,6 +132,10 @@ class _Run:
     live: LiveInput | None = None
     """The live input of the Kedi call; the run's prompt may carry some of it."""
     prompt: str = ""
+    commit_key: str = "state"
+    """What a run's result commits: the bridge's ``state``, or its transcript ``messages``."""
+    transcript_media: Mapping[str, JsonObject] = field(default_factory=dict)
+    """The conversation's media by name, for ``media/get``."""
 
     def start(self, coroutine: Coroutine[Any, Any, None]) -> None:
         """Start a callback on the run's loop; called in the run's context."""
@@ -163,6 +168,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
         supports_stream_events=None,
         supports_media_input=None,
         supports_stateful_history=None,
+        supports_history_replay=None,
         supports_request_budget=None,
         supports_tool_attempt_budget=None,
         supports_subagents=None,
@@ -180,6 +186,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
                 "stream_events",
                 "media_input",
                 "stateful_history",
+                "history_replay",
                 "request_budget",
                 "tool_attempt_budget",
                 "subagents",
@@ -269,6 +276,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
         self.media_kinds, self.native_tools = peer.media_kinds, peer.native_tools
         self.effort_levels = peer.effort_levels
         """The ``> effort:`` levels the bridge maps to its backend."""
+        self.transcript, self.sessions = peer.transcript, peer.sessions
+        """The history modes: Kedi holds the transcript, or the bridge holds its state."""
         self.mcp_transports = peer.mcp_transports
         """The MCP transports the bridge connects for ``> mcp:`` servers."""
         self.hook_origins = peer.hook_origins
@@ -291,6 +300,19 @@ class JsonRpcAdapter(HookRegistrationMixin):
 
     def telemetry_model_name(self) -> str | None:
         return self.active_profile.model or self._model
+
+    def _uses_transcript(self) -> bool:
+        """Kedi holds a framework's transcript, and a harness's when the program needs it."""
+
+        if not self.transcript:
+            return False
+        if not self.sessions or self.kind == "agent-framework":
+            return True
+        profile = self.active_profile
+        processing = profile.history_processing
+        return "history_replay" in profile.requirements or (
+            processing is not None and processing.processor is not None
+        )
 
     @property
     def supports_native_subagent_resume(self) -> bool:
@@ -544,7 +566,19 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "admitResults": self.native_tools and current_artifact_admission() is not None,
         }
         commit: Callable[[Any], None] | None = None
-        if child is not None and self.capabilities.supports_stateful_history:
+        store = child.conversation if child is not None else conversation
+        if store is not None and self._uses_transcript():
+            # Kedi holds the conversation: the run gets the earlier turns, and its new
+            # messages join them when Kedi commits the turn.
+            history = list(store.resume_state.get("transcript", ()))
+            media_table = {
+                **store.resume_state.get("transcript_media", {}),
+                **_media_table(user_content or ()),
+            }
+            params["history"] = history
+            run.commit_key, run.transcript_media = "messages", media_table
+            commit = partial(_commit_transcript, store.result_state, history, media_table)
+        elif child is not None and self.capabilities.supports_stateful_history:
             # A continuation resumes from the bridge state of the child's last committed run.
             history = child.conversation
             params["session"] = {
@@ -607,9 +641,9 @@ class JsonRpcAdapter(HookRegistrationMixin):
                     error.code == INTERRUPTED
                     and commit is not None
                     and isinstance(data, dict)
-                    and "state" in data
+                    and run.commit_key in data
                 ):
-                    commit(data["state"])
+                    commit(data[run.commit_key])
                 if run.failure is not None:
                     # Kedi stopped the run; what the bridge reported stays attached.
                     raise run.failure from self._quoted(error)
@@ -619,9 +653,13 @@ class JsonRpcAdapter(HookRegistrationMixin):
                     raise run.failure
             answer, correction = _check_answer(result, validator, required, run, accept)
             if correction is None:
-                if commit is not None and "state" in result:
+                if commit is not None and run.commit_key == "messages" and "messages" not in result:
+                    raise JsonRpcError(
+                        INVALID_PARAMS, "a transcript run must answer with this turn's 'messages'"
+                    )
+                if commit is not None and run.commit_key in result:
                     # Kedi commits it only after accepting this turn's result.
-                    commit(result["state"])
+                    commit(result[run.commit_key])
                 return answer
             params = {**params, "continuation": {"answer": result, "message": correction}}
         raise JsonRpcError(
@@ -733,6 +771,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
             "approval/request": self._parse_approval,
             "hook/invoke": self._parse_hook,
             "artifact/admit": self._parse_artifact,
+            "media/get": self._parse_media,
         }.get(method)
         try:
             if parse is None:
@@ -813,6 +852,23 @@ class JsonRpcAdapter(HookRegistrationMixin):
             metadata={"source": origin, "bridge": "jsonrpc", "backend": self.backend["name"]},
         )
         return lambda request_id, run: self._approve(request_id, run, request)
+
+    def _parse_media(self, params: JsonObject) -> _Handler:
+        if not self.transcript:
+            raise JsonRpcError(UNSUPPORTED, "media/get needs the transcript capability")
+        ref = params.get("ref")
+        if not isinstance(ref, str):
+            raise JsonRpcError(INVALID_PARAMS, "media/get needs a string ref")
+
+        async def answer(request_id: int | str, run: _Run) -> None:
+            media = run.transcript_media.get(ref)
+            if media is None:
+                error = JsonRpcError(INVALID_PARAMS, f"media/get: the conversation has no {ref!r}")
+                self._connection.respond(request_id, error=error)
+                return
+            self._connection.respond(request_id, result=dict(media))
+
+        return answer
 
     def _parse_artifact(self, params: JsonObject) -> _Handler:
         if not self.native_tools:
@@ -1215,6 +1271,8 @@ class _Peer:
     effort_levels: frozenset[str]
     hook_origins: frozenset[HookToolOrigin]
     mcp_transports: frozenset[str]
+    transcript: bool
+    sessions: bool
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -1257,6 +1315,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
+    transcript = advertised.get(TRANSCRIPT) is True
     # A bridge that runs tools of its own reports their calls to Kedi's hooks.
     native: tuple[HookToolOrigin, ...] = ("adapter_native", "provider_builtin")
     origins = frozenset[HookToolOrigin](
@@ -1287,7 +1346,9 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         supports_native_tool_calling=flags["supports_native_tool_calling"],
         supports_stream_events=flags["supports_stream_events"],
         supports_media_input=flags["supports_media_input"],
-        supports_stateful_history=flags["supports_stateful_history"],
+        # Kedi holds the transcript, or the bridge its session state; either keeps history.
+        supports_stateful_history=flags["supports_stateful_history"] or transcript,
+        supports_history_replay=transcript,
         # Kedi admits each attempt of its own tools at tool/call; the bridge's own tools only
         # count when it asks first.
         supports_request_budget=governed,
@@ -1323,7 +1384,69 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         frozenset(effort),
         origins,
         frozenset(transports),
+        transcript,
+        flags["supports_stateful_history"],
     )
+
+
+def _media_table(content: Sequence[JsonObject]) -> dict[str, JsonObject]:
+    """The prompt's media by name, as ``media/get`` returns them."""
+
+    return {
+        part["name"]: {
+            key: part[key] for key in ("kind", "mediaType", "data", "url") if key in part
+        }
+        for part in content
+        if part.get("type") == "media"
+    }
+
+
+TRANSCRIPT_PARTS: Final = {
+    "text": ("text",),
+    "media": ("ref",),
+    "toolCall": ("id", "name", "arguments"),
+    "toolResult": ("id", "result"),
+    "reasoning": (),
+}
+"""Kedi's transcript part types and the fields each needs."""
+
+
+def _commit_transcript(
+    state: dict[str, Any],
+    history: list[JsonObject],
+    media: Mapping[str, JsonObject],
+    messages: Any,
+) -> None:
+    """Record a turn: Kedi's transcript gains the turn's messages, checked against the schema."""
+
+    if not isinstance(messages, list):
+        raise JsonRpcError(INVALID_PARAMS, "'messages' must list the turn's messages")
+    for index, message in enumerate(messages):
+        where = f"messages[{index}]"
+        if (
+            not isinstance(message, dict)
+            or message.get("role") not in ("user", "assistant", "tool")
+            or not isinstance(message.get("parts"), list)
+        ):
+            raise JsonRpcError(
+                INVALID_PARAMS, f"{where} needs a role of user, assistant or tool, and parts"
+            )
+        for number, part in enumerate(message["parts"]):
+            kind = part.get("type") if isinstance(part, dict) else None
+            fields = TRANSCRIPT_PARTS.get(kind) if isinstance(kind, str) else None
+            if fields is None or any(name not in part for name in fields):
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    f"{where}.parts[{number}] must be one of "
+                    f"{', '.join(TRANSCRIPT_PARTS)}, with its fields",
+                )
+            if kind == "media" and part["ref"] not in media:
+                raise JsonRpcError(
+                    INVALID_PARAMS,
+                    f"{where}.parts[{number}]: the conversation has no {part['ref']!r}",
+                )
+    state["transcript"] = [*history, *messages]
+    state["transcript_media"] = dict(media)
 
 
 def _user_content(

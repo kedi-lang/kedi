@@ -127,6 +127,75 @@ function userParts(content) {
   });
 }
 
+// Transcript mode: Kedi holds the conversation in its own schema.
+
+const mediaCache = new Map();
+
+async function mediaFor(runId, ref, current) {
+  // The bytes of a conversation's media: this turn's, ones seen before, or Kedi's copy.
+  const part = current?.find((item) => item.type === "media" && item.name === ref);
+  if (part) return part;
+  if (!mediaCache.has(ref)) mediaCache.set(ref, await request("media/get", { runId, ref }));
+  return mediaCache.get(ref);
+}
+
+async function fromTranscript(runId, history) {
+  // Kedi's transcript as chat messages.
+  const out = [];
+  for (const message of history) {
+    const parts = message.parts;
+    if (message.role === "user") {
+      const content = [];
+      for (const part of parts) {
+        if (part.type === "text") content.push({ type: "text", text: part.text });
+        if (part.type === "media") content.push(...userParts([await mediaFor(runId, part.ref)]));
+      }
+      const plain = content.length === 1 && content[0].type === "text";
+      out.push({ role: "user", content: plain ? content[0].text : content });
+    } else if (message.role === "assistant") {
+      const text = parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+      const calls = parts
+        .filter((part) => part.type === "toolCall")
+        .map((part) => ({
+          id: part.id,
+          type: "function",
+          function: { name: part.name, arguments: JSON.stringify(part.arguments) },
+        }));
+      out.push({ role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls } : {}) });
+    } else {
+      for (const part of parts) {
+        const content = typeof part.result === "string" ? part.result : JSON.stringify(part.result);
+        out.push({ role: "tool", tool_call_id: part.id, content });
+      }
+    }
+  }
+  return out;
+}
+
+function toTranscript(params, turn) {
+  // This turn's chat messages in Kedi's schema; the user turn names its media by ref.
+  const [, ...rest] = turn;
+  const user = params.userContent
+    ? params.userContent.map((part) =>
+        part.type === "text" ? { type: "text", text: part.text } : { type: "media", ref: part.name },
+      )
+    : [{ type: "text", text: params.user }];
+  return [
+    { role: "user", parts: user },
+    ...rest.map((message) => {
+      if (message.role === "tool") {
+        return { role: "tool", parts: [{ type: "toolResult", id: message.tool_call_id, result: message.content }] };
+      }
+      const parts = message.content ? [{ type: "text", text: String(message.content) }] : [];
+      for (const call of message.tool_calls ?? []) {
+        const args = JSON.parse(call.function.arguments || "{}");
+        parts.push({ type: "toolCall", id: call.id, name: call.function.name, arguments: args });
+      }
+      return { role: message.role, parts };
+    }),
+  ];
+}
+
 function answerText(answer) {
   // A previous answer, replayed before Kedi's correction, as the model wrote it.
   if ("invalid" in answer) return answer.invalid;
@@ -264,8 +333,11 @@ async function converse(params, state, mcp, definitions) {
   const signal = state.controller.signal;
   const messages = [];
   if (params.system) messages.push({ role: "system", content: params.system });
-  // In a session, Kedi hands back the state this bridge returned for the last turn.
-  const history = params.session?.state?.messages ?? [];
+  // Kedi holds the transcript, or, in a session, hands back the state this bridge returned.
+  const transcript = Array.isArray(params.history);
+  const history = transcript
+    ? await fromTranscript(params.runId, params.history)
+    : (params.session?.state?.messages ?? []);
   messages.push(...history);
   const turnStart = messages.length;
   messages.push({ role: "user", content: params.userContent ? userParts(params.userContent) : params.user });
@@ -298,12 +370,16 @@ async function converse(params, state, mcp, definitions) {
     };
   }
   const finish = (result, content) => {
-    if (!params.session) return result;
     const turn = [...messages.slice(turnStart), { role: "assistant", content }];
+    if (transcript) return { ...result, messages: toTranscript(params, turn) };
+    if (!params.session) return result;
     return { ...result, state: { messages: [...history, ...turn] } };
   };
   // What an interrupted attempt hands Kedi: the conversation so far, for the next attempt.
-  state.partial = () => (params.session ? { messages: [...history, ...messages.slice(turnStart)] } : null);
+  state.partial = () => {
+    if (transcript) return { messages: toTranscript(params, messages.slice(turnStart)) };
+    return params.session ? { state: { messages: [...history, ...messages.slice(turnStart)] } } : null;
+  };
   for (let step = 0; step < maxSteps; step++) {
     // Live input from Kedi joins the conversation before the next model request.
     const delivering = state.inputs.splice(0);
@@ -410,6 +486,8 @@ async function handle(message) {
           events: true,
           mediaInput: true,
           sessions: true,
+          // Kedi holds the conversation (transcript), or this bridge does (sessions).
+          transcript: true,
           governed: true,
           // Kedi runs its children here as ordinary runs; params.subagent says whose they are.
           subagents: true,
@@ -435,8 +513,7 @@ async function handle(message) {
       send({ id, result: await run(params, state) });
     } catch (error) {
       if (state.interrupted) {
-        const partial = state.partial();
-        send({ id, error: { code: INTERRUPTED, message: "interrupted", data: partial ? { state: partial } : {} } });
+        send({ id, error: { code: INTERRUPTED, message: "interrupted", data: state.partial() ?? {} } });
       } else {
         const code = state.controller.signal.aborted ? CANCELLED : (error.code ?? RUN_FAILED);
         log("run failed:", error.message);
