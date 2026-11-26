@@ -23,6 +23,10 @@ The adapter maps that onto its backend and back: messages, tool calls,
 structured output, provider state, and usage. It must not write task prompts
 of its own. See [Prompts and Instructions](prompt-contract.md).
 
+A backend that is not written in Python connects through a
+[JSON-RPC bridge](json-rpc-bridges.md): a process that speaks Kedi's adapter
+protocol on its stdio.
+
 ## Kinds
 
 | `kind` | Selected with | Typical backend |

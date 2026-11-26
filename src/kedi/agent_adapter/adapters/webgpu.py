@@ -16,7 +16,7 @@ from time import monotonic
 from typing import Any, Callable, Collection, Generator, Mapping, Protocol, Sequence
 from uuid import uuid4
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 from typing_extensions import Self
 
@@ -38,17 +38,12 @@ from ..hooks import (
     is_tool_execution_interrupted,
 )
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
-from ..output_schema import build_output_model
 from ..request import (
-    AgentRunRequest,
-    InstructionPart,
-    RawPromptBuilder,
-    RunRequestAssembler,
     SchemaOutput,
     TextOutput,
     TypedOutput,
-    current_agent_run_request,
-    request_protocol,
+    call_request,
+    output_validator,
     tool_definition,
 )
 from ..request.models import OutputContract
@@ -273,12 +268,16 @@ class WebGPUAdapter(HookRegistrationMixin):
 
         async with AsyncExitStack() as stack:
             tools = await self._runtime_tools(stack, profile)
-            request = current_agent_run_request() or self._direct_request(
-                prompt, output, instructions
+            request = call_request(
+                prompt=prompt,
+                output=output,
+                instructions=instructions,
+                profile=profile,
+                capabilities=self.capabilities,
             )
             # Kedi renders the browser model's whole task text, MCP tools included.
             rendered = request.render(tools=tuple(tool_definition(tool.spec) for tool in tools))
-            validator = _output_validator(request)
+            validator = output_validator(request.output, request=request)
             messages: list[dict[str, Any]] = [{"role": "user", "content": rendered.user}]
             tool_contracts = [_tool_contract(tool) for tool in tools]
             required = {tool.name for tool in rendered.tools if tool.required_before_output}
@@ -350,28 +349,6 @@ class WebGPUAdapter(HookRegistrationMixin):
                 messages.extend(tool_messages)
 
         raise RuntimeError(f"Browser model exceeded the {self._max_tool_steps}-step tool limit")
-
-    def _direct_request(
-        self, prompt: str, output: OutputContract, instructions: str | None
-    ) -> AgentRunRequest:
-        """The request for a call made outside a Kedi program, as Kedi would make it."""
-
-        text = self.active_profile.call_instructions(instructions)
-        return RunRequestAssembler().assemble(
-            prompt=RawPromptBuilder(content=prompt).build(),
-            instructions=(
-                (InstructionPart(identity="profile.instructions", source="profile", content=text),)
-                if text
-                else ()
-            ),
-            conversation=None,
-            tool_specs=(),
-            output=output,
-            run_id=f"webgpu_{uuid4().hex}",
-            turn_sequence=0,
-            call_kind="invoke" if isinstance(output, TextOutput) else "produce",
-            protocol=request_protocol(self.capabilities),
-        )
 
     def produce_sync(
         self,
@@ -559,17 +536,6 @@ def _tool_error(exc: BaseException) -> str:
     # str() of a KediExecutionError renders a Kedi stack trace; the model needs the message.
     message = exc.message if isinstance(exc, KediExecutionError) else str(exc)
     return f"{type(exc).__name__}: {message}"
-
-
-def _output_validator(request: AgentRunRequest) -> TypeAdapter[Any] | None:
-    """How Kedi reads the browser model's final data, or ``None`` for text."""
-
-    output = request.output
-    if isinstance(output, TextOutput):
-        return None
-    if isinstance(output, SchemaOutput):
-        return TypeAdapter(build_output_model(dict(output.schema), request=request))
-    return TypeAdapter(output.output_type)
 
 
 def _final_action(data: Any) -> dict[str, Any]:
