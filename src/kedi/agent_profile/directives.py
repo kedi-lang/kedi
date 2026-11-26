@@ -11,6 +11,7 @@ from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..directive_values import parse_field, validate_field
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from ..package_adapters import PackageAdapter
 from ..run_budget import RunBudget
 from .codemode import normalize_codemode_settings
 from .compaction import normalize_compaction_settings
@@ -239,7 +240,19 @@ def _eval_adapter_selection(
         backtick_code=backtick_code,
         env=env,
     )
-    validate_adapter_kind(shortname, expected_kind)
+    package_adapter = rt.package_adapters.get(shortname)
+    if package_adapter is not None:
+        return _package_adapter_profile(
+            package_adapter,
+            directive_name=directive_name,
+            expected_kind=expected_kind,
+            has_connection=bool(connection_fields)
+            or command_plain_value is not None
+            or command_backtick_code is not None,
+        )
+    validate_adapter_kind(
+        shortname, expected_kind, imported=rt.package_adapters.names(expected_kind)
+    )
     command: AgentCommand | None = None
     a2a_connection: A2AConnection | None = None
     if connection_fields:
@@ -276,6 +289,30 @@ def _eval_adapter_selection(
         adapter_shortname=shortname,
         agent_command=command,
         a2a_connection=a2a_connection,
+    )
+
+
+def _package_adapter_profile(
+    adapter: PackageAdapter,
+    *,
+    directive_name: str,
+    expected_kind: AgentAdapterKind,
+    has_connection: bool,
+) -> AgentProfile:
+    if adapter.adapter_kind != expected_kind:
+        raise KediExecutionError(
+            f"> {directive_name}: cannot select {adapter.name!r}: package {adapter.package!r} "
+            f"declares it as an {adapter.kind}, selected with > {adapter.directive}:"
+        )
+    if has_connection:
+        raise KediExecutionError(
+            f"> {directive_name}: {adapter.name!r} comes from package {adapter.package!r}, "
+            "which says how to launch it; it takes no connection body"
+        )
+    return AgentProfile(
+        adapter_kind=expected_kind,
+        adapter_shortname=adapter.name,
+        package_adapter=adapter,
     )
 
 

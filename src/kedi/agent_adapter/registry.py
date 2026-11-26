@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import importlib
+import shutil
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from kedi.errors import KediExecutionError
 
 from .meta import AdapterCapabilities, AgentAdapter, AgentAdapterKind
+
+if TYPE_CHECKING:
+    from kedi.package_adapters import PackageAdapter
 
 
 @dataclass(frozen=True)
@@ -158,14 +163,19 @@ def adapter_factory(shortname: str) -> AdapterFactory:
         ) from exc
 
 
-def validate_adapter_kind(shortname: str, expected_kind: AgentAdapterKind) -> None:
+def validate_adapter_kind(
+    shortname: str, expected_kind: AgentAdapterKind, *, imported: Sequence[str] = ()
+) -> None:
+    """Rejects a built-in shortname of another kind, or a name neither built in nor imported."""
+
     directive = "agent" if expected_kind == "agent-harness" else "adapter"
     kind_label = "agent harness" if expected_kind == "agent-harness" else "agent framework"
     try:
         factory = adapter_factory(shortname)
     except KediExecutionError as exc:
         known = ", ".join(
-            name for name, candidate in _ADAPTERS.items() if candidate.kind == expected_kind
+            [name for name, candidate in _ADAPTERS.items() if candidate.kind == expected_kind]
+            + [f"{name} (imported)" for name in imported]
         )
         raise KediExecutionError(
             f"> {directive}: unknown {kind_label} adapter {shortname!r}. "
@@ -176,6 +186,43 @@ def validate_adapter_kind(shortname: str, expected_kind: AgentAdapterKind) -> No
         raise KediExecutionError(
             f"> {directive}: cannot select {shortname!r}; it is an {actual} adapter"
         )
+
+
+def build_package_adapter(adapter: PackageAdapter, model: str | None) -> AgentAdapter[Any]:
+    """The adapter a package declares: its Python class, or its JSON-RPC bridge launched."""
+
+    label = f"{adapter.name!r} from package {adapter.package!r}"
+    if adapter.command is not None:
+        from .adapters.jsonrpc import JsonRpcAdapter
+
+        program = adapter.command[0]
+        if shutil.which(program) is None:
+            raise KediExecutionError(
+                f"> {adapter.directive}: {label} runs {program!r}, which is not installed "
+                "or not on PATH"
+            )
+        built: AgentAdapter[Any] = JsonRpcAdapter(list(adapter.command), model=model)
+    else:
+        assert adapter.class_path is not None
+        module_name, _, attribute = adapter.class_path.partition(":")
+        try:
+            cls = getattr(importlib.import_module(module_name), attribute)
+        except (ImportError, AttributeError) as exc:
+            raise KediExecutionError(
+                f"> {adapter.directive}: {label} names class {adapter.class_path!r}, which "
+                f"cannot be imported: {exc}"
+            ) from exc
+        built = cls(model=model)
+    if getattr(built, "kind", None) != adapter.adapter_kind:
+        close = getattr(built, "close", None)
+        if callable(close):
+            close()
+        actual = "agent" if getattr(built, "kind", None) == "agent-harness" else "adapter"
+        raise KediExecutionError(
+            f"> {adapter.directive}: {label} is declared an {adapter.kind}, but it is an "
+            f"{actual} (kind {getattr(built, 'kind', None)!r})"
+        )
+    return built
 
 
 def adapter_capabilities(shortname: str) -> AdapterCapabilities:

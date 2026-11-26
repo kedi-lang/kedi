@@ -31,6 +31,7 @@ from kedi.lang.ast import (
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
+    PackageAdapterDecl,
     PackageMetadata,
     ProfileModelEntry,
     RequiresDirectiveStmt,
@@ -95,6 +96,45 @@ def _validate_setting_key(self: _Walker, node: Node, name: str) -> None:
     )
 
 
+_PACKAGE_ADAPTER_FIELDS = {"kind": "kind", "class": "class_path", "command": "command"}
+
+
+def _walk_package_adapter(self: _Walker, node: Node, package: PackageMetadata) -> None:
+    name_node = _field(node, "name")
+    body = _field(node, "body")
+    assert name_node is not None and body is not None
+    name = _identifier_name(self.source, name_node)
+    if name in package.adapters:
+        self._error(name_node, f"duplicate package adapter {name!r}", code="K-PACKAGE-DUP")
+        return
+    adapter = PackageAdapterDecl(name=name, loc=self._span(node))
+    for child in _named_children(body):
+        # The grammar admits only package_field entries here.
+        field_node = _field(child, "name")
+        value_node = _field(child, "value")
+        assert field_node is not None and value_node is not None
+        field_name = _identifier_name(self.source, field_node)
+        attribute = _PACKAGE_ADAPTER_FIELDS.get(field_name)
+        if attribute is None:
+            expected = ", ".join(sorted(_PACKAGE_ADAPTER_FIELDS))
+            self._error(
+                field_node,
+                f"unknown package adapter field {field_name!r}; expected one of: {expected}",
+                code="K-PACKAGE-FIELD",
+            )
+            continue
+        if field_name in adapter.field_locs:
+            self._error(
+                field_node,
+                f"duplicate package adapter field {field_name!r}",
+                code="K-PACKAGE-DUP",
+            )
+            continue
+        setattr(adapter, attribute, _src_text(self.source, value_node).strip())
+        adapter.field_locs[field_name] = self._span(field_node)
+    package.adapters[name] = adapter
+
+
 def _walk_package_directive(self: _Walker, node: Node) -> PackageMetadata:
     name_node = _field(node, "name")
     assert name_node is not None
@@ -129,6 +169,20 @@ def _walk_package_directive(self: _Walker, node: Node) -> PackageMetadata:
                 if value is not None and _src_text(self.source, value).strip()
             ]
             package.field_locs["python_dependencies"] = self._span(child)
+            continue
+        if child.type == "package_adapters":
+            if "adapters" in package.field_locs:
+                self._error(
+                    child,
+                    "package manifest can define only one adapters block",
+                    code="K-PACKAGE-DUP",
+                )
+                continue
+            package.field_locs["adapters"] = self._span(child)
+            entries = _field(child, "body")
+            assert entries is not None
+            for entry in _named_children(entries):
+                _walk_package_adapter(self, entry, package)
             continue
         assert child.type == "package_field"
         field_node = _field(child, "name")

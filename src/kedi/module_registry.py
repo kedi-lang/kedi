@@ -6,6 +6,11 @@ import importlib.resources
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .lang import PackageMetadata
+    from .package_registry import ResolvedPackageSource
 
 _INTERNAL_MODULES_PACKAGE = "kedi.modules"
 _MODULE_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -48,16 +53,30 @@ def installed_module_path(module_name: str) -> Path | None:
 @lru_cache(maxsize=512)
 def _installed_module_path_cached(module_name: str, registry_root: Path) -> Path | None:
     """Resolve an installed module after validating its complete package boundary."""
+    from .package_registry import resolve_installed_package_file
+
+    segments = tuple(module_name.split("/"))
+    package = installed_package(segments[0], registry_root)
+    if package is None:
+        return None
+    relative_path = (
+        Path("main.kedi") if len(segments) == 1 else Path(*segments[1:-1], f"{segments[-1]}.kedi")
+    )
+    return resolve_installed_package_file(package[1], relative_path)
+
+
+@lru_cache(maxsize=512)
+def installed_package(
+    package_name: str, registry_root: Path
+) -> tuple[PackageMetadata, ResolvedPackageSource] | None:
+    """An installed package's validated manifest and source tree, or None if not installed."""
     from .package_manifest import PACKAGE_MANIFEST_NAME, load_package_manifest
     from .package_registry import (
         CorruptInstalledPackageError,
         installed_package_root,
-        resolve_installed_package_file,
         resolve_package_source,
     )
 
-    segments = tuple(module_name.split("/"))
-    package_name = segments[0]
     root = registry_root.resolve()
     package_root = installed_package_root(package_name, registry_root=root)
     if not package_root.exists():
@@ -105,16 +124,13 @@ def _installed_module_path_cached(module_name: str, registry_root: Path) -> Path
         raise CorruptInstalledPackageError(
             f"Installed Kedi package {package_name!r} has an unsafe source: {exc}"
         ) from exc
-
-    relative_path = (
-        Path("main.kedi") if len(segments) == 1 else Path(*segments[1:-1], f"{segments[-1]}.kedi")
-    )
-    return resolve_installed_package_file(source, relative_path)
+    return metadata, source
 
 
 def clear_installed_module_cache() -> None:
     """Invalidate cached registry lookups after a package installation transaction."""
     _installed_module_path_cached.cache_clear()
+    installed_package.cache_clear()
 
 
 def module_search_paths(module_name: str, *, source_path: Path | None) -> tuple[Path, ...]:

@@ -139,7 +139,7 @@ def compute_completion(
     # directive value must not reopen the menu and consume the next Enter.
     if before_cursor.rstrip().endswith("`") or before_cursor.lstrip().startswith("#"):
         return []
-    options = option_completions(source, pos, explicit=explicit)
+    options = option_completions(source, pos, explicit=explicit, source_path=source_path)
     if options is not None:
         return options
     if before_cursor.rstrip().endswith(":") and not re.search(r"\[[^\]]*$", before_cursor):

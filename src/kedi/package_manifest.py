@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.version import InvalidVersion, Version
 
-from .lang import PackageMetadata, parse_program
+from .lang import PackageAdapterDecl, PackageMetadata, parse_program
 from .source_loading import load_kedi_source_bundle
 
 PACKAGE_MANIFEST_NAME = "package.kedi"
 _PACKAGE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _PYTHON_REQUIREMENT_RE = re.compile(r"python@(\d+)\.(\d+)(?:-(\d+)\.(\d+))?$")
+_ADAPTER_CLASS_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
+)
+PACKAGE_ADAPTER_KINDS = frozenset({"agent", "adapter"})
+RESERVED_ADAPTER_SHORTNAMES = frozenset({"dspy"})
+"""Shortnames no package may declare, besides the built-in adapters'."""
 
 
 def validate_package_name(package_name: str) -> str:
@@ -62,6 +69,8 @@ def validate_package_metadata(
         except InvalidVersion as exc:
             raise ValueError(f"invalid package version {metadata.version!r}") from exc
 
+    for adapter in metadata.adapters.values():
+        validate_package_adapter(adapter)
     for dependency in metadata.python_dependencies:
         try:
             requirement = Requirement(dependency)
@@ -84,6 +93,41 @@ def validate_package_metadata(
             f"{metadata.python_requirement.removeprefix('python@')}, but the installer runs "
             f"on Python {current[0]}.{current[1]}"
         )
+
+
+def validate_package_adapter(adapter: PackageAdapterDecl) -> None:
+    """Validate one ``adapters:`` entry without importing or running anything."""
+    from .agent_adapter.registry import known_adapter_shortnames
+
+    name = adapter.name
+    if not _PACKAGE_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"package adapter {name!r}: a shortname uses lowercase letters, digits, and "
+            "underscores, and starts with a letter"
+        )
+    if name in known_adapter_shortnames() or name in RESERVED_ADAPTER_SHORTNAMES:
+        raise ValueError(f"package adapter {name!r}: the shortname belongs to a built-in adapter")
+    if adapter.kind not in PACKAGE_ADAPTER_KINDS:
+        raise ValueError(
+            f"package adapter {name!r}: kind must be agent (selected with > agent:) or "
+            "adapter (selected with > adapter:)"
+        )
+    if (adapter.class_path is None) == (adapter.command is None):
+        raise ValueError(
+            f"package adapter {name!r} needs exactly one of class (a Python adapter class, "
+            "module:Class) or command (a JSON-RPC bridge to launch)"
+        )
+    if adapter.class_path is not None and not _ADAPTER_CLASS_RE.fullmatch(adapter.class_path):
+        raise ValueError(
+            f"package adapter {name!r}: class must be module:Class, such as kedi_pi:PiAdapter"
+        )
+    if adapter.command is not None:
+        try:
+            parts = shlex.split(adapter.command)
+        except ValueError as exc:
+            raise ValueError(f"package adapter {name!r}: command cannot be split: {exc}") from exc
+        if not parts or not parts[0]:
+            raise ValueError(f"package adapter {name!r}: command names no program")
 
 
 def load_package_manifest(path: Path) -> PackageMetadata:

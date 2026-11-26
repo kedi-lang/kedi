@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from lsprotocol import types as lsp
 
@@ -11,6 +12,9 @@ from kedi.directive_values import DIRECTIVE_RULES, FIELD_RULES, ValueRule, field
 from kedi.lang.parser.directive_context import selected_adapter
 from kedi.lang.parser.parser import parse
 from kedi.lsp.coordinates import utf16_length, utf16_to_index
+
+if TYPE_CHECKING:
+    from kedi.agent_adapter.meta import AgentAdapterKind
 
 
 @dataclass(frozen=True)
@@ -82,11 +86,36 @@ def value_context(source: str, pos: lsp.Position) -> ValueContext | None:
     return ValueContext(scope, name, start, adapter)
 
 
+_IMPORT_LINE = re.compile(r"^\s*> import:\s*([A-Za-z_][A-Za-z0-9_/]*)", re.MULTILINE)
+
+
+def _imported_adapter_names(
+    source: str, source_path: str | None, kind: AgentAdapterKind
+) -> tuple[str, ...]:
+    """The adapter shortnames the packages this source imports declare."""
+
+    from pathlib import Path
+
+    from kedi.package_adapters import imported_package_adapters
+
+    modules = _IMPORT_LINE.findall(source)
+    if not modules:
+        return ()
+    try:
+        table = imported_package_adapters(
+            modules, source_path=Path(source_path) if source_path else None
+        )
+    except Exception:
+        return ()
+    return table.names(kind)
+
+
 def option_completions(
     source: str,
     pos: lsp.Position,
     *,
     explicit: bool = False,
+    source_path: str | None = None,
 ) -> list[lsp.CompletionItem] | None:
     context = value_context(source, pos)
     if context is None:
@@ -107,7 +136,7 @@ def option_completions(
         kind = "agent-framework" if context.name == "adapter" else "agent-harness"
         options = tuple(
             name for name in known_adapter_shortnames() if adapter_factory(name).kind == kind
-        )
+        ) + _imported_adapter_names(source, source_path, kind)
         rule = ValueRule("Registered agent integration", options)
     if context.scope == "directive" and context.name == "requires":
         from kedi.agent_adapter.meta import adapter_capability_names

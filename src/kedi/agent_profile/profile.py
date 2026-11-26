@@ -9,6 +9,7 @@ from ..agent_adapter.meta import AdapterCapability, AgentAdapterKind
 from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
+from ..package_adapters import PackageAdapter
 from ..run_budget import RunBudget
 from .capabilities import AppliedCapability, merge_capabilities, validate_capability_bindings
 from .codemode import CodeModeSettings, normalize_codemode_settings
@@ -38,6 +39,8 @@ class AgentProfile:
     fallback_models: tuple[str, ...] | None = None
     adapter_kind: AgentAdapterKind | None = None
     adapter_shortname: str | None = None
+    # A shortname an imported package declares, resolved where the profile was written.
+    package_adapter: PackageAdapter | None = None
     agent_command: AgentCommand | None = None
     a2a_connection: A2AConnection | None = None
     effort: EffortValue | None = None
@@ -126,6 +129,7 @@ class AgentProfile:
         if other.adapter_shortname is not None:
             updates["adapter_shortname"] = other.adapter_shortname
             updates["adapter_kind"] = other.adapter_kind
+            updates["package_adapter"] = other.package_adapter
             # A transport selection owns its whole connection atomically. A
             # later selection must never inherit another lexical scope's
             # command, endpoint, or credential reference.

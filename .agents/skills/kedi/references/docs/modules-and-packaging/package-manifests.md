@@ -112,10 +112,53 @@ already have made to the environment. Externally managed system Python policies
 are respected; use a writable virtual environment when system installation is
 not permitted.
 
+## Adapters
+
+A package can expose agent integrations that importing modules select by
+shortname, like the built-in ones. `adapters:` lists them:
+
+```kedi
+> package: pi:
+  version: 0.1.0
+  source: src/pi
+  adapters:
+    pi:
+      kind: agent
+      command: node bridge.mjs
+```
+
+```kedi
+> import: pi
+> agent: pi
+> model: google/gemini-3.5-flash-lite
+[summary] << Summarize README.md in one sentence.
+```
+
+Each entry has a `kind` and exactly one way to build it:
+
+- `kind: agent` is selected with `> agent:` and must be an agent harness;
+  `kind: adapter` is selected with `> adapter:` and must be an agent framework.
+  Kedi checks the built adapter's kind and refuses one that differs.
+- `command:` launches a [JSON-RPC bridge](../adapter-development/json-rpc-bridges.md).
+  An argument naming a regular file of the package's `source` tree becomes that
+  file's absolute path, so `node bridge.mjs` runs the installed file. A program
+  that is not on `PATH` is reported before launch.
+- `class:` names a Python adapter class as `module:Class`, which Kedi builds
+  with `Class(model=...)`. The module comes from the interpreter running Kedi,
+  usually through `python_dependencies`, and is imported only when a program
+  selects the adapter.
+
+The shortname follows the package name rules and cannot be a built-in
+adapter's. An import makes the package's adapters selectable in the importing
+module only: modules that import that module do not gain them, and two imported
+packages that declare one shortname fail at import. A procedure or profile
+written where the package is imported keeps its adapter wherever it is called.
+
 ## Unknown and Duplicate Fields
 
 Supported fields are `author`, `contact`, `license`, `version`, `source`,
-`python`, and `python_dependencies`. See the [Manifest Reference](../reference/package-manifest.md)
+`python`, `python_dependencies`, and `adapters`, whose entries take `kind`,
+`class`, and `command`. See the [Manifest Reference](../reference/package-manifest.md)
 for their exact validation rules. Unknown fields, duplicate scalar fields, multiple
 dependency blocks, multiple package directives, and a missing package directive
 are errors.
