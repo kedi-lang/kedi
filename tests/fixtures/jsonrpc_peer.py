@@ -49,6 +49,8 @@ def handshake() -> dict[str, Any]:
         result["kind"] = "agent-framework"
     elif SCENARIO == "events":
         result["capabilities"] = {**CAPABILITIES, "events": True}
+    elif SCENARIO == "sessions":
+        result["capabilities"] = {**CAPABILITIES, "sessions": True}
     elif SCENARIO.startswith("media"):
         result["capabilities"] = {**CAPABILITIES, "mediaInput": True}
         result["mediaKinds"] = {"media": ["image"], "media-bad-kinds": ["smell"]}.get(SCENARIO, [])
@@ -129,6 +131,15 @@ def run(request_id: int, params: dict[str, Any]) -> None:
             }
         )
         send({"id": request_id, "result": {"text": final}})
+        return
+    if SCENARIO == "sessions":
+        session = params["session"]
+        turns = ((session or {}).get("state") or {}).get("turns", [])
+        text = f"{user} after {turns}" + ("" if session else " (no session)")
+        reply: dict[str, Any] = {"text": text}
+        if session is not None:
+            reply["state"] = {"turns": [*turns, user], "id": session["id"], "turn": session["turn"]}
+        send({"id": request_id, "result": reply})
         return
     if SCENARIO == "media":
         parts = [

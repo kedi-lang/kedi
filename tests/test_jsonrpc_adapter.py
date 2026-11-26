@@ -609,3 +609,65 @@ def test_media_the_bridge_cannot_send_is_refused_before_the_run(adapters: list) 
 def test_media_capabilities_must_name_their_kinds(scenario: str, message: str) -> None:
     with pytest.raises(JsonRpcError, match=message):
         peer(scenario)
+
+
+def test_sessions_carry_the_bridge_state_kedi_committed(adapters: list) -> None:
+    adapter = peer("sessions")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_stateful_history
+    source = (
+        "> history: enabled\n[a] << First.\n[b] << Second.\n"
+        "> model: other\n[c] << Third.\n= `[a, b, c]`\n"
+    )
+    first, second, third = run(source, adapter)
+    assert first == "First. after []"
+    assert second == "Second. after ['First.']"
+    # Another model is another lane: its history starts empty.
+    assert third == "Third. after []"
+    # Without history, no session is sent.
+    assert run(ECHO, adapter) == "Say hello. after [] (no session)"
+
+
+def test_a_bridge_without_sessions_refuses_history(adapters: list) -> None:
+    adapter = peer("default")
+    adapters.append(adapter)
+    error = failure("> history: enabled\n" + ECHO, adapter)
+    assert "does not support stateful history" in str(error)
+
+
+def test_the_reference_bridge_replays_its_session_state() -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    requests: list[dict[str, Any]] = []
+
+    class Model(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            requests.append(body)
+            message = {"role": "assistant", "content": f"Answer {len(requests)}."}
+            data = json.dumps({"choices": [{"index": 0, "message": message}]}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with JsonRpcAdapter(reference_bridge_command(base_url), model="m") as adapter:
+            source = "> history: enabled\n[a] << First.\n[b] << Second.\n= `[a, b]`\n"
+            assert run(source, adapter) == ["Answer 1.", "Answer 2."]
+    finally:
+        server.shutdown()
+    second = requests[1]["messages"]
+    assert second[0]["role"] == "system"
+    assert [message["content"] for message in second[1:]] == [
+        "First.",
+        "Answer 1.",
+        "Second.",
+    ]

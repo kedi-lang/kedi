@@ -28,6 +28,7 @@ from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS
 from ....media import MediaError
 from ...approvals.policy import ToolApprovalDenied
+from ...conversation import AdapterConversationContext
 from ...events import AgentMessageResolver, agent_event_run
 from ...execution import run_sync
 from ...hooks import HookDeniedError
@@ -101,8 +102,16 @@ class JsonRpcAdapter:
         supports_artifacts=None,
         supports_stream_events=None,
         supports_media_input=None,
+        supports_stateful_history=None,
         negotiated_capabilities=frozenset(
-            {"structured_output", "tool_registration", "artifacts", "stream_events", "media_input"}
+            {
+                "structured_output",
+                "tool_registration",
+                "artifacts",
+                "stream_events",
+                "media_input",
+                "stateful_history",
+            }
         ),
         supports_profile_override=True,
         supports_model_override=True,
@@ -139,6 +148,9 @@ class JsonRpcAdapter:
         )
         self._tools: ContextVar[tuple[ToolSpec, ...]] = ContextVar(
             f"jsonrpc_tools_{id(self)}", default=()
+        )
+        self._conversation: ContextVar[AdapterConversationContext | None] = ContextVar(
+            f"jsonrpc_conversation_{id(self)}", default=None
         )
         self._connection = Connection(
             self.command,
@@ -211,6 +223,18 @@ class JsonRpcAdapter:
     def register_tool(self, tool: ToolSpec) -> None:
         self._tools.set((*self._tools.get(), tool))
 
+    @contextmanager
+    def conversation_scope(
+        self, conversation: AdapterConversationContext
+    ) -> Generator[None, None, None]:
+        """Kedi owns the conversation; the bridge's ``state`` travels with each turn."""
+
+        token = self._conversation.set(conversation)
+        try:
+            yield
+        finally:
+            self._conversation.reset(token)
+
     async def invoke(self, *, prompt: str, instructions: str | None = None, **_: Any) -> str:
         return await self._run(prompt, TextOutput(), instructions)
 
@@ -269,6 +293,7 @@ class JsonRpcAdapter:
             tools=tools,
         )
         rendered = request.render()
+        conversation = self._conversation.get()
         # The first native run in a Kedi call takes the prompt's media; nested runs get none.
         attachments = take_prompt_media()
         user_content = (
@@ -311,6 +336,13 @@ class JsonRpcAdapter:
                 for tool in rendered.tools
             ],
             "continuation": None,
+            "session": None
+            if conversation is None
+            else {
+                "id": conversation.session_id,
+                "turn": conversation.turn_sequence,
+                "state": conversation.resume_state.get("bridge"),
+            },
         }
         self._runs[run_id] = run
         try:
@@ -342,6 +374,10 @@ class JsonRpcAdapter:
                     raise run.failure
             answer, correction = _check_answer(result, validator, required, run)
             if correction is None:
+                conversation = self._conversation.get()
+                if conversation is not None and "state" in result:
+                    # Kedi commits it only after accepting this turn's result.
+                    conversation.result_state["bridge"] = result["state"]
                 return answer
             params = {**params, "continuation": {"answer": result, "message": correction}}
         raise JsonRpcError(
@@ -503,6 +539,7 @@ def _negotiate(
         supports_native_tool_calling=flags["supports_native_tool_calling"],
         supports_stream_events=flags["supports_stream_events"],
         supports_media_input=flags["supports_media_input"],
+        supports_stateful_history=flags["supports_stateful_history"],
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,

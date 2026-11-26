@@ -11,7 +11,9 @@ Kedi to bridge:
 - ``initialize`` ``{protocolVersion, client}`` returns ``{protocolVersion, backend, kind,
   capabilities, mediaKinds?}``. Kedi sends nothing else before it completes.
 - ``run`` ``{runId, callKind, promptKind, model, system, instructionParts, user, userContent,
-  output, tools, continuation}`` returns ``{text}`` or ``{data}``, optionally with ``usage``.
+  output, tools, continuation, session}`` returns ``{text}`` or ``{data}``, optionally with
+  ``usage`` and, in a session, ``state``. ``session`` is ``null``, or ``{id, turn, state}``:
+  the bridge's ``state`` from the conversation's last committed turn, ``null`` at first.
   ``userContent`` is ``null``, or the user turn with its media: ``{type: "text", text}`` and
   ``{type: "media", name, kind, mediaType, data | url}`` parts, ``data`` in base64.
 - ``run/cancel`` (notification) ``{runId}``: stop the run; it answers with ``CANCELLED``.
@@ -61,11 +63,12 @@ CAPABILITIES: Final = {
     "nativeToolCalling": "supports_native_tool_calling",
     "events": "supports_stream_events",
     "mediaInput": "supports_media_input",
+    "sessions": "supports_stateful_history",
 }
 """Capabilities a bridge may advertise in protocol version 1, and the Kedi flags they set.
 
-Anything else, such as sessions, live input or cancellation guarantees, is not part of
-version 1 and stays unavailable whatever the bridge says. ``mediaInput`` needs ``mediaKinds``,
+Anything else, such as live input or cancellation guarantees, is not part of version 1 and
+stays unavailable whatever the bridge says. ``mediaInput`` needs ``mediaKinds``,
 the kinds the bridge sends: ``image``, ``audio``, ``video``, ``document``.
 """
 
