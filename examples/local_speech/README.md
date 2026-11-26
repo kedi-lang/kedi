@@ -1,7 +1,7 @@
 # Local speech
 
-Speak Turkish and English sentences, and transcribe English speech, with small models that
-run on your machine. After a one-time download, nothing leaves the machine: no API key, no
+Speak and transcribe Turkish and English sentences with small models that run on your
+machine. After a one-time download, nothing leaves the machine: no API key, no
 cloud fallback.
 
 The Kedi side is the same as for a cloud model:
@@ -19,9 +19,10 @@ contract Kedi's LangChain adapter already uses for cloud speech models.
 | Turkish speech | [EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning) | `ema-lightning==1.1.2` | Apache 2.0 | about 34 MB, plus PyTorch | 48 kHz mono |
 | English speech | [Phonon 31m](https://huggingface.co/gradium/phonon-31m-en), pinned revision | `ptts==0.7.1` | Apache 2.0 | about 65 MB | 24 kHz mono |
 | English transcription | [Cactus Whistle](https://huggingface.co/Cactus-Compute/whistle) | `cactus-compute==4.2.7` | Apache 2.0 | about 16 MB, plus the Cactus engine | text |
+| Turkish transcription | [Whisper small](https://huggingface.co/Systran/faster-whisper-small), pinned revision, int8 on the CPU | `faster-whisper==1.2.1` | MIT | about 484 MB | text |
 
-Whistle transcribes English, German, French, Spanish, Italian, Dutch and Polish. A local
-Turkish transcriber is still a candidate (#198), so the round trip below is English only.
+Whistle transcribes English, German, French, Spanish, Italian, Dutch and Polish, but not
+Turkish, so Turkish goes to Whisper small.
 
 ## Setup
 
@@ -31,7 +32,7 @@ Lightning brings PyTorch.
 ```bash
 uv venv .venv-speech && source .venv-speech/bin/activate
 uv pip install -e ".[langchain]" -r examples/local_speech/requirements.txt
-python examples/local_speech/provision.py      # online, once: downloads the three models
+python examples/local_speech/provision.py      # online, once: downloads the four models
 ```
 
 The models land in `~/.cache/huggingface` and `~/.cache/cactus`.
@@ -48,9 +49,10 @@ export HF_HUB_OFFLINE=1
 python examples/local_speech/run.py --lang tr     # six Turkish sentences, twice
 python examples/local_speech/run.py --lang en     # six English sentences, twice
 python examples/local_speech/roundtrip.py         # speak English, then transcribe it back
+python examples/local_speech/roundtrip.py --lang tr   # the same in Turkish
 ```
 
-**Offline check.** On 2026-11-26 all three commands above also ran with outbound networking
+**Offline check.** On 2026-11-26 all four commands above also ran with outbound networking
 denied, under `sandbox-exec -p '(version 1)(allow default)(deny network*)'`. They passed, with
 the same results. Phonon also loads from its cache without `HF_HUB_OFFLINE`.
 
@@ -83,7 +85,7 @@ were cached. A first ever load also includes the download: Phonon took 26.6 s, E
 | Peak process memory | 481 MB | 347 MB |
 | Identical audio on repeat (seed 7) | yes | yes |
 
-**Round trip.** Phonon speaks each English sentence and Whistle transcribes it. Whistle takes
+**English round trip.** Phonon speaks each English sentence and Whistle transcribes it. Whistle takes
 0.06–0.11 s per clip. The mean word error rate is 0.067. The scoring compares lowercase words
 with punctuation removed, so "9:30" and "9.30" count as the same word.
 
@@ -95,6 +97,23 @@ with punctuation removed, so "9:30" and "9.30" count as the same word.
 
 The refund is a real error. Phonon reads "1 thousand 250 dollars and 75 cents", and Whistle
 writes the cents as dollars.
+
+**Turkish round trip.** EMA Lightning speaks each Turkish sentence and Whisper small
+transcribes it:
+
+- **Speed.** Whisper takes 1.1–1.3 s per clip, a real-time factor of about 0.3 on the CPU.
+- **Load time.** It loads from its cache in about 0.6 s. The first download, 484 MB, took 93 s.
+- **Accuracy.** The mean word error rate is 0.283, mostly from number formatting: Whisper
+  writes out what EMA says. Two words in 43 are real transcription errors.
+- **Scoring.** In Turkish, İ and I lower to i and ı, and the optional circumflex is
+  dropped (rüzgâr, rüzgar).
+
+| Sentence | Heard | WER |
+|---|---|---|
+| Toplantı yarın 09.30'da, 3. katta. | Toplantı yarın 9.30'da 3 katta. | 0.20 (formatting: 09.30; and EMA says "üç", see below) |
+| Hesabınıza 1.250,75 TL iade edildi. | Hesabınıza 1250 Türk lirası 75 kuruş iade edildi. | 1.00 (formatting only: the amount spelled the way EMA reads it) |
+| Dr. Öztürk'ün randevusu saat 16.45'te başlıyor. | Doktor Öztürk'ün rendezvousu saat 16.45'de başlıyor. | 0.50 (formatting: Doktor; real: rendezvousu, 'de) |
+| The three other sentences | match after normalization | 0.00 |
 
 ## Observations
 
@@ -109,9 +128,18 @@ frontend reads digits:
 | `Dr. Öztürk'ün` | doktor öztürk'ün | yes |
 | `3. katta` | üç. katta | no: should be "üçüncü katta" |
 
-The ordinal is a known weakness. Ahenk reports EMA's TR-Zor error at 14.0% with EMA's own
-frontend and 1.9% with `trnorm`. Normalizing ordinals before synthesis is the next thing to
-measure.
+The ordinal is a known weakness, and the Turkish round trip hears it too: Whisper writes
+"3 katta". Ahenk reports EMA's TR-Zor error at 14.0% with EMA's own frontend and 1.9% with
+`trnorm`. Normalizing ordinals before synthesis is the next thing to measure.
+
+**Leading silence for Whisper.** EMA's clips start speaking within 0.07 s, and Whisper
+small dropped the first words of two of them: "Hesabınıza" and "Şu an". The `Whisper` model
+prepends half a second of silence, which brings both back. Whistle dropped no words from
+Phonon's clips, so it gets no padding.
+
+**Decoding files.** faster-whisper 1.2.1 cannot open audio files with PyAV 19, because of an
+unexpected `metadata_errors` argument. The `Whisper` model passes decoded samples, so it is
+unaffected.
 
 **Listening review.** Speech quality and pronunciation still need a human listener. A valid
 WAV and a good transcription are evidence, not a substitute.
@@ -127,6 +155,6 @@ is an error rather than silently ignored.
 | `speak.kedi`, `transcribe.kedi` | the Kedi programs |
 | `speech_models.py` | the local engines as LangChain chat models |
 | `run.py` | speak the sentence sets and measure |
-| `roundtrip.py` | speak, transcribe and score |
+| `roundtrip.py` | speak, transcribe and score, in English or Turkish |
 | `provision.py` | the one-time download |
 | `requirements.txt` | the engine packages, pinned |
