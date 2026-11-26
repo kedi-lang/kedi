@@ -9,6 +9,7 @@ or the same error, from the same rendered requests, in the same number of model 
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from typing import Any
 
@@ -16,7 +17,14 @@ import pytest
 
 from kedi.agent_adapter import JsonRpcAdapter, PydanticAdapter, RenderedRequest
 from kedi.agent_adapter.adapters.jsonrpc import reference_bridge_command
-from kedi.agent_adapter.conformance.check import ANY_ERROR, SCENARIOS, Scenario, Variant, _run
+from kedi.agent_adapter.conformance.check import (
+    ANY_ERROR,
+    SCENARIOS,
+    Scenario,
+    Variant,
+    _run,
+    _wire,
+)
 from kedi.agent_adapter.conformance.endpoint import RecordingEndpoint, Script, _openai_answer
 from kedi.agent_adapter.request.context import observe_requests
 from kedi.lang import compile_program, parse_program
@@ -136,3 +144,16 @@ def test_a_child_runs_on_the_bridge_as_it_runs_in_process() -> None:
     ]
     # The parent's two requests and the child's one, through either stack.
     assert len(bridge[2]) == len(local[2]) == 3
+    # Kedi renders the child's request; both stacks send its system text and task as given.
+    children = [
+        [
+            _wire(exchange)
+            for exchange in exchanges
+            if "delegate_task" not in json.dumps(exchange.body)
+        ]
+        for exchanges in (local[2], bridge[2])
+    ]
+    (local_child,), (bridge_child,) = children
+    assert (bridge_child.system, bridge_child.user) == (local_child.system, local_child.user)
+    assert "Answer in two words." in "".join(local_child.system)
+    assert local_child.user == ("Name the largest ocean.",)

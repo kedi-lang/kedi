@@ -990,3 +990,48 @@ def test_only_the_childs_own_turn_is_the_child(adapters: list) -> None:
     assert replies["subagent"]["limits"]["requests"] == 8
     with pytest.raises(KediExecutionError, match="only inside subagent_scope"):
         asyncio.run(adapter.produce_subagent(template="x", output_schema={"type": "object"}))
+
+
+def manager_run(adapter: JsonRpcAdapter, prompt: str) -> dict[str, Any]:
+    return json.loads(run(SUBAGENTS + f"\n> use: manager\n[r] << {prompt}\n= <r>\n", adapter))
+
+
+def test_a_background_child_runs_beside_its_bridge_parent(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    parent = manager_run(adapter, "Delegate in the background.")
+    started = parent["reply"]["result"]["result"]
+    assert started["status"] == "running"
+    waited = parent["wait_subagent"]["result"]["result"]
+    assert waited["run_id"] == started["run_id"]
+    child = json.loads(waited["task_summary"])
+    # The child ran on the owner loop while its parent's run waited on the same connection.
+    assert child["subagent"]["parentRunId"] == parent["runId"]
+    assert all(reply["result"]["ok"] for reply in child["lookups"])
+
+
+def test_cancelling_a_background_child_cancels_its_bridge_run(adapters: list) -> None:
+    adapter = peer("subagents")
+    adapters.append(adapter)
+    parent = manager_run(adapter, "Delegate, then cancel.")
+    assert parent["cancel_subagent"]["result"]["result"]["cancel_requested"] is True
+    deadline = time.monotonic() + 10
+    while not any(line.startswith("cancel ") for line in adapter._connection.stderr_tail):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def test_a_bridge_that_dies_during_a_child_releases_its_slot_once() -> None:
+    adapter = peer("subagents-die")
+    try:
+        runtime = compile_program(parse_program(SUBAGENTS), adapter=adapter)
+        tools = delegation_tools(runtime, adapter)
+        with pytest.raises(Exception) as caught:
+            asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Find q."))
+        assert "bridge crashed during a child" in str(caught.value)
+        coordinator = runtime._subagent_coordinator
+        assert coordinator.runs.snapshot()[-1].status == "failed"
+        # The slot was released exactly once: a second release would raise "slot underflow".
+        assert coordinator._active_runs == 0
+    finally:
+        adapter.close()

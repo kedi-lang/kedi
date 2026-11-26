@@ -761,7 +761,7 @@ async def _decide_approval(
             reasons.append(decision.reason)
         if decision.edit_arguments is not None:
             arguments = dict(decision.edit_arguments)
-    reason = "; ".join(reasons) or None
+    reason = "; ".join(dict.fromkeys(reasons)) or None
     if arguments != dict(request.arguments):
         return ApprovalDecision.edit(arguments, reason=reason)
     return ApprovalDecision.allow(reason=reason)

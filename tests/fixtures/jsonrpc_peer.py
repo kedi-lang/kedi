@@ -72,6 +72,7 @@ ADMISSION = {
     "abandon-approval": {"nativeTools": True},
     "subagents": {"governed": True, "subagents": True, "sessions": True, "nativeTools": True},
     "subagents-stateless": {"governed": True, "subagents": True},
+    "subagents-die": {"governed": True, "subagents": True},
     "subagents-ungoverned": {"subagents": True},
     # Claims governed, then retries a failed request without asking Kedi.
     "retries-unadmitted": {"governed": True},
@@ -101,16 +102,33 @@ def subagent_probe(request_id: int, params: dict[str, Any]) -> None:
 
     run_id = params["runId"]
     if params["subagent"] is None and "delegate_task" in kedi_tools(params):
-        task = {"subagent": "worker", "task": "Find q."}
+        background = "background" in params["user"] or "cancel" in params["user"]
+        work = "Wait for it." if "cancel" in params["user"] else "Find q."
+        task = {"subagent": "worker", "task": work, "background": background}
         reply = call_kedi(
             "tool/call", {"runId": run_id, "name": "delegate_task", "arguments": task}
         )
-        send({"id": request_id, "result": {"text": json.dumps({"runId": run_id, "reply": reply})}})
+        parent: dict[str, Any] = {"runId": run_id, "reply": reply}
+        if background:
+            follow = "cancel_subagent" if "cancel" in params["user"] else "wait_subagent"
+            arguments = {"run_id": reply["result"]["result"]["run_id"]}
+            parent[follow] = call_kedi(
+                "tool/call", {"runId": run_id, "name": follow, "arguments": arguments}
+            )
+        send({"id": request_id, "result": {"text": json.dumps(parent)}})
         return
+    if "Wait for it." in params["user"]:
+        time.sleep(5)  # Kedi cancels this child; its run/cancel reaches the bridge's stderr
     replies: dict[str, Any] = {"subagent": params["subagent"], "session": params["session"]}
     admissions = []
     for _ in range(2):
         admissions.append(call_kedi("budget/admit", {"runId": run_id, "dimension": "request"}))
+        if SCENARIO == "subagents-die":
+            sys.stderr.write("bridge crashed during a child\n")
+            sys.stderr.flush()
+            import os
+
+            os._exit(3)
         if admissions[-1].get("result", {}).get("admitted") is False:
             send({"id": request_id, "error": {"code": -32002, "message": "the limit is spent"}})
             return
@@ -173,7 +191,7 @@ def run(request_id: int, params: dict[str, Any]) -> None:
     if SCENARIO == "retries-unadmitted":
         unadmitted_retry(request_id, params)
         return
-    if SCENARIO in ("subagents", "subagents-stateless"):
+    if SCENARIO in ("subagents", "subagents-stateless", "subagents-die"):
         subagent_probe(request_id, params)
         return
     if SCENARIO == "abandon-approval":

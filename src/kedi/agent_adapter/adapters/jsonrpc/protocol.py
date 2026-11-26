@@ -28,9 +28,10 @@ Bridge to Kedi:
   ``{ok: false, error}``. Only tools of a run in progress are callable.
 - ``budget/admit`` ``{runId, dimension}`` (with the ``governed`` capability), before the step
   runs: ``dimension`` is ``request`` for every model request, retries included, and
-  ``toolAttempt`` for each attempt of a bridge tool. It returns ``{admitted: true}``, or
-  ``{admitted: false, dimension, limit, consumed, scopeDepth}``: the bridge then skips the
-  step and ends the run, which fails with Kedi's ``RunBudgetExceeded``.
+  ``toolAttempt`` for each attempt of a bridge tool. Kedi charges the run budget and counts
+  the step for a child's limits. It returns ``{admitted: true}``, or ``{admitted: false,
+  dimension, reason}``, with ``limit``, ``consumed`` and ``scopeDepth`` for a run budget: the
+  bridge then skips the step and ends the run, which fails with Kedi's error.
 - ``approval/request`` ``{runId, callId?, tool, arguments, risk, description?}`` (with the
   ``nativeTools`` capability), before each call of a bridge tool. ``risk`` is ``read_only``,
   ``mutating`` or ``sensitive``. It returns ``{decision: "allow"}``, ``{decision: "deny",
