@@ -1,0 +1,36 @@
+> import: media
+
+# Nothing here is large, so the program drops Kedi's artifact tools. A 2B model called
+# read_artifact until its retries ran out when they were offered.
+> artifacts:
+    enabled: false
+
+~Item(
+  name: Annotated[str, "The item as printed"],
+  price: Annotated[float, "The item's price"]
+)
+
+~Receipt(
+  merchant: Annotated[str, "The shop name on the first line"],
+  items: Annotated[list[Item], "Every purchased item, in order; not the TOTAL line"],
+  total: Annotated[float, "The amount on the TOTAL line, as printed"]
+)
+
+###
+Read a receipt image into a typed record. The same program runs on a local vision-language
+model and on a cloud one; only the adapter's model changes.
+###
+@read_receipt(photo: Image) -> Receipt:
+  [receipt: Receipt] << Read the receipt in <<photo>>.
+  = `receipt`
+
+###
+The model reads; the program checks. A receipt whose items do not add up to its printed total
+goes to a person, whether the model misread it or the shop misprinted it.
+###
+@adds_up(receipt: Receipt) -> bool:
+  = `abs(sum(item.price for item in receipt.items) - receipt.total) < 0.005`
+
+# compare.py binds this file: `photo` arrives as a global.
+[receipt: Receipt] = `read_receipt(photo)`
+= `{"receipt": receipt, "adds_up": adds_up(receipt)}`
