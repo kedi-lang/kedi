@@ -33,14 +33,26 @@ _NO_TYPED_OUTPUT = object()
 
 @dataclass(slots=True)
 class SubagentOutputState:
-    """Run-local native validation result; never included in persisted child state."""
+    """Run-local native validation result; never included in persisted child state.
+
+    ``names_media`` lets the child name media of its own request in a media-typed output, as a
+    ``> task`` does: its result reaches the program as values. A ``delegate_task`` result goes
+    to the parent model and workflows as JSON, so it does not.
+    """
 
     adapter: TypeAdapter[Any]
     typed_output: Any = _NO_TYPED_OUTPUT
+    names_media: bool = False
 
     def validate_candidate(self, value: Any) -> Any:
         """Validate decoded wire JSON while preserving strict native output types."""
-        return self.adapter.validate_json(json.dumps(value, allow_nan=False), strict=True)
+        from kedi.agent_adapter.request.media import media_validation_context
+
+        return self.adapter.validate_json(
+            json.dumps(value, allow_nan=False),
+            strict=True,
+            context=media_validation_context() if self.names_media else None,
+        )
 
 
 def effective_final_schema(

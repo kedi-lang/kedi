@@ -287,9 +287,10 @@ A tool that returns media gives it to the model as media:
 The tool result is a placeholder, `<image snap_result_1>`, and the image
 follows natively. A dict, a model or a list holding media becomes JSON with a
 placeholder for each one, as `<<x>>` does. Names stay unique across the tool
-calls of one request and never take an attachment's name; like prompt names, a
-later request may reuse them. The model can answer with these media by name:
-see [Media in Outputs](#media-in-outputs).
+calls of one request, and across the requests of a conversation (see
+[History](#history)), and never take an attachment's name. The model can answer
+with these media by name, and pass them to other tools: see
+[Media in Outputs](#media-in-outputs).
 
 | Adapter | Where the media go |
 | --- | --- |
@@ -363,17 +364,22 @@ media, an attachment or a tool result, and Kedi binds that value:
   `photos_2`) or its placeholder (`<image satellite_result_1>`).
 - Any other string is refused, made-up URLs and data URIs included. The model
   reads the names it can use and answers again.
-- Requests whose output holds media, and that attach media or offer tools,
-  get one instruction that says so.
-- Only media of the current request can be named. With `> history: enabled`,
-  a later request may give an earlier name to other media.
+- Requests whose output holds media, or that offer a tool taking media, and
+  that attach media or offer tools, get one instruction that says so.
+- In a conversation (`> history: enabled`), the model can also name media of
+  its earlier requests.
 - Pydantic AI, LangChain, the Claude Agent SDK and Codex resolve names. The
   harnesses' tool bridges send text only, so there the model names
   attachments.
 - `[x: Audio] <<` names an audio when the prompt attaches media or a tool in
   scope declares an audio return type; otherwise it speaks (see
   [Speech Output](#speech-output)).
-- Not yet: tool arguments typed `Image` take no names.
+- Tool arguments take names the same way: the model hands a tool an image of
+  its request (`@crop(photo: Image)` called with `photo: satellite_result_1`).
+  A wrong name fails the tool call with the names it can use.
+- A `> task` capture typed with media names one of the child's media, and the
+  program gets the value. A `delegate_task` result goes to the parent model and
+  to workflows as JSON, so it names none.
 
 ## Speech Output
 
@@ -427,8 +433,21 @@ model reports it, and is `None` otherwise.
 
 With `> history: enabled`, an attachment that the replayed history already
 holds under the same ID and content is not sent again; the prompt text still
-writes the ID. When an ID now holds different content, for example a loop that
-rebinds `photo`, the new content is attached again.
+writes the ID.
+
+Names are unique across the conversation's requests, so an ID never means two
+media:
+
+- A binding rebound to new content, for example in a loop, gets a new ID
+  (`photo_2`), and the same content keeps its first ID.
+- A tool's second image in the conversation is `snap_result_2`.
+- With the parallel engine, which of two requests composed at once gets the
+  `_2` suffix can differ between runs; names stay unique.
+- A conversation restored from a checkpoint keeps its names but not their
+  media: new media get new names, and an earlier name can no longer be named.
+- To resolve names, a conversation keeps every media it named in memory for
+  its lifetime, including media that history archiving or compaction has
+  dropped from the history.
 
 With a history processor, native compaction or history archiving, Kedi cannot
 tell what the model still sees, so it attaches references on every turn.

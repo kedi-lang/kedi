@@ -252,7 +252,12 @@ class KediType:
         rt: KediRuntime,
         env: dict[str, Any] | None,
         value: Any,
+        *,
+        context: Any = None,
     ) -> Any:
+        """Validate ``value``; ``context`` is Pydantic's validation context, such as the media
+        names a model's tool arguments may use."""
+
         from ...promise import force
 
         value = force(value)  # never hand a promise to pydantic; resolve first
@@ -265,7 +270,7 @@ class KediType:
             raise KediTypeExecutionError(
                 f"Cannot build validator for type {self!s}: {exc}"
             ) from exc
-        return adapter.validate_python(value, strict=True)
+        return adapter.validate_python(value, strict=True, context=context)
 
     def __repr__(self) -> str:
         if self._expr is not None:
@@ -367,10 +372,12 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
 # ---------------------------------------------------------------------
 
 
-def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
+def coerce_model_value(model: type[BaseModel], value: Any, *, context: Any = None) -> Any:
     """Coerce a model instance, a dict, or a JSON object string to a Pydantic model.
 
     Text in any other form, such as a model's ``str()`` (``name='Ada' age=3``), is never parsed.
+    ``context`` is Pydantic's validation context, such as the media names a model's tool
+    arguments may use.
     """
     from ...promise import force
 
@@ -380,13 +387,13 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value
     if isinstance(value, dict):
-        return model(**value)
+        return model(**value) if context is None else model.model_validate(value, context=context)
     if isinstance(value, str):
         text = value.strip()
         if text.startswith("{") and text.endswith("}"):
             loaded = json.loads(text)
             if isinstance(loaded, dict):
-                return model(**loaded)
+                return coerce_model_value(model, loaded, context=context)
             raise ValueError(f"Cannot coerce non-object JSON to {model.__name__}")
     raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 

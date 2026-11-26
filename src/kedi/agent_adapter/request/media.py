@@ -25,6 +25,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from threading import RLock
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
@@ -184,33 +185,52 @@ def _sha256(data: bytes) -> str:
 
 
 class MediaNamer:
-    """Assign request-unique names and drop repeated content."""
+    """Assign unique names and drop repeated content: one name means one media.
+
+    A request gets its own namer. A conversation (``> history: enabled``) keeps one namer for
+    all its requests, so a name never means two media in what the model sees, and the same
+    content keeps its first name. Prompts compose and tools return media concurrently, so
+    every operation holds the namer's lock.
+    """
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._by_content: dict[tuple[str, ...], str] = {}
         self._names: set[str] = set()
+        self._restored: set[str] = set()
         self._generated: Counter[str] = Counter()
-        self._attachments: list[MediaAttachment] = []
+        self._attachments: dict[str, MediaAttachment] = {}
 
-    def render(self, ref: Reference) -> str:
-        if ref.layout is not None:
-            # Media inside a value: each is attached under its path name, then the value goes
-            # as JSON naming them (two mentions of one image share its first name).
+    def render(self, ref: Reference, used: dict[str, MediaAttachment] | None = None) -> str:
+        """Name ``ref``'s media; ``used`` collects the attachments the rendered text names."""
+
+        with self._lock:
+            if ref.layout is not None:
+                # Media inside a value: each is attached under its path name, then the value
+                # goes as JSON naming them (two mentions of one image share its first name).
+                names = [
+                    self.name_for(item, preferred, used=used)
+                    for item, preferred in zip(ref.items, ref.layout.preferred, strict=True)
+                ]
+                document = ref.layout.document(names)
+                return self.name_for(
+                    document,
+                    ref.preferred_name(1),
+                    generated=ref.generated_base,
+                    stored=ref.stored,
+                    used=used,
+                )
             names = [
-                self.name_for(item, preferred)
-                for item, preferred in zip(ref.items, ref.layout.preferred, strict=True)
+                self.name_for(
+                    item,
+                    ref.preferred_name(index),
+                    generated=ref.generated_base,
+                    stored=ref.stored,
+                    used=used,
+                )
+                for index, item in enumerate(ref.items, start=1)
             ]
-            document = ref.layout.document(names)
-            return self.name_for(
-                document, ref.preferred_name(1), generated=ref.generated_base, stored=ref.stored
-            )
-        names = [
-            self.name_for(
-                item, ref.preferred_name(index), generated=ref.generated_base, stored=ref.stored
-            )
-            for index, item in enumerate(ref.items, start=1)
-        ]
-        return ", ".join(names)
+            return ", ".join(names)
 
     def name_for(
         self,
@@ -219,29 +239,58 @@ class MediaNamer:
         *,
         generated: str | None = None,
         stored: Any = None,
+        used: dict[str, MediaAttachment] | None = None,
     ) -> str:
-        key = (media.kind, *media.content_key)
-        existing = self._by_content.get(key)
-        if existing is not None:
-            return existing
-        base = media.name or preferred
-        if base is None:
-            name = self._next_generated(generated or media.kind)
-        else:
-            name = self._unique(base)
-        self._by_content[key] = name
-        self._names.add(name)
-        self._attachments.append(MediaAttachment(name=name, media=media, stored=stored))
-        return name
+        with self._lock:
+            key = (media.kind, *media.content_key)
+            name = self._by_content.get(key)
+            if name is None:
+                base = media.name or preferred
+                name = (
+                    self._next_generated(generated or media.kind)
+                    if base is None
+                    else self._unique(base)
+                )
+                self._by_content[key] = name
+                self._names.add(name)
+                self._attachments[name] = MediaAttachment(name=name, media=media, stored=stored)
+            if used is not None:
+                used.setdefault(name, self._attachments[name])
+            return name
 
     @property
     def attachments(self) -> tuple[MediaAttachment, ...]:
-        return tuple(self._attachments)
+        """Every media this namer named, in order."""
+
+        with self._lock:
+            return tuple(self._attachments.values())
+
+    @property
+    def names(self) -> frozenset[str]:
+        """Every name given or reserved, for a conversation checkpoint."""
+
+        with self._lock:
+            return frozenset(self._names)
+
+    @property
+    def restored(self) -> frozenset[str]:
+        """Names a restored conversation used before; their media are not kept."""
+
+        with self._lock:
+            return frozenset(self._restored - self._attachments.keys())
 
     def reserve(self, names: Iterable[str]) -> None:
         """Keep ``names`` (the prompt's attachments) from being given to other media."""
 
-        self._names.update(names)
+        with self._lock:
+            self._names.update(names)
+
+    def restore(self, names: Iterable[str]) -> None:
+        """Reserve the names a checkpointed conversation used, whose media are not kept."""
+
+        with self._lock:
+            self._names.update(names)
+            self._restored.update(names)
 
     def _unique(self, base: str) -> str:
         if base not in self._names:
@@ -261,15 +310,19 @@ class MediaNamer:
 
 class RequestMedia(Mapping[str, Media]):
     """The media a model can name in its request: the prompt's attachments and the media its
-    tools returned so far.
+    namer holds, which in a conversation are every media its requests named.
 
-    Tool media are read on each lookup, so a name a tool gave after validation began still
-    resolves.
+    The namer is read on each lookup, so a name a tool gave after validation began still
+    resolves. ``restored`` names came from before a conversation was restored.
     """
 
     def __init__(self, attachments: Sequence[MediaAttachment], namer: MediaNamer) -> None:
         self._attachments = tuple(attachments)
         self._namer = namer
+
+    @property
+    def restored(self) -> frozenset[str]:
+        return self._namer.restored
 
     def _named(self) -> dict[str, Media]:
         named = {attachment.name: attachment.media for attachment in self._attachments}
@@ -290,10 +343,11 @@ class RequestMedia(Mapping[str, Media]):
 def request_media() -> RequestMedia:
     """The current request's media by name; outside a request, only tool media of this scope."""
 
-    from .context import current_agent_run_request, tool_media_namer
+    from .context import current_agent_run_request, prompt_media, tool_media_namer
 
     request = current_agent_run_request()
-    return RequestMedia(request.prompt.media if request is not None else (), tool_media_namer())
+    attachments = (*(request.prompt.media if request is not None else ()), *prompt_media())
+    return RequestMedia(attachments, tool_media_namer())
 
 
 def media_validation_context(context: Any = None) -> Any:
@@ -324,14 +378,21 @@ def require_media_input(adapter: Any) -> None:
         )
 
 
-def compose_prompt(parts: Iterable[Any]) -> tuple[str, tuple[MediaAttachment, ...]]:
-    """Join rendered prompt parts, naming each reference once for this request."""
+def compose_prompt(
+    parts: Iterable[Any], *, namer: MediaNamer | None = None
+) -> tuple[str, tuple[MediaAttachment, ...]]:
+    """Join rendered prompt parts, naming each reference once.
 
-    namer = MediaNamer()
+    ``namer`` is the conversation's namer, so names stay unique across its requests; without
+    one, names are unique within this request.
+    """
+
+    namer = namer or MediaNamer()
+    used: dict[str, MediaAttachment] = {}
     rendered: list[str] = []
     for part in parts:
-        rendered.append(namer.render(part) if isinstance(part, Reference) else part)
-    return "".join(rendered), namer.attachments
+        rendered.append(namer.render(part, used) if isinstance(part, Reference) else part)
+    return "".join(rendered), tuple(used.values())
 
 
 def media_summaries(attachments: Sequence[MediaAttachment]) -> tuple[MediaSummary, ...]:
@@ -495,6 +556,17 @@ def require_audio_to_name(attachments: Sequence[MediaAttachment], *, tools: Iter
 
 RETURN_MEDIA_METADATA = "kedi_return_media"
 """Tool metadata key: the media kinds a tool's declared return type can hold."""
+
+ARGUMENT_MEDIA_METADATA = "kedi_argument_media"
+"""Tool metadata key: the media kinds a tool's parameters can take, by name."""
+
+
+def tools_take_media(tools: Iterable[Any]) -> bool:
+    """Whether one of ``tools`` (tool specs) has a parameter that takes media."""
+
+    return any(
+        (getattr(tool, "metadata", None) or {}).get(ARGUMENT_MEDIA_METADATA) for tool in tools
+    )
 
 
 def tools_return(tools: Iterable[Any], kind: MediaKind) -> bool:
@@ -811,6 +883,7 @@ def _model_text(model: str | None) -> str:
 
 
 __all__ = [
+    "ARGUMENT_MEDIA_METADATA",
     "MediaAttachment",
     "NamedAudio",
     "RETURN_MEDIA_METADATA",
@@ -832,6 +905,7 @@ __all__ = [
     "require_media_output",
     "tools_may_return_media",
     "tools_return",
+    "tools_take_media",
     "compose_prompt",
     "history_keeps_media",
     "media_digest_material",

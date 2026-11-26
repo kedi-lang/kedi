@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import (
     Any,
     Callable,
+    Iterable,
     Mapping,
     get_type_hints,
 )
@@ -18,7 +19,7 @@ from pydantic import (
 )
 
 from kedi.agent_adapter.approvals.policy import ToolRisk
-from kedi.agent_adapter.request.media import RETURN_MEDIA_METADATA
+from kedi.agent_adapter.request.media import ARGUMENT_MEDIA_METADATA, RETURN_MEDIA_METADATA
 from kedi.agent_adapter.tools.retry import (
     ToolRetryPolicy,
     tool_body,
@@ -37,6 +38,7 @@ from kedi.lang.docstrings import parse_procedure_docstring
 from kedi.lang.procedure_schema import (
     build_procedure_description,
     procedure_json_schema,
+    procedure_parameter_types,
     procedure_return_json_schema,
     procedure_return_type,
 )
@@ -87,6 +89,7 @@ def kedi_procedure_tool_spec(
                 retry_policy=retry_policy,
             ),
             **_return_media(procedure_return_type(rt, proc, local_env=local_env)),
+            **_argument_media(procedure_parameter_types(rt, proc, local_env=local_env).values()),
         },
         proc=proc,
         risk=declaration.risk if declaration is not None else _procedure_tool_risk(proc),
@@ -122,6 +125,7 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
             else _python_callable_return_type(callable_body)
         )
     )
+    metadata.update(_argument_media(_python_callable_parameter_types(callable_body)))
     return ToolSpec(
         fn=tool_fn,
         name=name,
@@ -148,21 +152,45 @@ def _return_media(annotation: Any) -> dict[str, Any]:
     return {RETURN_MEDIA_METADATA: sorted(kinds)} if kinds else {}
 
 
+def _argument_media(annotations: Iterable[Any]) -> dict[str, Any]:
+    """Tool metadata naming the media kinds a tool's parameters can take.
+
+    The model names those media, so such a tool's requests get the media instruction.
+    """
+
+    kinds = frozenset().union(*(media_kinds(annotation) for annotation in annotations))
+    return {ARGUMENT_MEDIA_METADATA: sorted(kinds)} if kinds else {}
+
+
+def _hinted_target(fn: Callable[..., Any]) -> Any:
+    """The function whose type hints describe ``fn``: unwrapped, past partials and ``__call__``."""
+
+    target = inspect.unwrap(fn)
+    while isinstance(target, partial):
+        target = inspect.unwrap(target.func)
+    return target if inspect.isroutine(target) else target.__call__
+
+
 def _python_callable_return_type(fn: Callable[..., Any]) -> Any | None:
     """A callable's declared return type, or ``None`` when it declares none we can resolve."""
 
     annotation = inspect.signature(fn).return_annotation
     if annotation is inspect.Signature.empty:
         return None
-    target = inspect.unwrap(fn)
-    while isinstance(target, partial):
-        target = inspect.unwrap(target.func)
-    if not inspect.isroutine(target):
-        target = target.__call__
     try:
-        return get_type_hints(target, include_extras=True).get("return", annotation)
+        return get_type_hints(_hinted_target(fn), include_extras=True).get("return", annotation)
     except (NameError, TypeError):
         return None if isinstance(annotation, str) else annotation
+
+
+def _python_callable_parameter_types(fn: Callable[..., Any]) -> list[Any]:
+    """The types a callable's parameters declare, or none when its hints do not resolve."""
+
+    try:
+        hints = get_type_hints(_hinted_target(fn), include_extras=True)
+    except (NameError, TypeError):
+        return []
+    return [annotation for name, annotation in hints.items() if name != "return"]
 
 
 def _python_callable_return_schema(fn: Callable[..., Any]) -> dict[str, Any] | None:

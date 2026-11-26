@@ -32,6 +32,13 @@ _TOOL_MEDIA_NAMER: ContextVar[MediaNamer | None] = ContextVar(
     "kedi_tool_media_namer",
     default=None,
 )
+# How many media the namer held when the request began: CodeMode attaches only media that
+# tools returned during the request.
+_TOOL_MEDIA_START: ContextVar[int] = ContextVar("kedi_tool_media_start", default=0)
+_CONVERSATION_NAMER: ContextVar[MediaNamer | None] = ContextVar(
+    "kedi_conversation_media_namer",
+    default=None,
+)
 
 
 def tool_media_namer() -> MediaNamer:
@@ -44,6 +51,36 @@ def tool_media_namer() -> MediaNamer:
     from .media import MediaNamer
 
     return _TOOL_MEDIA_NAMER.get() or MediaNamer()
+
+
+def request_tool_media() -> tuple[MediaAttachment, ...]:
+    """The media tools returned during the current request, named by its namer."""
+
+    return tool_media_namer().attachments[_TOOL_MEDIA_START.get() :]
+
+
+@contextmanager
+def conversation_media_scope(namer: MediaNamer | None) -> Generator[None, None, None]:
+    """Name the requests inside this scope with ``namer``: a conversation's, or ``None``.
+
+    Every Kedi request sets it, so a nested call outside the conversation never inherits it.
+    """
+
+    token = _CONVERSATION_NAMER.set(namer)
+    try:
+        yield
+    finally:
+        _CONVERSATION_NAMER.reset(token)
+
+
+def prompt_media() -> tuple[MediaAttachment, ...]:
+    """The attachments of the prompt the current native run sends, taken or not.
+
+    A subagent task's child receives its attachments here rather than through a request.
+    """
+
+    claim = _PROMPT_MEDIA.get()
+    return () if claim is None else claim.media
 
 
 @contextmanager
@@ -72,13 +109,16 @@ def agent_run_request_scope(request: AgentRunRequest) -> Generator[None, None, N
     )
     from .media import MediaNamer
 
-    namer = MediaNamer()
+    # A conversation's requests share its namer, so tool media never take an earlier name.
+    namer = _CONVERSATION_NAMER.get() or MediaNamer()
     # A tool's media never take a prompt attachment's name: a model names either one.
     namer.reserve(attachment.name for attachment in request.prompt.media)
     namer_token = _TOOL_MEDIA_NAMER.set(namer)
+    start_token = _TOOL_MEDIA_START.set(len(namer.attachments))
     try:
         yield
     finally:
+        _TOOL_MEDIA_START.reset(start_token)
         _TOOL_MEDIA_NAMER.reset(namer_token)
         _PROMPT_MEDIA.reset(media_token)
         _CURRENT_AGENT_RUN_REQUEST.reset(token)
@@ -122,8 +162,11 @@ def take_prompt_media() -> tuple[MediaAttachment, ...]:
 
 __all__ = [
     "agent_run_request_scope",
+    "conversation_media_scope",
     "current_agent_run_request",
+    "prompt_media",
     "prompt_media_scope",
+    "request_tool_media",
     "take_prompt_media",
     "tool_media_namer",
     "tool_media_scope",

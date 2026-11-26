@@ -149,15 +149,22 @@ def _prepare_attachments(
     return tuple(prepared)
 
 
+def _media_namer(state: Any) -> Any:
+    """The conversation's media namer, so names stay unique across its requests."""
+
+    return None if state is None else state.media_namer
+
+
 def _may_name_media(
     output_types: Iterable[Any], attachments: Sequence[Any], tools: Sequence[Any], profile: Any
 ) -> bool:
-    """Whether the model's answer may name media of its request: the output holds media, and
-    an attachment, a tool or an MCP server could give some."""
+    """Whether the model may name media: its output or a tool's parameters take media, and an
+    attachment, a tool or an MCP server could give some."""
 
-    from kedi.agent_adapter.request.media import tools_may_return_media
+    from kedi.agent_adapter.request.media import tools_may_return_media, tools_take_media
 
-    return any(type_holds_media(output_type) for output_type in output_types) and (
+    takes = any(type_holds_media(output_type) for output_type in output_types)
+    return (takes or tools_take_media(tools)) and (
         bool(attachments) or tools_may_return_media(tools) or bool(profile.mcp_servers)
     )
 
@@ -239,7 +246,7 @@ def _invoke_text_parts(
         )
         from kedi.agent_adapter.tools.specs import SupportsToolRegistration
 
-        prompt, media = compose_prompt(resolved_parts)
+        prompt, media = compose_prompt(resolved_parts, namer=_media_namer(conversation_state))
 
         profile = block_profile
         override_ctx = nullcontext()
@@ -381,7 +388,13 @@ def _evaluate_claim(self: KediRuntime, claim: str | Sequence[Any]) -> bool:
         lower_request_sync,
     )
 
-    claim_text, media = (claim, ()) if isinstance(claim, str) else compose_prompt(claim)
+    claim_text, media = (
+        (claim, ())
+        if isinstance(claim, str)
+        else compose_prompt(
+            claim, namer=_media_namer(self._conversation_state_for_profile(profile))
+        )
+    )
     question = ClaimPromptBuilder(claim=claim_text).build()
 
     override_ctx = nullcontext()
@@ -607,7 +620,7 @@ def _kedi_run(
             if tool_adapter is not None:
                 for spec in captured_tool_specs:
                     tool_adapter.register_tool(spec)
-            template, media = compose_prompt(resolved_parts)
+            template, media = compose_prompt(resolved_parts, namer=_media_namer(conversation_state))
             prompt_builder = KediTemplatePromptBuilder(
                 template=template,
                 output_fields=tuple(required),

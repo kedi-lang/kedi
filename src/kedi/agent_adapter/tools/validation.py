@@ -10,9 +10,11 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter
 
+from kedi.agent_adapter.request.media import media_validation_context
 from kedi.core import KediRuntime
 from kedi.lang.ast import ProcedureDef, TypeRef
 from kedi.lang.compiler.type_system import KediType, coerce_model_value
+from kedi.media import media_error_detail
 
 from .errors import ToolArgumentError
 
@@ -68,7 +70,10 @@ def _python_callable_argument_validator(
             if isinstance(annotation, str):
                 annotation = inspect.Parameter.empty
             if annotation is not inspect.Parameter.empty:
-                value = TypeAdapter(annotation).validate_python(value)
+                # A media argument names one of the request's media.
+                value = TypeAdapter(annotation).validate_python(
+                    value, context=media_validation_context()
+                )
             validated[name] = value
         return validated
 
@@ -96,14 +101,19 @@ def _coerce_tool_arguments(
 
         provided = kwargs[param_name]
         resolved = kedi_type.resolve(rt, None)
+        # A media argument names one of the request's media.
+        context = media_validation_context()
         try:
             if isinstance(resolved, type) and issubclass(resolved, BaseModel):
-                kwargs[param_name] = coerce_model_value(resolved, provided)
+                kwargs[param_name] = coerce_model_value(resolved, provided, context=context)
             else:
-                kwargs[param_name] = kedi_type.validate(rt, None, provided)
+                kwargs[param_name] = kedi_type.validate(rt, None, provided, context=context)
         except ValueError as exc:
+            # The model reads this error: say which media names it can use.
+            detail = media_error_detail(exc)
             raise ToolArgumentError(
                 f"Parameter '{param_name}' does not match annotated type"
+                + (f": {detail}" if detail else "")
             ) from exc
 
 

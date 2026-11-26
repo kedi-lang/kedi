@@ -117,8 +117,13 @@ def _execute_conversation_call(
         hook_context = nullcontext(None)
 
     state = conversation_state
+    from kedi.agent_adapter.request.context import conversation_media_scope
+
     try:
-        with hook_context as prepared:
+        with (
+            conversation_media_scope(state.media_namer if state is not None else None),
+            hook_context as prepared,
+        ):
             if prepared is None:
                 active_prompt = prompt
                 run_id = f"agent_{uuid4().hex}"
