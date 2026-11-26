@@ -168,6 +168,7 @@ async def _execute_run(
                     child_adapter,
                     opaque_tools=bool(child_profile.mcp_servers),
                 )
+            self._assert_token_limits_supported(child_adapter)
             instructions = self._deps.instructions_for_profile(child_profile, child_adapter)
             conversation = self._conversation_context(conversation_id)
             control = self._controls[run_id]

@@ -218,15 +218,18 @@ def _claude_non_retryable_system_error(sdk: Any, message: Any) -> str | None:
 
 def _claude_invocation_usage(result: Any) -> InvocationUsage:
     usage = getattr(result, "usage", None)
-    values = usage if isinstance(usage, Mapping) else {}
+    turns = getattr(result, "num_turns", 0)
+    requests = turns if isinstance(turns, int) else 0
+    if not isinstance(usage, Mapping):
+        return InvocationUsage.unmeasured(requests=requests)
+    values = usage
     input_tokens = _usage_int(values, "input_tokens", "inputTokens")
     output_tokens = _usage_int(values, "output_tokens", "outputTokens")
     total_tokens = _usage_int(values, "total_tokens", "totalTokens")
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens
-    turns = getattr(result, "num_turns", 0)
     return InvocationUsage(
-        requests=turns if isinstance(turns, int) else 0,
+        requests=requests,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,

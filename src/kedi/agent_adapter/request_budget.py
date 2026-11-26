@@ -270,9 +270,9 @@ class ModelRequestBudget:
         raise_on_exceeded: bool,
     ) -> ModelRequestBudgetSnapshot:
         actual_requests = max(1, usage.requests)
-        actual_input_tokens = (
-            usage.uncached_input_tokens if usage.input_tokens > 0 else estimated_tokens
-        )
+        # Unmeasured input keeps the request's conservative estimate, so the ceiling holds.
+        measured = usage.uncached_input_tokens if usage.input_tokens else None
+        actual_input_tokens = estimated_tokens if measured is None else measured
         with self._lock:
             self._requests += actual_requests - 1
             self._cumulative_input_tokens += actual_input_tokens - estimated_tokens

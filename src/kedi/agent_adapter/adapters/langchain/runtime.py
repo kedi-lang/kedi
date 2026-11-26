@@ -34,6 +34,7 @@ from kedi.agent_adapter.output_schema import OutputCorrection
 from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.tools.dispatch import SequentialDispatchGate
 from kedi.agent_adapter.tools.errors import TerminalToolFailure
+from kedi.errors import KediExecutionError
 from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries
 
 
@@ -444,13 +445,27 @@ def _record_model_response(state: LangChainRunState | None, messages: Sequence[A
     if state is not None:
         usage = _langchain_invocation_usage({"messages": messages})
         state.usage += usage
-        state.native_usage.input_tokens += usage.input_tokens
-        state.native_usage.output_tokens += usage.output_tokens
-        state.native_usage.cache_read_tokens += usage.cache_read_tokens
-        state.native_usage.cache_write_tokens += usage.cache_write_tokens
-        state.limits.check_tokens(state.native_usage)
-        state.limits.check_per_request_input_tokens(usage.input_tokens)
+        if usage.input_tokens is None:
+            _require_no_token_limits(state.limits)
+        else:
+            state.native_usage.input_tokens += usage.input_tokens
+            state.native_usage.output_tokens += usage.output_tokens or 0
+            state.native_usage.cache_read_tokens += usage.cache_read_tokens or 0
+            state.native_usage.cache_write_tokens += usage.cache_write_tokens or 0
+            state.limits.check_tokens(state.native_usage)
+            state.limits.check_per_request_input_tokens(usage.input_tokens)
     _check_model_completion(messages)
+
+
+def _require_no_token_limits(limits: UsageLimits) -> None:
+    """A response without usage metadata cannot be counted against a token limit."""
+
+    names = ("input_tokens_limit", "output_tokens_limit", "total_tokens_limit")
+    limited = [name for name in names if getattr(limits, name) is not None]
+    if limited:
+        raise KediExecutionError(
+            f"The model reported no token usage, so {', '.join(limited)} cannot be enforced"
+        )
 
 
 def _check_model_completion(messages: Sequence[Any]) -> None:

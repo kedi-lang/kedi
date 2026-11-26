@@ -37,9 +37,16 @@ report_invocation(
 
 Kedi routes the report to everything observing the call: the request-size
 reservation, model and agent telemetry, checkpoints, `kedi explain` usage,
-and a child's usage limits. Report the figures the provider returns; a
-figure it does not return stays at its default of 0, and is never estimated
-by the adapter. A report outside a Kedi call is ignored.
+and a child's usage limits. Report the figures the provider returns, and never
+estimate one. A token count the provider does not return is `None`, which
+means unknown; 0 means it measured zero. When a response carries no usage at
+all, report `InvocationUsage.unmeasured()`. A sum that includes an unknown count
+is unknown, and telemetry leaves unknown counts off its spans instead of
+recording 0. A report outside a Kedi call is ignored.
+
+Set `supports_token_usage=True` only when every report carries the
+provider's token counts. Kedi refuses a child's token limits, before the
+child runs, on an adapter without it.
 
 ## Run Budgets
 

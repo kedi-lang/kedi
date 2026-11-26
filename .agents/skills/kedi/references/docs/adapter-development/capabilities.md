@@ -49,6 +49,7 @@ fails in ways Kedi cannot detect.
 | `supports_native_compaction` | compacts history natively | allows `compaction: native` | `native compaction is not supported by adapter '<shortname>'` |
 | `supports_stream_events` | emits streaming events | — | `> requires: stream_events` fails |
 | `supports_request_budget` | admits each model request against the run budget | allows `> budget: request_limit` | `Adapter '<shortname>' cannot enforce request run budget for this execution` |
+| `supports_token_usage` | reports the provider's token counts with each invocation (see [Reporting Usage](budgets.md#reporting-usage)) | — | a child with token limits fails before it runs: `Adapter '<shortname>' reports no token usage, so the subagent <limits> cannot be enforced` |
 | `supports_tool_attempt_budget` | admits each tool attempt against the run budget | allows `> budget: tool_attempt_limit` (not with MCP or external tools) | `Adapter '<shortname>' cannot enforce tool_attempt run budget for this execution` |
 | `supports_media_input` | accepts multimodal input: places prompt images, audio, video, and documents in the request | allows multimodal prompts | `MediaError: Adapter '<shortname>' does not accept media input` |
 | `supports_image_output` | returns an `Image` for `[img: Image] << ...`: one the model draws, or one of the request's media it names | allows image output | the model can only name an attached image; a request with none fails: `MediaError: Adapter '<shortname>' cannot produce images` |

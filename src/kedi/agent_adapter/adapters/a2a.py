@@ -92,6 +92,8 @@ class A2AAdapter(HookRegistrationMixin):
         supports_artifacts=False,
         supports_native_artifacts=False,
         supports_stateful_history=True,
+        # A remote agent reports no token counts.
+        supports_token_usage=False,
         supports_history_processing=False,
         supports_history_replay=False,
         supports_native_compaction=False,
@@ -429,7 +431,8 @@ class A2AAdapter(HookRegistrationMixin):
             _record_error_coordinates(conversation, connection.endpoint, exc)
             raise
         _record_coordinates(conversation, connection.endpoint, result)
-        report_invocation(InvocationUsage(requests=1))
+        # A2A reports no token counts: they are unknown, not zero.
+        report_invocation(InvocationUsage.unmeasured())
         return result
 
     def _active_connection(self) -> A2AConnection:

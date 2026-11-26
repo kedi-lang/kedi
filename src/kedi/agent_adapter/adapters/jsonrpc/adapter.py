@@ -128,6 +128,8 @@ class JsonRpcAdapter:
         supports_stateful_history=None,
         supports_request_budget=None,
         supports_tool_attempt_budget=None,
+        # A run reports one total when it ends; per-request usage comes with subagents.
+        supports_token_usage=False,
         negotiated_capabilities=frozenset(
             {
                 "structured_output",
@@ -422,21 +424,7 @@ class JsonRpcAdapter:
             # Cancellation is a request: the bridge stopping is not confirmed by it.
             self._connection.notify("run/cancel", {"runId": params["runId"]})
             raise
-        usage = result.get("usage")
-        if isinstance(usage, dict):
-            report_invocation(
-                InvocationUsage(
-                    requests=int(usage.get("requests", 1)),
-                    input_tokens=int(usage.get("inputTokens", 0)),
-                    output_tokens=int(usage.get("outputTokens", 0)),
-                    total_tokens=int(
-                        usage.get(
-                            "totalTokens",
-                            usage.get("inputTokens", 0) + usage.get("outputTokens", 0),
-                        )
-                    ),
-                )
-            )
+        report_invocation(_usage(result.get("usage")))
         return result
 
     def _on_request(self, request_id: int | str, method: str, params: JsonObject) -> None:
@@ -658,6 +646,31 @@ async def _decide_approval(
     return ApprovalDecision.allow(reason=reason)
 
 
+def _usage(usage: Any) -> InvocationUsage:
+    """The run's usage as the bridge reported it; a count it left out is unknown."""
+
+    if not isinstance(usage, dict):
+        return InvocationUsage.unmeasured()
+    requests = _count(usage, "requests")
+    input_tokens, output_tokens = _count(usage, "inputTokens"), _count(usage, "outputTokens")
+    total = _count(usage, "totalTokens")
+    if total is None and input_tokens is not None and output_tokens is not None:
+        total = input_tokens + output_tokens
+    return InvocationUsage(
+        requests=1 if requests is None else requests,
+        input_tokens=input_tokens,
+        cache_read_tokens=None,
+        cache_write_tokens=None,
+        output_tokens=output_tokens,
+        total_tokens=total,
+    )
+
+
+def _count(usage: JsonObject, name: str) -> int | None:
+    value = usage.get(name)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def _call(tool: ToolSpec, arguments: JsonObject) -> Any:
     return tool.fn(**validate_tool_arguments(tool, arguments))
 
@@ -711,6 +724,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         # count when it asks first.
         supports_request_budget=governed,
         supports_tool_attempt_budget=governed or not native_tools,
+        supports_token_usage=False,
         supports_profile_override=True,
         supports_model_override=True,
         supports_effort=False,

@@ -1253,11 +1253,11 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
             )()
         )
 
-    assert langchain_messages_module._langchain_invocation_usage("plain") == InvocationUsage(
-        requests=1
+    assert langchain_messages_module._langchain_invocation_usage("plain") == (
+        InvocationUsage.unmeasured()
     )
     assert langchain_messages_module._langchain_invocation_usage({"messages": "bad"}) == (
-        InvocationUsage(requests=1)
+        InvocationUsage.unmeasured()
     )
     assert langchain_messages_module._langchain_invocation_usage(
         {
@@ -3191,7 +3191,7 @@ def test_claude_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> 
     assert events["options"][0]["model"] == "child"
     assert events["options"][0]["max_turns"] == request.usage_limits.request_limit
     assert events["options"][0]["output_format"]["schema"]["type"] == "object"
-    assert usages == [InvocationUsage()]
+    assert usages == [InvocationUsage.unmeasured(requests=0)]  # the fake result has no usage
 
     events["structured_output"] = "not-an-object"
     with pytest.raises(TypeError, match="must be an object"):

@@ -144,7 +144,17 @@ def test_text_runs_report_usage_and_unsupported_operations_fail_before_dispatch(
     usage: list[InvocationUsage] = []
     with observe_invocations(usage.append):
         assert run(ECHO, adapter) == "echo: Say hello."
-    assert usage == [InvocationUsage(requests=2, input_tokens=5, total_tokens=5)]
+    # The peer reports requests and input tokens only; what it leaves out is unknown.
+    assert usage == [
+        InvocationUsage(
+            requests=2,
+            input_tokens=5,
+            cache_read_tokens=None,
+            cache_write_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+        )
+    ]
     error = failure("[n: int] << How many?\n= `n`\n", adapter)
     assert "structured output" in str(error)
 

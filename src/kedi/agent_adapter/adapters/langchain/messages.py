@@ -128,10 +128,10 @@ def _langchain_invocation_usage(
     input_messages: object = None,
 ) -> InvocationUsage:
     if not isinstance(result, Mapping):
-        return InvocationUsage(requests=1)
+        return InvocationUsage.unmeasured()
     messages = result.get("messages")
     if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
-        return InvocationUsage(requests=1)
+        return InvocationUsage.unmeasured()
     messages = _langchain_current_messages(messages, input_messages)
 
     # Tool calls are not counted here: a response's tool_calls also carry structured-output
@@ -157,10 +157,13 @@ def _langchain_invocation_usage(
             output_tokens += _usage_int(usage, "output_tokens", "outputTokens")
             total_tokens += _usage_int(usage, "total_tokens", "totalTokens")
             requests += 1
+    if requests == 0:
+        # No response carried usage_metadata: the counts are unknown, not zero.
+        return InvocationUsage.unmeasured()
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens
     return InvocationUsage(
-        requests=max(requests, 1),
+        requests=requests,
         input_tokens=input_tokens,
         cache_read_tokens=cache_read_tokens,
         cache_write_tokens=cache_write_tokens,

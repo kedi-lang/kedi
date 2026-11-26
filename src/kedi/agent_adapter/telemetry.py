@@ -569,6 +569,22 @@ def resolved_adapter_model(adapter: object, configured_model: str | None) -> str
     return model if isinstance(model, str) else None
 
 
+def _set_token_attributes(span: TelemetrySpan, usage: InvocationUsage) -> None:
+    """Token counts and cost on a span; an unmeasured count is left off, not set to 0."""
+
+    for name, value in (
+        ("gen_ai.usage.input_tokens", usage.input_tokens),
+        ("gen_ai.usage.cache_read_tokens", usage.cache_read_tokens),
+        ("gen_ai.usage.cache_write_tokens", usage.cache_write_tokens),
+        ("kedi.usage.uncached_input_tokens", usage.uncached_input_tokens),
+        ("gen_ai.usage.output_tokens", usage.output_tokens),
+    ):
+        if value is not None:
+            span.set_attribute(name, value)
+    if usage.cost_usd is not None:
+        span.set_attribute("kedi.usage.cost_usd", float(usage.cost_usd))
+
+
 def _record_agent_usage(
     state: AgentCallTelemetry,
     *,
@@ -578,13 +594,7 @@ def _record_agent_usage(
     if state.span is not None:
         state.span.set_attribute("kedi.agent.requests", usage.requests)
         state.span.set_attribute("kedi.agent.tool_calls", usage.tool_calls)
-        state.span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
-        state.span.set_attribute("gen_ai.usage.cache_read_tokens", usage.cache_read_tokens)
-        state.span.set_attribute("gen_ai.usage.cache_write_tokens", usage.cache_write_tokens)
-        state.span.set_attribute("kedi.usage.uncached_input_tokens", usage.uncached_input_tokens)
-        state.span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
-        if usage.cost_usd is not None:
-            state.span.set_attribute("kedi.usage.cost_usd", float(usage.cost_usd))
+        _set_token_attributes(state.span, usage)
     if state.native_owned:
         return
     for token_type, value in (
@@ -635,17 +645,7 @@ class ModelCallTelemetry:
 
     def finish(self, *, model: str | None) -> None:
         if self.span is not None:
-            self.span.set_attribute("gen_ai.usage.input_tokens", self.usage.input_tokens)
-            self.span.set_attribute("gen_ai.usage.cache_read_tokens", self.usage.cache_read_tokens)
-            self.span.set_attribute(
-                "gen_ai.usage.cache_write_tokens", self.usage.cache_write_tokens
-            )
-            self.span.set_attribute(
-                "kedi.usage.uncached_input_tokens", self.usage.uncached_input_tokens
-            )
-            self.span.set_attribute("gen_ai.usage.output_tokens", self.usage.output_tokens)
-            if self.usage.cost_usd is not None:
-                self.span.set_attribute("kedi.usage.cost_usd", float(self.usage.cost_usd))
+            _set_token_attributes(self.span, self.usage)
         if self.native_owned:
             return
         dimensions: dict[str, str] = {

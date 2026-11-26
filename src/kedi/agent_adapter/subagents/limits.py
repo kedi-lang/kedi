@@ -53,6 +53,10 @@ class SubagentUsageLimits:
             ),
         )
 
+    def token_limit_names(self) -> tuple[str, ...]:
+        names = ("input_tokens_limit", "output_tokens_limit", "total_tokens_limit")
+        return tuple(name for name in names if getattr(self, name) is not None)
+
     def remaining(self, run: SubagentRun) -> SubagentUsageLimits:
         """Physical attempts share a logical task's budget, including aborted requests."""
         return _RemainingSubagentUsageLimits(

@@ -107,8 +107,10 @@ required tools from the prompt. `output_retries` (default 1) bounds the
 corrections.
 
 Report `usage` with the counts the backend measured: `requests`,
-`inputTokens`, `outputTokens`, `totalTokens`. Kedi records a count the bridge
-leaves out as zero, and `requests` as one.
+`inputTokens`, `outputTokens`, `totalTokens`. A token count the bridge leaves
+out is unknown, not zero, and a run without `usage` has unknown counts; a
+missing `requests` is one. Bridges do not support `token_usage` yet: a run's
+usage arrives once, when it ends.
 
 ### `tool/call`
 

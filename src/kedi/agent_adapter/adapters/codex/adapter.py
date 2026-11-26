@@ -116,6 +116,7 @@ class CodexAdapter(HookRegistrationMixin):
         supports_artifacts=True,
         supports_native_artifacts=False,
         supports_stateful_history=True,
+        supports_token_usage=True,
         supports_history_processing=False,
         supports_history_replay=False,
         supports_native_compaction=True,
@@ -770,7 +771,9 @@ def _codex_native_approval_handler(
 
 def _codex_invocation_usage(result: CodexTurnResult) -> InvocationUsage:
     usage = result.turn.get("usage")
-    values = usage if isinstance(usage, Mapping) else {}
+    if not isinstance(usage, Mapping):
+        return InvocationUsage.unmeasured(tool_calls=_usage_int(result.turn, "toolCalls"))
+    values = usage
     input_tokens = _usage_int(values, "input_tokens", "inputTokens")
     output_tokens = _usage_int(values, "output_tokens", "outputTokens")
     total_tokens = _usage_int(values, "total_tokens", "totalTokens")
