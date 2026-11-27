@@ -76,7 +76,7 @@ class KediAgent(BaseInstalledAgent):
     _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.66.0"
     _CODEX_RUNTIME = "codex-auth-helper[websocket]==1.13.0"
     _LOGFIRE_RUNTIME = "logfire[httpx]==4.41.0"
-    _KEDI_OTEL_RUNTIME = "opentelemetry-instrumentation-kedi==0.1.0"
+    _KEDI_OTEL_RUNTIME = "opentelemetry-instrumentation-kedi==0.1.2"
     _UV_RUNTIME = "uv==0.11.21"
     _PIP_NETWORK_OPTIONS = "--retries 20 --timeout 120"
     _MANAGED_PYTHON = "3.11"
