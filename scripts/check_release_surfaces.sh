@@ -5,8 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 node scripts/sync_editor_runtime.mjs --check
 
+vscode_name="$(node -p "require('./kedi-vscode/package.json').name")"
 vscode_version="$(node -p "require('./kedi-vscode/package.json').version")"
-vscode_vsix="kedi-vscode/kedi-vscode-${vscode_version}.vsix"
+vscode_vsix="kedi-vscode/${vscode_name}-${vscode_version}.vsix"
 zed_version="$(
   grep -E '^version[[:space:]]*=' kedi-zed/extension.toml \
     | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/'
