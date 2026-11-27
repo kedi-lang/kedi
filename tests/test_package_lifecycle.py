@@ -143,7 +143,10 @@ def test_without_the_flag_python_is_not_touched(tmp_path: Path, environment: Env
     assert removed.returncode == 0, removed.stderr
     assert not (environment.registry / "example").exists()
     assert environment.has("kedi_lifecycle_b")
-    assert "Python distributions example added stay installed: kedi-lifecycle-b" in removed.stdout
+    assert (
+        "Python distributions these packages added stay installed: kedi-lifecycle-b"
+        in removed.stdout
+    )
     assert "kedi remove example --with-python-dependencies" in removed.stdout
 
 
@@ -411,13 +414,13 @@ def test_the_plan_keeps_each_distribution_something_else_needs_and_says_why(
         "chained": "installed distribution wanted requires it",
     }
     assert "Python distribution lost is no longer installed" in plan.notes
-    assert any("upgraded was upgraded from 1.0 to 2.0" in note for note in plan.notes)
+    assert any("upgraded was upgraded from 1.0 to 2.0 by example" in note for note in plan.notes)
 
     uninstalled: list[list[str]] = []
     monkeypatch.setattr(package_lifecycle, "uninstall_python_distributions", uninstalled.append)
     # A path the plan listed may be gone by the time the lock is held (a concurrent install
     # committed its staging directory).
-    plan.paths.append(registry / ".example.staging-gone")
+    plan.packages[0].paths.append(registry / ".example.staging-gone")
     package_lifecycle.remove(plan, registry_root=registry)
     assert uninstalled == [["alone", "via-alone"]]
     assert not (registry / "example").exists() and (registry / "other").exists()
@@ -429,9 +432,9 @@ def test_without_the_flag_the_plan_names_what_stays(tmp_path: Path) -> None:
     plan = package_lifecycle.plan_removal(
         "example", registry_root=registry, with_python_dependencies=False
     )
-    assert plan.uninstall == [] and plan.lock is None
+    assert plan.uninstall == [] and plan.packages[0].lock is None
     assert plan.notes == [
-        "Python distributions example added stay installed: alone. "
+        "Python distributions these packages added stay installed: alone. "
         "Run kedi remove example --with-python-dependencies to remove them as well"
     ]
 

@@ -155,25 +155,34 @@ def _walk_package_directive(self: _Walker, node: Node) -> PackageMetadata:
         "python": "python_requirement",
         "license": "license",
     }
+    dependency_blocks = {
+        "package_python_dependencies": "python_dependencies",
+        "package_kedi_dependencies": "kedi_dependencies",
+    }
     for child in _named_children(body):
-        if child.type == "package_python_dependencies":
-            if package.python_dependencies:
+        if child.type in dependency_blocks:
+            attribute = dependency_blocks[child.type]
+            if attribute in package.field_locs:
                 self._error(
                     child,
-                    "package manifest can define only one python_dependencies block",
+                    f"package manifest can define only one {attribute} block",
                     code="K-PACKAGE-DUP",
                 )
                 continue
             dependencies = _field(child, "body")
             assert dependencies is not None
-            package.python_dependencies = [
-                _src_text(self.source, value).strip()
-                for dependency in _named_children(dependencies)
-                if dependency.type == "package_dependency"
-                for value in [_field(dependency, "value")]
-                if value is not None and _src_text(self.source, value).strip()
-            ]
-            package.field_locs["python_dependencies"] = self._span(child)
+            setattr(
+                package,
+                attribute,
+                [
+                    _src_text(self.source, value).strip()
+                    for dependency in _named_children(dependencies)
+                    if dependency.type == "package_dependency"
+                    for value in [_field(dependency, "value")]
+                    if value is not None and _src_text(self.source, value).strip()
+                ],
+            )
+            package.field_locs[attribute] = self._span(child)
             continue
         if child.type == "package_adapters":
             if "adapters" in package.field_locs:

@@ -276,3 +276,29 @@ def test_registry_rejects_yanked_package_before_git_fetch(tmp_path: Path) -> Non
                 registry_root=tmp_path / "installed",
                 api_client=HTTPRegistryAPIClient(registry_url),
             )
+
+
+def test_a_kedi_dependency_installs_from_the_http_registry_at_its_verified_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, verified_commit = _package_repository(tmp_path)
+    api_root = tmp_path / "registry-api"
+    _write_registry_api(api_root, repository=repository, commit=verified_commit)
+    local = tmp_path / "local"
+    (local / "src" / "app").mkdir(parents=True)
+    (local / "src" / "app" / "main.kedi").write_text("= app\n", encoding="utf-8")
+    (local / "package.kedi").write_text(
+        "> package: app:\n  source: src/app\n  kedi_dependencies:\n    kedi_http>=1.0\n",
+        encoding="utf-8",
+    )
+    install_root = tmp_path / "installed"
+
+    with _serve_registry(api_root) as registry_url:
+        monkeypatch.setenv("KEDI_REGISTRY_URL", registry_url)
+        installed = install_package(local / "package.kedi", registry_root=install_root)
+
+    (dependency,) = installed.dependencies
+    assert dependency.source.joinpath("main.kedi").read_text(encoding="utf-8") == "= verified\n"
+    receipt = json.loads((dependency.root / INSTALL_RECEIPT_NAME).read_text(encoding="utf-8"))
+    assert receipt["verified_commit"] == verified_commit
+    assert receipt["lifecycle"]["installed_as"] == "dependency"

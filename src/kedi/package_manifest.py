@@ -80,6 +80,15 @@ def validate_package_metadata(
         if requirement.url is not None and not allow_direct_urls:
             raise ValueError(f"Python dependency {dependency!r} uses a direct URL")
 
+    listed: set[str] = set()
+    for dependency in metadata.kedi_dependencies:
+        requirement = parse_kedi_requirement(dependency)
+        if requirement.name == metadata.name:
+            raise ValueError(f"Kedi package {metadata.name!r} lists itself in kedi_dependencies")
+        if requirement.name in listed:
+            raise ValueError(f"Kedi dependency {requirement.name!r} is listed more than once")
+        listed.add(requirement.name)
+
     if metadata.python_requirement is None:
         return
 
@@ -94,6 +103,28 @@ def validate_package_metadata(
             f"{metadata.python_requirement.removeprefix('python@')}, but the installer runs "
             f"on Python {current[0]}.{current[1]}"
         )
+
+
+def parse_kedi_requirement(dependency: str) -> Requirement:
+    """One ``kedi_dependencies`` entry: a Kedi package name, optionally with a PEP 440
+    specifier, such as ``hermes>=0.1``. Kedi resolves it through the registry."""
+    try:
+        requirement = Requirement(dependency)
+    except InvalidRequirement as exc:
+        raise ValueError(
+            f"invalid Kedi dependency {dependency!r}: write a package name, optionally with a "
+            "version specifier, such as hermes>=0.1"
+        ) from exc
+    if requirement.url is not None or requirement.extras or requirement.marker is not None:
+        raise ValueError(
+            f"Kedi dependency {dependency!r}: only a package name and a version specifier are "
+            "allowed; Kedi resolves dependencies through the registry"
+        )
+    try:
+        validate_package_name(requirement.name)
+    except ValueError as exc:
+        raise ValueError(f"Kedi dependency {dependency!r}: {exc}") from exc
+    return requirement
 
 
 def validate_package_adapter(adapter: PackageAdapterDecl) -> None:

@@ -688,6 +688,8 @@ def _describe_ast_node(node) -> Optional[str]:
             lines.append(f"Python: `{node.python_requirement}`")
         if node.python_dependencies:
             lines.append("Python dependencies: `" + "`, `".join(node.python_dependencies) + "`")
+        if node.kedi_dependencies:
+            lines.append("Kedi dependencies: `" + "`, `".join(node.kedi_dependencies) + "`")
         return "\n\n".join(lines)
     if isinstance(node, TemplateBlock):
         line_count = len(node.lines)

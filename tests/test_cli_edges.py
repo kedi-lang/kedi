@@ -169,6 +169,7 @@ def test_cli_add_git_source_reports_the_cloned_revision(monkeypatch: Any) -> Non
         name = "kedi_http"
         root = Path("/tmp/registry/kedi_http")
         source_revision = "abc123"
+        dependencies = ()
 
     monkeypatch.setattr(cli_module, "add_package", lambda _source: Installed())
 

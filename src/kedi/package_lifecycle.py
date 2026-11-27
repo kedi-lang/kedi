@@ -27,7 +27,8 @@ from packaging.utils import canonicalize_name
 
 from .package_dependencies import installed_distributions, uninstall_python_distributions
 from .package_environment import ENVIRONMENT_DIRECTORY, UV_SYNC
-from .package_manifest import validate_package_name
+from .package_graph import describe, installed_dependents, installed_metadata
+from .package_manifest import parse_kedi_requirement, validate_package_name
 
 RUNTIME_DIRECTORY = ".kedi-runtime"
 """Inside an installed package: where its adapters keep run-time files (caches, homes)."""
@@ -48,16 +49,19 @@ def lifecycle_record(
     before: dict[str, str] | None,
     after: dict[str, str] | None,
     environment: bool = False,
+    installed_as: str = "explicit",
 ) -> dict[str, Any]:
     """The ``lifecycle`` record of one installation.
 
     ``before`` and ``after`` are the interpreter's distributions around installing the
     ``python_dependencies`` (both ``None`` when there were none). A reinstall finds the
     distributions its first install added already present, so the record carries forward
-    those still installed."""
+    those still installed. ``installed_as`` is ``explicit`` for a package the user asked for and
+    ``dependency`` for one installed because another needs it; ``kedi remove`` takes an orphaned
+    dependency along."""
     added: dict[str, str] = {}
     current = after if after is not None else installed_distributions() if previous else {}
-    for entry in _python_entries(previous):
+    for entry in python_additions(previous):
         if entry["name"] in current:
             added[entry["name"]] = current[entry["name"]]
     changed: list[dict[str, Any]] = list((previous or {}).get("changed") or [])
@@ -100,10 +104,11 @@ def lifecycle_record(
         }
         for name, version in sorted(added.items())
     ]
-    return {"installed_as": "explicit", "created": created, "changed": changed}
+    return {"installed_as": installed_as, "created": created, "changed": changed}
 
 
-def _python_entries(record: dict[str, Any] | None) -> list[dict[str, Any]]:
+def python_additions(record: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The Python distributions a lifecycle record says the installation added."""
     return [
         entry
         for entry in (record or {}).get("created") or []
@@ -125,12 +130,18 @@ def read_lifecycle(package_root: Path) -> dict[str, Any] | None:
 
 
 @dataclass
-class RemovalPlan:
-    package: str
-    paths: list[Path] = field(default_factory=list)
-    """Paths to delete: the package directory and an interrupted installation's leftovers."""
-    lock: Path | None = None
+class PackageRemoval:
+    name: str
+    paths: list[Path]
+    """The package directory and an interrupted installation's leftovers."""
+    lock: Path | None
     """The package's install lock file, deleted last."""
+
+
+@dataclass
+class RemovalPlan:
+    packages: list[PackageRemoval]
+    """The package asked for, then the dependencies it leaves orphaned."""
     uninstall: list[tuple[str, str]] = field(default_factory=list)
     kept: list[tuple[str, str]] = field(default_factory=list)
     """Recorded distributions left in place, and why."""
@@ -138,7 +149,11 @@ class RemovalPlan:
 
     def lines(self, *, dry_run: bool) -> list[str]:
         verb = "Would remove" if dry_run else "Removed"
-        lines = [f"{verb} {path}" for path in [*self.paths, *([self.lock] if self.lock else [])]]
+        lines = [
+            f"{verb} {path}"
+            for package in self.packages
+            for path in [*package.paths, *([package.lock] if package.lock else [])]
+        ]
         uninstall = "Would uninstall" if dry_run else "Uninstalled"
         lines += [
             f"{uninstall} Python distribution {name} {version}" for name, version in self.uninstall
@@ -147,46 +162,87 @@ class RemovalPlan:
         return lines + self.notes
 
 
+def _package_removal(registry_root: Path, name: str) -> PackageRemoval:
+    target = registry_root / name
+    paths = [target] if target.exists() or target.is_symlink() else []
+    paths += sorted(registry_root.glob(f".{name}.staging-*"))
+    paths += sorted(registry_root.glob(f".{name}.backup-*"))
+    lock = registry_root / f".{name}.lock"
+    return PackageRemoval(name, paths, lock if lock.exists() else None)
+
+
+def _kedi_dependencies(registry_root: Path, name: str) -> list[str]:
+    metadata = installed_metadata(registry_root, name)
+    return (
+        [parse_kedi_requirement(line).name for line in metadata.kedi_dependencies]
+        if metadata
+        else []
+    )
+
+
 def plan_removal(
     package_name: str, *, registry_root: Path, with_python_dependencies: bool
 ) -> RemovalPlan:
-    """What ``kedi remove`` deletes, without deleting anything."""
+    """What ``kedi remove`` deletes, without deleting anything.
+
+    A package another installed package needs is not removed. The dependencies it was the
+    last to need, installed only because something needed them, go with it."""
     name = validate_package_name(package_name)
-    target = registry_root / name
-    plan = RemovalPlan(name)
-    leftovers = sorted(registry_root.glob(f".{name}.staging-*")) + sorted(
-        registry_root.glob(f".{name}.backup-*")
-    )
-    if target.exists() or target.is_symlink():
-        plan.paths.append(target)
-    plan.paths += leftovers
-    lock = registry_root / f".{name}.lock"
-    plan.lock = lock if lock.exists() else None
-    if not plan.paths and plan.lock is None:
+    requested = _package_removal(registry_root, name)
+    if not requested.paths and requested.lock is None:
         raise ValueError(f"Kedi package {name!r} is not installed in {registry_root}")
-    record = read_lifecycle(target) if target.is_dir() else None
-    recorded = _python_entries(record)
-    if record is None and target.is_dir():
-        plan.notes.append(
-            f"{name} was installed before Kedi recorded what packages add to Python; "
-            "its Python dependencies, if any, are not known and stay in place"
+    dependents = installed_dependents(registry_root, name)
+    if dependents:
+        needs = "; ".join(describe(d, r) for d, r in dependents.items())
+        raise ValueError(
+            f"Kedi package {name!r} is needed by installed packages ({needs}); remove them first"
         )
-    for entry in (record or {}).get("changed") or []:
+    plan = RemovalPlan([requested])
+    removing = [name]
+    queue = _kedi_dependencies(registry_root, name)
+    while queue:
+        dependency = queue.pop(0)
+        record = read_lifecycle(registry_root / dependency)
+        if dependency in removing or (record or {}).get("installed_as") != "dependency":
+            continue
+        if any(d not in removing for d in installed_dependents(registry_root, dependency)):
+            continue
+        removing.append(dependency)
+        plan.packages.append(_package_removal(registry_root, dependency))
         plan.notes.append(
-            f"Python distribution {entry['name']} was upgraded from {entry['from']} to "
-            f"{entry['to']} by this package; Kedi does not revert that"
+            f"{dependency} goes too: it was installed as a dependency, and no installed package "
+            "needs it any more"
         )
+        queue += _kedi_dependencies(registry_root, dependency)
+
+    recorded: list[dict[str, Any]] = []
+    for package in removing:
+        target = registry_root / package
+        record = read_lifecycle(target) if target.is_dir() else None
+        if record is None and target.is_dir():
+            plan.notes.append(
+                f"{package} was installed before Kedi recorded what packages add to Python; "
+                "its Python dependencies, if any, are not known and stay in place"
+            )
+        for entry in (record or {}).get("changed") or []:
+            plan.notes.append(
+                f"Python distribution {entry['name']} was upgraded from {entry['from']} to "
+                f"{entry['to']} by {package}; Kedi does not revert that"
+            )
+        recorded += python_additions(record)
+    # A distribution is removed once, whichever of the packages recorded it.
+    recorded = list({entry["name"]: entry for entry in recorded}.values())
     if not recorded:
         return plan
     if not with_python_dependencies:
-        names = ", ".join(entry["name"] for entry in recorded)
+        names = ", ".join(sorted({entry["name"] for entry in recorded}))
         plan.notes.append(
-            f"Python distributions {name} added stay installed: {names}. "
+            f"Python distributions these packages added stay installed: {names}. "
             f"Run kedi remove {name} --with-python-dependencies to remove them as well"
         )
         return plan
     installed = installed_distributions()
-    claimed = _claimed_by_other_packages(registry_root, name)
+    claimed = _claimed_by_other_packages(registry_root, set(removing))
     candidates: dict[str, str] = {}
     for entry in recorded:
         dist, version = entry["name"], entry["version"]
@@ -214,7 +270,7 @@ def plan_removal(
     return plan
 
 
-def _claimed_by_other_packages(registry_root: Path, package: str) -> dict[str, str]:
+def _claimed_by_other_packages(registry_root: Path, removing: set[str]) -> dict[str, str]:
     """The distributions another installed package recorded or requires. A package whose
     ``python_dependencies`` were already installed when it came records none of them, yet
     needs them."""
@@ -222,9 +278,9 @@ def _claimed_by_other_packages(registry_root: Path, package: str) -> dict[str, s
 
     claimed: dict[str, str] = {}
     for root in sorted(registry_root.iterdir()) if registry_root.is_dir() else []:
-        if root.name == package or root.name.startswith(".") or not root.is_dir():
+        if root.name in removing or root.name.startswith(".") or not root.is_dir():
             continue
-        for entry in _python_entries(read_lifecycle(root)):
+        for entry in python_additions(read_lifecycle(root)):
             claimed.setdefault(entry["name"], root.name)
         try:
             requirements = load_package_manifest(root / PACKAGE_MANIFEST_NAME).python_dependencies
@@ -279,12 +335,13 @@ def remove(plan: RemovalPlan, *, registry_root: Path) -> None:
     from .package_registry import _clear_installed_module_cache, _package_install_lock, _remove_tree
 
     uninstall_python_distributions([name for name, _ in plan.uninstall])
-    with _package_install_lock(registry_root, plan.package):
-        for path in plan.paths:
-            if path.exists() or path.is_symlink():
-                _remove_tree(path)
-    # The lock file is the last trace of the package. A concurrent install of the same name
-    # recreates its own; nothing else holds this one once the removal is done.
-    if plan.lock is not None:
-        plan.lock.unlink(missing_ok=True)
+    for package in plan.packages:
+        with _package_install_lock(registry_root, package.name):
+            for path in package.paths:
+                if path.exists() or path.is_symlink():
+                    _remove_tree(path)
+        # The lock file is the last trace of the package. A concurrent install of the same name
+        # recreates its own; nothing else holds this one once the removal is done.
+        if package.lock is not None:
+            package.lock.unlink(missing_ok=True)
     _clear_installed_module_cache()

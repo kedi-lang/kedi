@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .package_manifest import PACKAGE_MANIFEST_NAME, validate_package_name
+from .package_graph import installed_metadata, satisfies
+from .package_manifest import PACKAGE_MANIFEST_NAME, parse_kedi_requirement, validate_package_name
 from .package_registry import INSTALL_RECEIPT_NAME, package_registry_root
 from .registry_api import HTTPRegistryAPIClient, RegistryAuditRecord
 
@@ -33,6 +34,8 @@ class PackageAuditResult:
 @dataclass(frozen=True)
 class PackageAuditReport:
     results: tuple[PackageAuditResult, ...]
+    dependency_problems: tuple[str, ...] = ()
+    """Installed packages whose ``kedi_dependencies`` are missing or no longer satisfied."""
 
     @property
     def counts(self) -> Counter[str]:
@@ -40,7 +43,29 @@ class PackageAuditReport:
 
     @property
     def exit_code(self) -> int:
-        return 1 if any(result.status in _ACTIONABLE_STATUSES for result in self.results) else 0
+        actionable = any(result.status in _ACTIONABLE_STATUSES for result in self.results)
+        return 1 if actionable or self.dependency_problems else 0
+
+
+def _dependency_problems(root: Path) -> tuple[str, ...]:
+    problems: list[str] = []
+    for package_path in sorted(root.iterdir(), key=lambda path: path.name):
+        if package_path.name.startswith(".") or package_path.is_symlink():
+            continue
+        metadata = installed_metadata(root, package_path.name)
+        if metadata is None:
+            continue  # not a package, or one whose manifest the receipt audit reports
+        for line in metadata.kedi_dependencies:
+            requirement = parse_kedi_requirement(line)
+            dependency = installed_metadata(root, requirement.name)
+            if dependency is None:
+                problems.append(f"{metadata.name} needs {requirement}, which is not installed")
+            elif not satisfies(dependency.version, requirement):
+                problems.append(
+                    f"{metadata.name} needs {requirement}, but {requirement.name} "
+                    f"{dependency.version} is installed"
+                )
+    return tuple(problems)
 
 
 @dataclass(frozen=True)
@@ -73,6 +98,7 @@ def audit_installed_packages(
             )
         )
 
+    problems = _dependency_problems(root)
     immediate: list[PackageAuditResult] = []
     verified: list[_InstalledRegistryReceipt] = []
     for package_path in sorted(root.iterdir(), key=lambda path: path.name):
@@ -96,7 +122,7 @@ def audit_installed_packages(
             verified.append(parsed)
 
     if not verified:
-        return PackageAuditReport(tuple(immediate))
+        return PackageAuditReport(tuple(immediate), problems)
 
     records = (api_client or HTTPRegistryAPIClient()).audit_records()
     record_by_identity = {record.identity: record for record in records}
@@ -116,7 +142,7 @@ def audit_installed_packages(
             continue
         immediate.append(_result_from_registry_record(receipt, record))
     immediate.sort(key=lambda result: result.package)
-    return PackageAuditReport(tuple(immediate))
+    return PackageAuditReport(tuple(immediate), problems)
 
 
 def _read_installed_receipt(

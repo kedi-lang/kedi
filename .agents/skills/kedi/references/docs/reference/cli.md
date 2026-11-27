@@ -152,7 +152,14 @@ against `CLASS.for_conformance(base_url)` and exits 1 when a check fails. See
 [Testing an Adapter](../adapter-development/testing.md#conformance-check).
 
 `kedi audit` checks installed package receipts for yanked or revoked registry
-commits. It accepts no arguments.
+commits, and installed packages for missing or unsatisfied Kedi dependencies. It
+accepts no arguments.
+
+`kedi remove PACKAGE-NAME [--dry-run] [--with-python-dependencies]` removes an
+installed package, everything its install record lists, and the dependencies
+it leaves orphaned. It refuses a package another installed package needs.
+`kedi python install REQUIREMENT...` installs Python packages into the
+interpreter running Kedi. See [Package Commands](../tooling/package-commands.md).
 
 `kedi debug --stdio` starts the optional Kedi Debug Adapter Protocol backend
 for an editor. It accepts only `--stdio`; the selected Python needs
