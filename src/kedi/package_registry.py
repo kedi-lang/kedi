@@ -15,12 +15,13 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from .lang import PackageMetadata
-from .package_dependencies import install_python_dependencies
+from .package_dependencies import install_python_dependencies, installed_distributions
+from .package_lifecycle import lifecycle_record, plan_removal, read_lifecycle, remove
 from .package_manifest import (
     PACKAGE_MANIFEST_NAME,
     load_package_manifest,
@@ -293,25 +294,36 @@ def install_package(
     target = installed_package_root(prepared.metadata.name, registry_root=root)
     staging = root / f".{prepared.metadata.name}.staging-{uuid4().hex}"
 
-    try:
-        staging.mkdir()
-        _copy_regular_file(prepared.manifest_path, staging / PACKAGE_MANIFEST_NAME)
-        destination_source = staging / prepared.source.relative_path
-        _copy_source_tree(prepared.source.path, destination_source)
-        _write_install_receipt(
-            staging,
-            prepared,
-            source_kind=source_kind,
-            source_url=source_url,
-            source_revision=source_revision,
-            registry_record=registry_record,
-        )
-        install_python_dependencies(prepared.metadata.python_dependencies)
-        _commit_staged_package(root, prepared.metadata.name, staging, target)
-    except Exception:
-        if staging.exists() or staging.is_symlink():
-            _remove_tree(staging)
-        raise
+    # The lock covers the whole installation, not only the commit: `kedi remove` takes it too,
+    # so a staging directory it finds belongs to no running install.
+    with _package_install_lock(root, prepared.metadata.name):
+        try:
+            staging.mkdir()
+            _copy_regular_file(prepared.manifest_path, staging / PACKAGE_MANIFEST_NAME)
+            destination_source = staging / prepared.source.relative_path
+            _copy_source_tree(prepared.source.path, destination_source)
+            requirements = prepared.metadata.python_dependencies
+            before = installed_distributions() if requirements else None
+            install_python_dependencies(requirements)
+            after = installed_distributions() if requirements else None
+            _write_install_receipt(
+                staging,
+                prepared,
+                source_kind=source_kind,
+                source_url=source_url,
+                source_revision=source_revision,
+                registry_record=registry_record,
+                lifecycle=lifecycle_record(
+                    previous=read_lifecycle(target) if target.is_dir() else None,
+                    before=before,
+                    after=after,
+                ),
+            )
+            _commit_staged_package(root, prepared.metadata.name, staging, target)
+        except Exception:
+            if staging.exists() or staging.is_symlink():
+                _remove_tree(staging)
+            raise
 
     _clear_installed_module_cache()
     return InstalledPackage(
@@ -323,24 +335,23 @@ def install_package(
 
 
 def _commit_staged_package(root: Path, package_name: str, staging: Path, target: Path) -> None:
-    """Atomically replace one package while serialising same-package installers."""
-    with _package_install_lock(root, package_name):
-        backup = root / f".{package_name}.backup-{uuid4().hex}"
-        moved_previous = False
-        try:
-            if target.exists() or target.is_symlink():
-                target.replace(backup)
-                moved_previous = True
-            staging.replace(target)
-        except Exception:
-            if moved_previous and backup.exists() and not target.exists():
-                backup.replace(target)
-            raise
-        else:
-            # The new package is committed. A failed cleanup must not turn a
-            # successful installation into an ambiguous error for the caller.
-            if backup.exists() or backup.is_symlink():
-                _remove_tree(backup, ignore_errors=True)
+    """Atomically replace one package; the caller holds the package's install lock."""
+    backup = root / f".{package_name}.backup-{uuid4().hex}"
+    moved_previous = False
+    try:
+        if target.exists() or target.is_symlink():
+            target.replace(backup)
+            moved_previous = True
+        staging.replace(target)
+    except Exception:
+        if moved_previous and backup.exists() and not target.exists():
+            backup.replace(target)
+        raise
+    else:
+        # The new package is committed. A failed cleanup must not turn a
+        # successful installation into an ambiguous error for the caller.
+        if backup.exists() or backup.is_symlink():
+            _remove_tree(backup, ignore_errors=True)
 
 
 @contextmanager
@@ -384,8 +395,9 @@ def _write_install_receipt(
     source_url: str | None,
     source_revision: str | None,
     registry_record: RegistryPackageRecord | None,
+    lifecycle: dict[str, Any],
 ) -> None:
-    receipt: dict[str, bool | int | str] = {
+    receipt: dict[str, Any] = {
         "format_version": 2 if registry_record is not None else 1,
         "install_source_kind": source_kind,
         "package": prepared.metadata.name,
@@ -410,6 +422,7 @@ def _write_install_receipt(
                 "installed_manifest_digest": f"sha256:{_sha256_file(prepared.manifest_path)}",
             }
         )
+    receipt["lifecycle"] = lifecycle
     (staging / INSTALL_RECEIPT_NAME).write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -893,3 +906,23 @@ def add_package(
             source_kind="registry",
         )
     return install_registry_package(package_name, registry_root=registry_root)
+
+
+def remove_package(
+    package_name: str,
+    *,
+    registry_root: Path | None = None,
+    dry_run: bool = False,
+    with_python_dependencies: bool = False,
+) -> list[str]:
+    """``kedi remove``: deletes an installed package and what its install record lists.
+
+    Python distributions it added to Kedi's interpreter go only with
+    ``with_python_dependencies``. Returns what was (or, with ``dry_run``, would be) removed."""
+    root = _resolved_registry_root(registry_root)
+    plan = plan_removal(
+        package_name, registry_root=root, with_python_dependencies=with_python_dependencies
+    )
+    if not dry_run:
+        remove(plan, registry_root=root)
+    return plan.lines(dry_run=dry_run)
