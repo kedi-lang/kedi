@@ -242,7 +242,8 @@
         "mediaKinds": {"type": "array", "items": {"$ref": "#/$defs/MediaKind"}},
         "settings": {"type": "array", "items": {"type": "string"}},
         "effort": {"type": "array", "items": {"$ref": "#/$defs/EffortLevel"}},
-        "mcp": {"type": "object", "properties": {"transports": {"type": "array", "items": {"$ref": "#/$defs/McpTransport"}}}}
+        "mcp": {"type": "object", "properties": {"transports": {"type": "array", "items": {"$ref": "#/$defs/McpTransport"}}}},
+        "compaction": {"type": "object", "required": ["threshold"], "additionalProperties": false, "properties": {"threshold": {"type": "boolean"}}}
       }
     },
     "RunParams": {
@@ -271,6 +272,7 @@
         "session": {"$ref": "#/$defs/Session"},
         "history": {"$ref": "#/$defs/Transcript"},
         "processHistory": {"type": "boolean"},
+        "compaction": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["mode", "threshold"], "additionalProperties": false, "properties": {"mode": {"enum": ["native", "disabled"]}, "threshold": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]}}}]},
         "subagent": {"$ref": "#/$defs/Subagent"},
         "hooks": {"type": "array", "items": {"$ref": "#/$defs/HookEvent"}},
         "mcpServers": {"type": "array", "items": {"$ref": "#/$defs/McpServer"}},
@@ -388,10 +390,28 @@
         "system": {"type": ["string", "null"]},
         "messages": {"$ref": "#/$defs/Transcript"},
         "tools": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "description": {"type": ["string", "null"]}, "inputSchema": {"type": ["object", "null"]}}}},
-        "output": {"oneOf": [{"type": "null"}, {"type": "object", "properties": {"schema": {"type": "object"}, "toolName": {"type": "string"}}}]}
+        "output": {"oneOf": [{"type": "null"}, {"type": "object", "properties": {"schema": {"type": "object"}, "toolName": {"type": "string"}}}]},
+        "purpose": {"enum": ["turn", "compaction"]}
       }
     },
-    "ModelCompleteResult": {"type": "object", "required": ["message"], "properties": {"message": {"$ref": "#/$defs/TranscriptMessage"}}},
+    "ModelCompleteResult": {
+      "type": "object",
+      "required": ["message"],
+      "properties": {
+        "message": {"$ref": "#/$defs/TranscriptMessage"},
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inputTokens": {"$ref": "#/$defs/Count"},
+            "outputTokens": {"$ref": "#/$defs/Count"},
+            "totalTokens": {"$ref": "#/$defs/Count"},
+            "cacheReadTokens": {"$ref": "#/$defs/Count"},
+            "cacheWriteTokens": {"$ref": "#/$defs/Count"}
+          }
+        }
+      }
+    },
     "RunUsageParams": {
       "type": "object",
       "required": ["runId"],

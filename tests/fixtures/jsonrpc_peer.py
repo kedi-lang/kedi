@@ -62,6 +62,9 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "testModel": True}
     elif SCENARIO == "both-histories":
         result["capabilities"] = {**CAPABILITIES, "transcript": True, "sessions": True}
+    elif SCENARIO in ("compaction", "compaction-without-threshold"):
+        result["capabilities"] = {**CAPABILITIES, "transcript": True, "sessions": True}
+        result["compaction"] = {"threshold": SCENARIO == "compaction"}
     elif SCENARIO == "harness-errors":
         result["capabilities"] = {**CAPABILITIES, "governed": True}
     elif SCENARIO == "hooked":
@@ -578,6 +581,8 @@ def run(request_id: int, params: dict[str, Any]) -> None:
     if SCENARIO == "test-model":
         call = {"runId": params["runId"], "model": "m", "system": None, "tools": [], "output": None}
         call["messages"] = [{"role": "user", "parts": [{"type": "text", "text": params["user"]}]}]
+        if params["user"] == "Summarize.":
+            call["purpose"] = "compaction"
         if params["user"] == "Answer early.":
             # Answer the run while Kedi's test model still runs: Kedi cancels it.
             def wait_for_model() -> None:
@@ -591,6 +596,11 @@ def run(request_id: int, params: dict[str, Any]) -> None:
             return
         reply = call_kedi("model/complete", call)
         send({"id": request_id, "result": {"text": json.dumps(reply)}})
+        return
+    if SCENARIO.startswith("compaction"):
+        # The compaction policy the run carries, and the history mode Kedi chose.
+        held = {"messages": []} if "history" in params else {"state": {}}
+        send({"id": request_id, "result": {"text": json.dumps(params.get("compaction")), **held}})
         return
     if SCENARIO == "both-histories":
         # Which mode Kedi chose: a harness keeps its session unless the program needs Kedi's.

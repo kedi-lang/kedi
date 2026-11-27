@@ -98,6 +98,11 @@ backend name is refused, and the process is stopped.
 | `imageOutput` | the bridge's model draws images for `[img: Image] << ...`; see [Media Output](#media-output) |
 | `audioOutput` | the bridge's model speaks for `[speech: Audio] << ...` |
 
+`initialize` may also return `compaction: {threshold}`: the backend compacts
+its session natively, as a harness does when its context fills up. It needs
+`sessions`, and enables `compaction_mode: native` (see [Compaction](#compaction)).
+`threshold` says whether the bridge honors an exact input-token threshold.
+
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
 before sending anything.
@@ -128,6 +133,7 @@ actions the bridge parses.
 | `tools` | each tool's `name`, `description`, `inputSchema`, `outputSchema` and `requiredBeforeOutput` |
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
 | `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
+| `compaction` | with a `session`, when the bridge declared `compaction` and the profile sets `compaction_mode`: `mode` and `threshold`; see [Compaction](#compaction) |
 | `history` | in transcript mode, the conversation's earlier messages in Kedi's schema; absent otherwise |
 | `processHistory` | in transcript mode, whether the program has a history processor: ask `history/process` before each model request |
 | `subagent` | `null`, or the child Kedi runs: `id`, `parentRunId`, `conversationId`, `name`, `limits`; see [Subagents](#subagents) |
@@ -396,6 +402,28 @@ values, such as media the conversation already sent, out of it: store an id the
 backend can resolve instead of the bytes. A run whose frame would exceed the
 limit fails with `-32600` before it is sent.
 
+### Compaction
+
+A bridge that declared `compaction` gets the program's policy with each session
+run: `compaction: {mode, threshold}`.
+
+- **`native`.** Compact the session as the backend does. When `threshold` is set,
+  compact once the context reaches that many input tokens. The answer's `state`
+  is then the compacted session.
+- **`disabled`, or no `compaction` field.** Keep the backend's automatic
+  compaction off, so existing programs see no new requests.
+
+A summary request is a model request like any other. With `governed` it goes
+through `budget/admit`, and with `usage` it reports `run/usage`. In test mode it
+reaches Kedi as `model/complete` with `purpose: "compaction"`. It is not a turn of
+the run, so no `run/event` reports it, and it never carries live input.
+
+Kedi refuses before any model request:
+- a `threshold` when the bridge declared `threshold: false`, as it does for
+  Claude;
+- native compaction in a program that processes or replays history. Kedi holds
+  that program's transcript, so the bridge has no session to compact.
+
 ### Transcript
 
 With `transcript`, Kedi holds the conversation instead of the bridge. A run in
@@ -577,15 +605,21 @@ admitted as usual, as `model/complete` instead of calling its model:
 | `system` | the system text the bridge sends its model |
 | `tools` | the tools the model may call: `name`, `description`, `inputSchema` |
 | `output` | `schema` and `toolName` for a structured run, `null` for text |
+| `purpose` | `turn`, or `compaction` for the summary request of [native compaction](#compaction) |
 
 Kedi answers with `message`, the assistant's reply in Kedi's schema (`text`,
-`toolCall`, `reasoning` parts), which the bridge treats as its model's.
+`toolCall`, `reasoning` parts), which the bridge treats as its model's. It can
+also answer with `usage`: the counts its model would have reported
+(`inputTokens`, `outputTokens`, `totalTokens`, `cacheReadTokens`,
+`cacheWriteTokens`). That lets a test drive what depends on counts, such as a
+compaction threshold or a token limit.
 Without `testModel`, Kedi refuses a test model at the handshake.
 
 In Python, `JsonRpcAdapter(command, test_model=script)` takes the script, a
 function, sync or async, in the style of Pydantic AI's `FunctionModel`: it
 receives a `ModelCall` and returns the assistant's text, or a message with
-`parts`. Because it sees exactly what the bridge would send its model, a test
+`parts`, and optionally `usage`. `call.purpose` tells a summary request from a
+turn. Because it sees exactly what the bridge would send its model, a test
 can check the bridge's prompt, tools and history as well as script its answers:
 
 ```python
