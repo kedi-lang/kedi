@@ -3866,7 +3866,7 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert "uv venv --python 3.11 --managed-python --seed" in install_command
     assert "logfire[httpx]==4.41.0" in install_command
     assert "/installed-agent/opentelemetry_instrumentation_kedi.whl" in install_command
-    assert "opentelemetry-instrumentation-kedi==0.1.0" not in install_command
+    assert "opentelemetry-instrumentation-kedi==" not in install_command
 
     revision_environment = SimpleNamespace(
         dependencies=(),
@@ -4741,3 +4741,19 @@ def test_lazy_harbor_import_preserves_unrelated_import_errors(
     monkeypatch.setattr(builtins, "__import__", fail_agent_import)
     with pytest.raises(ImportError, match="unrelated dependency"):
         integration.__getattr__("KediAgent")
+
+
+def test_harbor_installs_the_released_kedi_otel(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without a local kedi-otel wheel, the container installs it from PyPI: the release Kedi
+    # ships with, whose version gate admits this Kedi (0.1.0's gate admitted none).
+    import tomllib
+
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    from kedi.integrations.harbor import agent as agent_module
+
+    released = tomllib.loads(
+        (Path(__file__).parents[1] / "kedi-otel" / "pyproject.toml").read_text()
+    )
+    expected = f"opentelemetry-instrumentation-kedi=={released['project']['version']}"
+    assert agent_module.KediAgent._KEDI_OTEL_RUNTIME == expected
