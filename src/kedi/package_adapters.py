@@ -58,8 +58,13 @@ def package_adapters(package_name: str) -> tuple[PackageAdapter, ...]:
     """The adapters an installed package declares, resolved against its source tree."""
 
     from kedi.module_registry import installed_package
+    from kedi.package_environment import environment_program
     from kedi.package_manifest import validate_package_adapter
-    from kedi.package_registry import package_registry_root, resolve_installed_package_file
+    from kedi.package_registry import (
+        installed_package_root,
+        package_registry_root,
+        resolve_installed_package_file,
+    )
 
     installed = installed_package(package_name, package_registry_root())
     assert installed is not None, f"package {package_name!r} is not installed"
@@ -73,6 +78,12 @@ def package_adapters(package_name: str) -> tuple[PackageAdapter, ...]:
                 _package_file_argument(part, source, resolve_installed_package_file)
                 for part in shlex.split(declaration.command)
             )
+            if declaration.environment == "uv":
+                # The program runs from the package's environment: `python` is its interpreter.
+                package_root = installed_package_root(package_name)
+                program = environment_program(package_root, command[0])
+                if program is not None:
+                    command = (program, *command[1:])
         resolved.append(
             PackageAdapter(
                 package=package_name,

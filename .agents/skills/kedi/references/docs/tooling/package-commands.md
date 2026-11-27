@@ -116,6 +116,31 @@ Package bridges keep their run-time files inside the package:
 - `KEDI_PACKAGE_RUNTIME_DIR` names its `.kedi-runtime/`;
 - `KEDI_BRIDGE_CACHE` points below it for the bridge SDKs' preflight cache.
 
+## Package Environments
+
+A package adapter with `environment: uv` runs its `command:` in a Python environment of the
+package's own. The package's `source` holds a uv project (`pyproject.toml` and `uv.lock`) at its
+root.
+
+- **What gets installed.** `kedi install` and `kedi add` run `uv sync --frozen --no-dev
+  --no-install-project` into the installed package's `.kedi-env/`:
+  ```text
+  ${KEDI_HOME:-$HOME/.kedi}/registry/<package-name>/.kedi-env/
+    venv/                  the environment
+    python/, python-bin/   a Python uv downloaded for it, when no installed one fits
+  ```
+- **The cache.** uv's cache lives in `.kedi-env/cache/` while the sync runs and is removed after
+  it.
+- **When it fails.** If the sync fails, the new package is deleted and the previous version
+  comes back.
+- **uv.** It must be installed: `kedi python install uv`. Kedi checks for it, and for the
+  project files, before it changes anything.
+- **Running.** The command's program comes from the environment when the environment has it,
+  so `command: python bridge.py` runs the environment's interpreter. Nothing is installed into
+  the interpreter running Kedi.
+- **Removal.** The install record lists the environment, and `kedi remove` takes it with the
+  package.
+
 ## `kedi python install`
 
 ```bash

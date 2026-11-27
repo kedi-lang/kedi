@@ -26,6 +26,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from .package_dependencies import installed_distributions, uninstall_python_distributions
+from .package_environment import ENVIRONMENT_DIRECTORY, UV_SYNC
 from .package_manifest import validate_package_name
 
 RUNTIME_DIRECTORY = ".kedi-runtime"
@@ -46,6 +47,7 @@ def lifecycle_record(
     previous: dict[str, Any] | None,
     before: dict[str, str] | None,
     after: dict[str, str] | None,
+    environment: bool = False,
 ) -> dict[str, Any]:
     """The ``lifecycle`` record of one installation.
 
@@ -78,6 +80,16 @@ def lifecycle_record(
         {"kind": "package_directory", "path": ".", "removed": REMOVED_WITH_PACKAGE},
         {"kind": "runtime_directory", "path": RUNTIME_DIRECTORY, "removed": REMOVED_WITH_PACKAGE},
     ]
+    if environment:
+        created.append(
+            {
+                "kind": "environment",
+                "path": ENVIRONMENT_DIRECTORY,
+                "command": "uv " + " ".join(UV_SYNC),
+                "contains": "the environment (venv/), a Python uv downloaded for it (python/, python-bin/)",
+                "removed": REMOVED_WITH_PACKAGE,
+            }
+        )
     created += [
         {
             "kind": "python_distribution",
