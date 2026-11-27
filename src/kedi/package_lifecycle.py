@@ -86,7 +86,7 @@ def lifecycle_record(
                 "kind": "environment",
                 "path": ENVIRONMENT_DIRECTORY,
                 "command": "uv " + " ".join(UV_SYNC),
-                "contains": "the environment (venv/), a Python uv downloaded for it (python/, python-bin/)",
+                "contains": "the environment (venv/) and its Python (python/, python-bin/)",
                 "removed": REMOVED_WITH_PACKAGE,
             }
         )

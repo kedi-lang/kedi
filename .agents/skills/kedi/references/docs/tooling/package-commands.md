@@ -127,8 +127,11 @@ root.
   ```text
   ${KEDI_HOME:-$HOME/.kedi}/registry/<package-name>/.kedi-env/
     venv/                  the environment
-    python/, python-bin/   a Python uv downloaded for it, when no installed one fits
+    python/, python-bin/   its Python, one uv manages
   ```
+- **The environment's Python.** uv downloads a Python it manages into the package, so
+  upgrading or removing a system Python cannot break the environment. Set
+  `UV_PYTHON_PREFERENCE` (for example `system`) to let uv use an installed Python instead.
 - **The cache.** uv's cache lives in `.kedi-env/cache/` while the sync runs and is removed after
   it.
 - **When it fails.** If the sync fails, the new package is deleted and the previous version

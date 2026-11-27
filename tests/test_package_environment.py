@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -63,6 +64,9 @@ def bridge_package(root: Path, *, version: str = "0.1.0", project: bool = True) 
 def offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UV_OFFLINE", "1")
     monkeypatch.setenv("UV_PYTHON_DOWNLOADS", "never")
+    # Offline, uv cannot download the managed Python a package environment uses by default;
+    # an explicit interpreter, this one, is used whatever the preference.
+    monkeypatch.setenv("UV_PYTHON", sys.executable)
 
 
 @needs_uv
@@ -152,6 +156,7 @@ def test_installing_the_environment_runs_uv_sync_into_the_package_and_drops_its_
 
     monkeypatch.setattr(package_environment.subprocess, "run", run)
     monkeypatch.setenv("VIRTUAL_ENV", "/unrelated")
+    monkeypatch.delenv("UV_PYTHON_PREFERENCE", raising=False)
     package_environment.install_environment("/bin/uv", tmp_path / "pkg", tmp_path / "pkg/src")
     command, env = calls[0]
     assert command == [
@@ -167,8 +172,12 @@ def test_installing_the_environment_runs_uv_sync_into_the_package_and_drops_its_
     assert env["UV_PROJECT_ENVIRONMENT"] == str(root / "venv")
     assert env["UV_PYTHON_INSTALL_DIR"] == str(root / "python")
     assert env["UV_PYTHON_BIN_DIR"] == str(root / "python-bin")
+    assert env["UV_PYTHON_PREFERENCE"] == "only-managed"
     assert "VIRTUAL_ENV" not in env
     assert not (root / "cache").exists()
+    monkeypatch.setenv("UV_PYTHON_PREFERENCE", "system")
+    package_environment.install_environment("/bin/uv", tmp_path / "pkg", tmp_path / "pkg/src")
+    assert calls[1][1]["UV_PYTHON_PREFERENCE"] == "system"
 
     def fail(command: list[str], *, env: dict[str, str], check: bool) -> None:
         Path(env["UV_CACHE_DIR"]).mkdir(parents=True)

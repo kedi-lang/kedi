@@ -7,8 +7,9 @@ dependencies Kedi cannot share (Hermes pins openai 2.x; Kedi uses 3.x).
 
 Everything uv creates stays inside ``<package>/.kedi-env/``, so it goes with the package:
 - ``venv/``: the environment;
-- ``python/``: a Python uv downloads when no installed one fits the project, and ``python-bin/``
-  for its executables;
+- ``python/``: the environment's Python, one uv manages and downloads there, and ``python-bin/``
+  for its executables. A venv built on a system Python breaks when that Python is upgraded or
+  removed; ``UV_PYTHON_PREFERENCE`` lets uv use an installed one instead;
 - ``cache/``: uv's cache while it installs, removed when it ends.
 """
 
@@ -60,6 +61,7 @@ def install_environment(uv: str, package_root: Path, source: Path) -> None:
         "UV_PYTHON_INSTALL_DIR": str(root / "python"),
         "UV_PYTHON_BIN_DIR": str(root / "python-bin"),
         "UV_CACHE_DIR": str(cache),
+        "UV_PYTHON_PREFERENCE": os.environ.get("UV_PYTHON_PREFERENCE", "only-managed"),
     }
     # An activated environment is not the package's; uv would warn about it, or use it.
     environment.pop("VIRTUAL_ENV", None)
