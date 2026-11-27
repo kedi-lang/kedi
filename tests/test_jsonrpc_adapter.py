@@ -51,6 +51,7 @@ from kedi.agent_adapter.subagents.control import (
     live_input_scope,
 )
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.compaction import CompactionSettingsError
 from kedi.agent_profile.compile import build_capture_env
 from kedi.agent_profile.evaluation import eval_profile_definition
 from kedi.errors import KediExecutionError
@@ -2163,3 +2164,82 @@ def test_a_model_request_kedi_answers_with_an_error_falls_back_in_test_mode() ->
     finally:
         bridge.stdin.close()
         bridge.wait(timeout=10)
+
+
+COMPACTED = """> history:
+    enabled: true
+    compaction_mode: native
+    compaction_threshold: `5000`
+[a] << First.
+[b] << Second.
+= `[a, b]`
+"""
+
+
+def test_a_bridge_that_compacts_its_session_gets_the_programs_policy(adapters: list) -> None:
+    adapter = peer("compaction")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports_native_compaction
+    assert adapter.compaction == {"threshold": True}
+    # Each turn of the session carries the policy; the bridge compacts its own state.
+    first, second = run(COMPACTED, adapter)
+    assert json.loads(first) == json.loads(second) == {"mode": "native", "threshold": 5000}
+    plain = run("> history: enabled\n[a] << First.\n= <a>\n", adapter)
+    assert json.loads(plain) is None
+
+
+def test_kedi_refuses_compaction_a_bridge_cannot_hold_before_any_model_request(
+    adapters: list,
+) -> None:
+    exact = peer("compaction-without-threshold")
+    adapters.append(exact)
+    error = failure(COMPACTED, exact)
+    assert isinstance(error, CompactionSettingsError)
+    assert "does not honor an exact input-token threshold" in str(error)
+    # Its own policy, without a threshold, holds.
+    own = COMPACTED.replace("    compaction_threshold: `5000`\n", "")
+    assert json.loads(run(own, exact)[0]) == {"mode": "native", "threshold": None}
+    # A history processor has Kedi hold the transcript: the bridge has no session to compact.
+    processed = peer("compaction")
+    adapters.append(processed)
+    source = COMPACTED.replace(
+        "    compaction_threshold", "    processor: `recent`\n    compaction_threshold"
+    )
+    with pytest.raises(Exception) as caught:
+        run(source, processed, recent=keep_recent)
+    error = getattr(caught.value, "original", None) or caught.value
+    assert isinstance(error, CompactionSettingsError)
+    assert "processes or replays history" in str(error)
+    # A bridge that does not compact is refused by Kedi's runtime, as other adapters are.
+    sessions = peer("sessions")
+    adapters.append(sessions)
+    assert not sessions.capabilities.supports_native_compaction
+    assert "native compaction is not supported" in str(failure(COMPACTED, sessions))
+
+
+def test_the_test_model_sees_a_summary_request_and_may_report_counts(adapters: list) -> None:
+    def script(call: Any) -> Any:
+        usage = {"inputTokens": 900, "outputTokens": 40}
+        return {"parts": [{"type": "text", "text": call.purpose}], "usage": usage}
+
+    adapter = peer("test-model", test_model=script)
+    adapters.append(adapter)
+    for prompt, purpose in (("Summarize.", "compaction"), ("Hello.", "turn")):
+        reply = json.loads(run(f"[r] << {prompt}\n= <r>\n", adapter))["result"]
+        assert reply["message"]["parts"] == [{"type": "text", "text": purpose}]
+        assert reply["usage"] == {"inputTokens": 900, "outputTokens": 40}
+    counted = peer("test-model", test_model=lambda call: {"parts": [], "usage": {"tokens": 1}})
+    adapters.append(counted)
+    assert "usage counts tokens" in str(failure("[r] << Hello.\n= <r>\n", counted))
+
+
+def test_a_malformed_compaction_or_purpose_is_refused(adapters: list) -> None:
+    hello = [sys.executable, str(Path(__file__).parent / "fixtures/jsonrpc_hello.py")]
+    handshake = {"backend": {"name": "probe"}, "kind": "agent-harness"}
+    handshake |= {"capabilities": {"sessions": True}, "compaction": True}
+    with pytest.raises(JsonRpcError, match="compaction must be"):
+        JsonRpcAdapter([*hello, json.dumps(handshake)])
+    adapter = peer("test-model", test_model=lambda call: "hi")
+    adapters.append(adapter)
+    with pytest.raises(JsonRpcError, match="unknown purpose 'title'"):
+        adapter._parse_model_call({"runId": "r", "messages": [], "purpose": "title"})

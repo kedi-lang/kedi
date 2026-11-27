@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, Self, cast
+from typing import Any, Final, Literal, Self, cast
 from uuid import uuid4
 
 from jsonschema.validators import validator_for
@@ -29,6 +29,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported, McpServerSpec
+from ....agent_profile.compaction import CompactionSettingsError
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS, speech_voice
 from ....effort import EFFORT_VALUES
 from ....errors import KediExecutionError
@@ -301,6 +302,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
         """The history modes: Kedi holds the transcript, or the bridge holds its state."""
         self.mcp_transports = peer.mcp_transports
         """The MCP transports the bridge connects for ``> mcp:`` servers."""
+        self.compaction = peer.compaction
+        """``{threshold}`` when the bridge compacts its session natively, else ``None``."""
         self.hook_origins = peer.hook_origins
         """The sources of the bridge's own tools: it reports their calls with hook/invoke."""
 
@@ -350,6 +353,26 @@ class JsonRpcAdapter(HookRegistrationMixin):
         return "history_replay" in profile.requirements or (
             processing is not None and processing.processor is not None
         )
+
+    def _compaction_policy(self) -> JsonObject | None:
+        """The profile's ``> compaction:`` for the bridge's session, or why it cannot hold."""
+
+        profile = self.active_profile
+        settings = profile.compaction if profile.history is True else None
+        if settings is None or self.compaction is None:
+            return None
+        if settings.mode == "native" and self._uses_transcript():
+            raise CompactionSettingsError(
+                "native compaction compacts the bridge's own session, but this program "
+                "processes or replays history, so Kedi holds its transcript instead; use one "
+                "or the other"
+            )
+        if settings.threshold is not None and not self.compaction["threshold"]:
+            raise CompactionSettingsError(
+                f"bridge {self.backend['name']!r} compacts natively but does not honor an exact "
+                "input-token threshold; omit compaction_threshold to use its own policy"
+            )
+        return {"mode": settings.mode, "threshold": settings.threshold}
 
     @property
     def supports_native_subagent_resume(self) -> bool:
@@ -536,6 +559,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
         child = self._child.get()
         # A child keeps its own conversation: the parent's history is not the child's.
         conversation = None if child is not None else self._conversation.get()
+        compaction = self._compaction_policy()
         # The first native run in a Kedi call takes the prompt's media; nested runs get none.
         attachments = take_prompt_media()
         user_content = (
@@ -645,6 +669,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
                     "state": conversation.resume_state.get("bridge"),
                 }
                 commit = partial(conversation.result_state.__setitem__, "bridge")
+            if params["session"] is not None and compaction is not None:
+                params["compaction"] = compaction
             self._runs[run_id] = run
             try:
                 with self._quoting_bridge(), agent_event_run(self.shortname) as run.events:
@@ -924,8 +950,12 @@ class JsonRpcAdapter(HookRegistrationMixin):
         if not isinstance(messages, list) or not isinstance(tools, list):
             raise JsonRpcError(INVALID_PARAMS, "model/complete needs lists of messages and tools")
         output = params.get("output")
+        purpose = params.get("purpose", "turn")
+        if purpose not in ("turn", "compaction"):
+            raise JsonRpcError(INVALID_PARAMS, f"model/complete: unknown purpose {purpose!r}")
         call = ModelCall(
             run_id=str(params.get("runId")),
+            purpose=purpose,
             model=params.get("model") if isinstance(params.get("model"), str) else None,
             system=params.get("system") if isinstance(params.get("system"), str) else None,
             messages=tuple(messages),
@@ -938,14 +968,14 @@ class JsonRpcAdapter(HookRegistrationMixin):
                 answer = test_model(call)
                 if inspect.isawaitable(answer):
                     answer = await answer
-                message = _assistant_message(answer)
+                result = _test_model_result(answer)
             except asyncio.CancelledError:
                 self._connection.respond(request_id, error=JsonRpcError(CANCELLED, "the run ended"))
                 raise
             except Exception as exc:  # the script failed: the run fails with its error
                 self._stop(request_id, run, exc)
                 return
-            self._connection.respond(request_id, result={"message": message})
+            self._connection.respond(request_id, result=result)
 
         return complete
 
@@ -1394,6 +1424,7 @@ class _Peer:
     transcript: bool
     sessions: bool
     test_model: bool
+    compaction: JsonObject | None
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -1433,6 +1464,11 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         raise JsonRpcError(
             INVALID_PARAMS, f"mcp.transports must list transports of {sorted(MCP_TRANSPORTS)}"
         )
+    compaction = handshake.get("compaction")
+    if compaction is not None and not (
+        isinstance(compaction, dict) and isinstance(compaction.get("threshold"), bool)
+    ):
+        raise JsonRpcError(INVALID_PARAMS, "compaction must be {threshold: true or false}")
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
@@ -1451,6 +1487,10 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         (subagents and not governed, "subagents need governed: Kedi admits each child request"),
         (live_input and not subagents, "liveInput needs subagents"),
         (interrupt and not live_input, "interrupt needs liveInput"),
+        (
+            compaction is not None and not flags["supports_stateful_history"],
+            "compaction needs sessions: the bridge compacts its own session state",
+        ),
         (
             bool(transports) and not native_tools,
             "mcp needs nativeTools: MCP tools are the bridge's own, so approval, hooks and "
@@ -1498,6 +1538,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         supports_mcp=bool(transports),
         # A bridge with tools of its own admits their results with artifact/admit.
         supports_native_artifacts=native_tools,
+        supports_native_compaction=compaction is not None,
     )
     return _Peer(
         kind,
@@ -1511,6 +1552,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         transcript,
         flags["supports_stateful_history"],
         advertised.get(TEST_MODEL) is True,
+        compaction,
     )
 
 
@@ -1529,22 +1571,41 @@ class ModelCall:
     messages: tuple[JsonObject, ...]
     tools: tuple[JsonObject, ...]
     output: JsonObject | None
+    purpose: Literal["turn", "compaction"] = "turn"
+    """``compaction`` for the summary request of a bridge's native compaction."""
 
 
 TestModel = Callable[[ModelCall], "str | JsonObject | Awaitable[str | JsonObject]"]
-"""A test model: the assistant's text, or its message (``{"parts": [...]}``) in Kedi's schema."""
+"""A test model: the assistant's text, or its message (``{"parts": [...]}``) in Kedi's schema.
+
+A message may carry ``usage``, the counts the model would have reported (``inputTokens``,
+``outputTokens``, ``totalTokens``, ``cacheReadTokens``, ``cacheWriteTokens``).
+"""
+
+_TEST_USAGE: Final = frozenset(
+    {"inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens"}
+)
 
 
-def _assistant_message(answer: Any) -> JsonObject:
-    """A test model's answer as an assistant message in Kedi's transcript schema."""
+def _test_model_result(answer: Any) -> JsonObject:
+    """A test model's answer as ``model/complete``'s result: the message, and its counts."""
 
     if isinstance(answer, str):
-        return {"role": "assistant", "parts": [{"type": "text", "text": answer}]}
+        return {"message": {"role": "assistant", "parts": [{"type": "text", "text": answer}]}}
     if not isinstance(answer, dict) or not isinstance(answer.get("parts"), list):
         raise TypeError("a test model returns the assistant's text or a {'parts': [...]} message")
     message = {"role": "assistant", **answer}
+    usage = message.pop("usage", None)
     (checked,) = _check_transcript([message], {})
-    return checked
+    if usage is None:
+        return {"message": checked}
+    if (
+        not isinstance(usage, dict)
+        or not set(usage) <= _TEST_USAGE
+        or not all(type(count) is int and count >= 0 for count in usage.values())
+    ):
+        raise TypeError(f"a test model's usage counts tokens: {', '.join(sorted(_TEST_USAGE))}")
+    return {"message": checked, "usage": usage}
 
 
 def _media_table(content: Sequence[JsonObject]) -> dict[str, JsonObject]:

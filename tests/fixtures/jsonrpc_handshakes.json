@@ -129,6 +129,21 @@
       "kediSays": "mcp.transports must list"
     },
     {
+      "name": "compaction-needs-sessions",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-harness",
+        "capabilities": {},
+        "compaction": {
+          "threshold": true
+        }
+      },
+      "refuses": "KB011",
+      "kediSays": "compaction needs sessions"
+    },
+    {
       "name": "valid",
       "handshake": {
         "backend": {

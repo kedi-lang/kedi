@@ -13,13 +13,15 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client, testModel?}`` returns ``{protocolVersion, backend, kind,
-  capabilities, mediaKinds?, settings?, effort?, mcp?}``: ``settings`` names the
+  capabilities, mediaKinds?, settings?, effort?, mcp?, compaction?}``: ``settings`` names the
   ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps, ``mcp``
-  ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``). Kedi sends nothing else before
-  it completes.
+  ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``), and
+  ``compaction`` ``{threshold}`` says the backend compacts its session natively (with
+  ``sessions``), ``threshold`` whether it honors an exact input-token threshold. Kedi sends
+  nothing else before it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
   instructionParts, user, userContent, output, tools, continuation, session, history?,
-  processHistory?, subagent, hooks, mcpServers, admitResults}``
+  processHistory?, compaction?, subagent, hooks, mcpServers, admitResults}``
   returns ``{text}``, ``{data}`` or ``{content}``, optionally
   with ``usage`` and, in a session, ``state``. ``output`` is ``null`` for text, ``{schema,
   toolName}`` for data, or, with ``imageOutput`` or ``audioOutput``, ``{media: "image",
@@ -34,6 +36,12 @@ Kedi to bridge:
   the bridge's ``state`` from the conversation's last committed turn, ``null`` at first.
   ``userContent`` is ``null``, or the user turn with its media: ``{type: "text", text}`` and
   ``{type: "media", name, kind, mediaType, data | url}`` parts, ``data`` in base64.
+  ``compaction`` ``{mode, threshold}`` comes with a ``session`` when the bridge declared
+  ``compaction`` and the profile sets ``> compaction:``: ``mode`` is ``native`` (compact the
+  session as the backend does, at ``threshold`` input tokens when it is set) or ``disabled``.
+  Without it the bridge keeps its backend's automatic compaction off. A summary request is a
+  model request (``budget/admit``, ``run/usage``; ``model/complete`` with ``purpose:
+  "compaction"`` in test mode), and no ``run/event`` reports it.
 - ``run/cancel`` (notification) ``{runId}``: stop the run; it answers with ``CANCELLED``.
 - ``run/input`` ``{runId, items: [{id, text}]}`` (with ``liveInput``): input for a running
   run, from its parent or a child. Add each ``text`` as a user turn before the next model
@@ -78,10 +86,13 @@ Bridge to Kedi:
   each model request: the conversation so far, in Kedi's transcript schema. It returns
   ``{messages}``, what the program's history processor made of it; send that instead. Such a run
   answers with ``transcript``, the whole conversation, rather than the turn's ``messages``.
-- ``model/complete`` ``{runId, model, system, messages, tools, output}`` (with the ``testModel``
-  capability, when ``initialize`` asked for it): one model request, sent to Kedi instead of the
-  bridge's model, ``messages`` in Kedi's transcript schema. It returns ``{message}``, the
-  assistant's message in that schema, which the bridge treats as its model's reply.
+- ``model/complete`` ``{runId, model, system, messages, tools, output, purpose?}`` (with the
+  ``testModel`` capability, when ``initialize`` asked for it): one model request, sent to Kedi
+  instead of the bridge's model, ``messages`` in Kedi's transcript schema; ``purpose`` is
+  ``turn`` (the default) or ``compaction`` for a summary request. It returns ``{message,
+  usage?}``, the assistant's message in that schema, which the bridge treats as its model's
+  reply, and the counts its model would have reported (``inputTokens``, ``outputTokens``,
+  ``totalTokens``, ``cacheReadTokens``, ``cacheWriteTokens``).
 - ``run/usage`` (notification, with ``usage``) ``{runId, inputTokens, outputTokens,
   totalTokens?, cacheReadTokens?, cacheWriteTokens?}``: one model request's counts, sent when
   it completes. Kedi checks a child's token limits as each arrives; ``usage`` in the run's
