@@ -11,7 +11,7 @@ import stat
 import subprocess
 import tempfile
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from .lang import PackageMetadata
 from .package_dependencies import install_python_dependencies, installed_distributions
+from .package_environment import environment_installer, install_environment, needs_environment
 from .package_lifecycle import lifecycle_record, plan_removal, read_lifecycle, remove
 from .package_manifest import (
     PACKAGE_MANIFEST_NAME,
@@ -293,6 +294,11 @@ def install_package(
     root.mkdir(parents=True, exist_ok=True)
     target = installed_package_root(prepared.metadata.name, registry_root=root)
     staging = root / f".{prepared.metadata.name}.staging-{uuid4().hex}"
+    uv = (
+        environment_installer(prepared.metadata, prepared.source.path)
+        if needs_environment(prepared.metadata)
+        else None
+    )
 
     # The lock covers the whole installation, not only the commit: `kedi remove` takes it too,
     # so a staging directory it finds belongs to no running install.
@@ -317,9 +323,18 @@ def install_package(
                     previous=read_lifecycle(target) if target.is_dir() else None,
                     before=before,
                     after=after,
+                    environment=uv is not None,
                 ),
             )
-            _commit_staged_package(root, prepared.metadata.name, staging, target)
+            # A venv is not relocatable: it is installed where the package now lives.
+            source = target / prepared.source.relative_path
+            _commit_staged_package(
+                root,
+                prepared.metadata.name,
+                staging,
+                target,
+                then=None if uv is None else lambda: install_environment(uv, target, source),
+            )
         except Exception:
             if staging.exists() or staging.is_symlink():
                 _remove_tree(staging)
@@ -334,8 +349,18 @@ def install_package(
     )
 
 
-def _commit_staged_package(root: Path, package_name: str, staging: Path, target: Path) -> None:
-    """Atomically replace one package; the caller holds the package's install lock."""
+def _commit_staged_package(
+    root: Path,
+    package_name: str,
+    staging: Path,
+    target: Path,
+    *,
+    then: Callable[[], None] | None = None,
+) -> None:
+    """Atomically replace one package; the caller holds the package's install lock.
+
+    ``then`` finishes the new package in place (its environment). If it fails, the new package
+    is deleted and the previous one comes back."""
     backup = root / f".{package_name}.backup-{uuid4().hex}"
     moved_previous = False
     try:
@@ -343,6 +368,12 @@ def _commit_staged_package(root: Path, package_name: str, staging: Path, target:
             target.replace(backup)
             moved_previous = True
         staging.replace(target)
+        if then is not None:
+            try:
+                then()
+            except Exception:
+                _remove_tree(target)
+                raise
     except Exception:
         if moved_previous and backup.exists() and not target.exists():
             backup.replace(target)

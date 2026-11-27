@@ -20,6 +20,7 @@ _ADAPTER_CLASS_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
 )
 PACKAGE_ADAPTER_KINDS = frozenset({"agent", "adapter"})
+PACKAGE_ENVIRONMENT_KINDS = frozenset({"uv"})
 RESERVED_ADAPTER_SHORTNAMES = frozenset({"dspy"})
 """Shortnames no package may declare, besides the built-in adapters'."""
 
@@ -121,6 +122,17 @@ def validate_package_adapter(adapter: PackageAdapterDecl) -> None:
         raise ValueError(
             f"package adapter {name!r}: class must be module:Class, such as kedi_pi:PiAdapter"
         )
+    if adapter.environment is not None:
+        if adapter.environment not in PACKAGE_ENVIRONMENT_KINDS:
+            raise ValueError(
+                f"package adapter {name!r}: environment must be uv (an environment of the "
+                f"package's own, from the uv project in its source), not {adapter.environment!r}"
+            )
+        if adapter.command is None:
+            raise ValueError(
+                f"package adapter {name!r}: environment: uv runs a command; a class runs in "
+                "Kedi's own interpreter"
+            )
     if adapter.command is not None:
         try:
             parts = shlex.split(adapter.command)

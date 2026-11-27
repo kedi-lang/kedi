@@ -848,6 +848,8 @@ class PackageAdapterDecl:
     kind: Optional[str] = None
     class_path: Optional[str] = None
     command: Optional[str] = None
+    environment: Optional[str] = None
+    """``uv``: the command runs in an environment of the package's own (a uv project in its source)."""
     field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 

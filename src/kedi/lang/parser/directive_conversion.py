@@ -96,7 +96,12 @@ def _validate_setting_key(self: _Walker, node: Node, name: str) -> None:
     )
 
 
-_PACKAGE_ADAPTER_FIELDS = {"kind": "kind", "class": "class_path", "command": "command"}
+_PACKAGE_ADAPTER_FIELDS = {
+    "kind": "kind",
+    "class": "class_path",
+    "command": "command",
+    "environment": "environment",
+}
 
 
 def _walk_package_adapter(self: _Walker, node: Node, package: PackageMetadata) -> None:

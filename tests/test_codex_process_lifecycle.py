@@ -153,7 +153,10 @@ def test_close_reaps_owned_descendants_and_closes_all_pipes(
         process = client._process
         assert process is not None
         deadline = time.monotonic() + 2
-        while not pid_path.exists() and time.monotonic() < deadline:
+        # The fake creates the file before it writes the pid: wait for the pid itself.
+        while time.monotonic() < deadline and not (
+            pid_path.exists() and pid_path.read_text().strip()
+        ):
             time.sleep(0.01)
         child_pid = int(pid_path.read_text())
         assert os.getpgid(process.pid) == process.pid
