@@ -175,8 +175,10 @@ root.
   `UV_PYTHON_PREFERENCE` (for example `system`) to let uv use an installed Python instead.
 - **The cache.** uv's cache lives in `.kedi-env/cache/` while the sync runs and is removed after
   it.
-- **When it fails.** If the sync fails, the new package is deleted and the previous version
-  comes back.
+- **When it fails.** If the sync fails or is interrupted (Ctrl+C), the new package is deleted
+  and the previous version comes back. The sync writes `.kedi-env/ready` when it finishes; an
+  installation that was killed outright leaves none, and the adapter then refuses to run until
+  the package is installed again.
 - **uv.** It must be installed: `kedi python install uv`. Kedi checks for it, and for the
   project files, before it changes anything.
 - **Running.** The command's program comes from the environment when the environment has it,

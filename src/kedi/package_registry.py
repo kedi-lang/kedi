@@ -431,7 +431,7 @@ def _install_one(
                 target,
                 then=None if uv is None else lambda: install_environment(uv, target, source),
             )
-        except Exception:
+        except BaseException:
             if staging.exists() or staging.is_symlink():
                 _remove_tree(staging)
             raise
@@ -514,12 +514,13 @@ def _commit_staged_package(
             moved_previous = True
         staging.replace(target)
         if then is not None:
+            # An interrupt (Ctrl+C during a minutes-long environment sync) undoes it too.
             try:
                 then()
-            except Exception:
+            except BaseException:
                 _remove_tree(target)
                 raise
-    except Exception:
+    except BaseException:
         if moved_previous and backup.exists() and not target.exists():
             backup.replace(target)
         raise

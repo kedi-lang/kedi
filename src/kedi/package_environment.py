@@ -10,7 +10,9 @@ Everything uv creates stays inside ``<package>/.kedi-env/``, so it goes with the
 - ``python/``: the environment's Python, one uv manages and downloads there, and ``python-bin/``
   for its executables. A venv built on a system Python breaks when that Python is upgraded or
   removed; ``UV_PYTHON_PREFERENCE`` lets uv use an installed one instead;
-- ``cache/``: uv's cache while it installs, removed when it ends.
+- ``cache/``: uv's cache while it installs, removed when it ends;
+- ``ready``: written when the sync has finished. An installation that was killed leaves none,
+  and Kedi then refuses to run the adapter rather than run a half-installed environment.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from .package_dependencies import find_uv
 ENVIRONMENT_DIRECTORY = ".kedi-env"
 UV_SYNC = ("sync", "--frozen", "--no-dev", "--no-install-project")
 PROJECT_FILES = ("pyproject.toml", "uv.lock")
+READY_MARKER = "ready"
 
 
 def needs_environment(metadata: PackageMetadata) -> bool:
@@ -67,6 +70,7 @@ def install_environment(uv: str, package_root: Path, source: Path) -> None:
     environment.pop("VIRTUAL_ENV", None)
     try:
         subprocess.run([uv, *UV_SYNC, "--project", str(source)], env=environment, check=True)
+        (root / READY_MARKER).write_text("", encoding="utf-8")
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError(
             f"Installing the environment of {package_root.name} with uv failed; see uv's output "
@@ -74,6 +78,11 @@ def install_environment(uv: str, package_root: Path, source: Path) -> None:
         ) from exc
     finally:
         shutil.rmtree(cache, ignore_errors=True)
+
+
+def environment_ready(package_root: Path) -> bool:
+    """Whether the package's environment finished installing."""
+    return (package_root / ENVIRONMENT_DIRECTORY / READY_MARKER).is_file()
 
 
 def environment_program(package_root: Path, program: str) -> str | None:

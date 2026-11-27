@@ -29,6 +29,8 @@ class PackageAdapter:
     class_path: str | None = None
     command: tuple[str, ...] | None = None
     """The bridge command, with arguments naming files of the package as absolute paths."""
+    environment: str | None = None
+    """``uv`` when the command runs in the package's own environment."""
 
     @property
     def adapter_kind(self) -> AgentAdapterKind:
@@ -91,6 +93,7 @@ def package_adapters(package_name: str) -> tuple[PackageAdapter, ...]:
                 kind="agent" if declaration.kind == "agent" else "adapter",
                 class_path=declaration.class_path,
                 command=command,
+                environment=declaration.environment,
             )
         )
     return tuple(resolved)
