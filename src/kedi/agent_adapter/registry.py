@@ -188,6 +188,22 @@ def validate_adapter_kind(
         )
 
 
+def package_runtime_environment(package: str) -> dict[str, str]:
+    """Where a package's bridge keeps its run-time files: inside the installed package, so they go
+    with it. The bridge SDKs keep their preflight cache in ``KEDI_BRIDGE_CACHE``; a bridge's own
+    files (a harness's home) go under ``KEDI_PACKAGE_RUNTIME_DIR``."""
+
+    from kedi.package_lifecycle import RUNTIME_DIRECTORY
+    from kedi.package_registry import installed_package_root
+
+    runtime = installed_package_root(package) / RUNTIME_DIRECTORY
+    runtime.mkdir(exist_ok=True)
+    return {
+        "KEDI_PACKAGE_RUNTIME_DIR": str(runtime),
+        "KEDI_BRIDGE_CACHE": str(runtime / "bridge-checks"),
+    }
+
+
 def build_package_adapter(adapter: PackageAdapter, model: str | None) -> AgentAdapter[Any]:
     """The adapter a package declares: its Python class, or its JSON-RPC bridge launched."""
 
@@ -201,7 +217,9 @@ def build_package_adapter(adapter: PackageAdapter, model: str | None) -> AgentAd
                 f"> {adapter.directive}: {label} runs {program!r}, which is not installed "
                 "or not on PATH"
             )
-        built: AgentAdapter[Any] = JsonRpcAdapter(list(adapter.command), model=model)
+        built: AgentAdapter[Any] = JsonRpcAdapter(
+            list(adapter.command), model=model, env=package_runtime_environment(adapter.package)
+        )
     else:
         assert adapter.class_path is not None
         module_name, _, attribute = adapter.class_path.partition(":")

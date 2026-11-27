@@ -23,7 +23,7 @@ from kedi.idle import run_idle
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.package_audit import PackageAuditResult, audit_installed_packages
-from kedi.package_registry import add_package, install_package
+from kedi.package_registry import add_package, install_package, remove_package
 from kedi.registry_api import RegistryAPIError
 from kedi.settings import ADAPTER_CHOICES
 from kedi.skill_registry import install_skill_path, install_skill_repo
@@ -37,7 +37,7 @@ context_settings = {
     # is available, so `kedi install --help` cannot show package-command help.
     "help_option_names": [],
 }
-_PACKAGE_COMMANDS = frozenset({"install", "add", "audit"})
+_PACKAGE_COMMANDS = frozenset({"install", "add", "audit", "remove"})
 
 
 def _package_command_help(command: str) -> str:
@@ -51,6 +51,14 @@ def _package_command_help(command: str) -> str:
             "Usage: kedi add <PACKAGE-NAME | git+https://github.com/OWNER/REPOSITORY.git>\n\n"
             "Install a package from the Kedi registry or an explicit GitHub source."
         )
+    if command == "remove":
+        return (
+            "Usage: kedi remove PACKAGE-NAME [--dry-run] [--with-python-dependencies]\n\n"
+            "Remove an installed package and everything its install record lists. The Python\n"
+            "distributions it added to Kedi's interpreter stay unless --with-python-dependencies\n"
+            "is given; even then, those another package or distribution needs stay.\n"
+            "--dry-run prints what would be removed."
+        )
     return (
         "Usage: kedi audit\n\n"
         "Check installed package receipts for yanked or revoked registry commits."
@@ -58,6 +66,8 @@ def _package_command_help(command: str) -> str:
 
 
 def _run_package_command(command: str, arguments: list[str]) -> int:
+    if command == "remove":
+        return _run_remove_command(arguments)
     if any(argument.startswith("-") for argument in arguments):
         raise click.UsageError(f"Unexpected option for 'kedi {command}'.")
 
@@ -86,6 +96,53 @@ def _run_package_command(command: str, arguments: list[str]) -> int:
     if installed.source_revision is not None:
         message += f" ({installed.source_revision})"
     click.secho(message, fg="green")
+    return 0
+
+
+def _run_remove_command(arguments: list[str]) -> int:
+    options = {argument for argument in arguments if argument.startswith("-")}
+    unknown = options - {"--dry-run", "--with-python-dependencies"}
+    if unknown:
+        raise click.UsageError(
+            f"Unexpected option for 'kedi remove': {', '.join(sorted(unknown))}."
+        )
+    names = [argument for argument in arguments if not argument.startswith("-")]
+    if len(names) != 1:
+        raise click.UsageError("'kedi remove' takes exactly one package name.")
+    dry_run = "--dry-run" in options
+    try:
+        lines = remove_package(
+            names[0],
+            dry_run=dry_run,
+            with_python_dependencies="--with-python-dependencies" in options,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    for line in lines:
+        click.echo(line)
+    if not dry_run:
+        click.secho(f"Removed {names[0]}", fg="green")
+    return 0
+
+
+_PYTHON_USAGE = (
+    "Usage: kedi python install REQUIREMENT...\n\n"
+    "Install Python packages into the interpreter running Kedi, with its pip, or uv when pip\n"
+    "is missing. `kedi python install uv` installs uv, which package environments need.\n"
+    "These are your installs: no package records them, so `kedi remove` never removes them."
+)
+
+
+def _run_python_command(arguments: list[str]) -> int:
+    if not arguments or arguments[0] != "install" or len(arguments) < 2:
+        raise click.UsageError(_PYTHON_USAGE)
+    from kedi.package_dependencies import install_python_requirements
+
+    try:
+        install_python_requirements(arguments[1:])
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.secho(f"Installed {', '.join(arguments[1:])} into {sys.executable}", fg="green")
     return 0
 
 
@@ -430,6 +487,8 @@ def main(
             )
         elif source == "skills" and command_source is None:
             click.echo(_skills_command_help())
+        elif source == "python" and command_source is None:
+            click.echo(_PYTHON_USAGE)
         elif source in _PACKAGE_COMMANDS and command_source is None:
             click.echo(_package_command_help(source))
         elif source == "explain" and command_source is None:
@@ -490,6 +549,8 @@ def main(
         return debugger_main(["--stdio"])
     if source == "skills" and command_source is None:
         return _run_skills_command(list(ctx.args))
+    if source == "python" and command_source is None:
+        return _run_python_command(list(ctx.args))
     if source == "a2a" and command_source is None:
         from kedi.a2a.cli import run_a2a_cli
 

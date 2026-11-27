@@ -1729,6 +1729,18 @@ def test_add_git_package_clones_then_installs_manifest(
         "source": "src/kedi_http",
         "source_revision": "abc123",
         "source_url": "https://github.com/kedi-lang/kedi-http.git",
+        "lifecycle": {
+            "installed_as": "explicit",
+            "created": [
+                {"kind": "package_directory", "path": ".", "removed": "with the package"},
+                {
+                    "kind": "runtime_directory",
+                    "path": ".kedi-runtime",
+                    "removed": "with the package",
+                },
+            ],
+            "changed": [],
+        },
     }
 
 
