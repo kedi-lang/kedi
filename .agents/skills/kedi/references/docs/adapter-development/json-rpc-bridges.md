@@ -103,6 +103,11 @@ its session natively, as a harness does when its context fills up. It needs
 `sessions`, and enables `compaction_mode: native` (see [Compaction](#compaction)).
 `threshold` says whether the bridge honors an exact input-token threshold.
 
+`initialize` may also return `codemode: {language}`: the backend has a code mode
+of its own, where the model writes `python` or `javascript` that calls tools. It
+needs `tools`, and makes `> codemode: enabled` run the backend's code mode (see
+[Code Mode](#code-mode)).
+
 Advertise what the bridge implements, not everything its SDK could do. A
 capability left out is unavailable, and Kedi refuses an operation that needs it
 before sending anything.
@@ -134,6 +139,7 @@ actions the bridge parses.
 | `continuation` | `null`, or `answer` (the bridge's previous result) and `message` (Kedi's correction) |
 | `session` | `null`, or `id`, `turn` and `state`; see [Sessions](#sessions) |
 | `compaction` | with a `session`, when the bridge declared `compaction` and the profile sets `compaction_mode`: `mode` and `threshold`; see [Compaction](#compaction) |
+| `codemode` | `true` when the bridge declared `codemode` and the profile sets `> codemode: enabled`; absent otherwise; see [Code Mode](#code-mode) |
 | `history` | in transcript mode, the conversation's earlier messages in Kedi's schema; absent otherwise |
 | `processHistory` | in transcript mode, whether the program has a history processor: ask `history/process` before each model request |
 | `subagent` | `null`, or the child Kedi runs: `id`, `parentRunId`, `conversationId`, `name`, `limits`; see [Subagents](#subagents) |
@@ -423,6 +429,32 @@ Kedi refuses before any model request:
   Claude;
 - native compaction in a program that processes or replays history. Kedi holds
   that program's transcript, so the bridge has no session to compact.
+
+### Code Mode
+
+Kedi's [CodeMode](../agentic-engineering/codemode.md) does not run on a bridge.
+A bridge whose backend has a code mode of its own declares `codemode:
+{language}`, and `> codemode: enabled` turns that one on: the run carries
+`codemode: true`. The bridge then:
+
+- turns its backend's code mode on for the run, and offers Kedi's tools to the
+  model's code only, not as tools of their own;
+- sends each call the code makes as it would a direct one: Kedi's tools through
+  `tool/call`, its own through hooks, approval and admission;
+- gives the code no file, process, network or environment of the machine except
+  through those tools.
+
+Without `codemode`, or with `> codemode: disabled`, the backend's code mode stays
+off. The `codemode` fixture checks that Kedi's tools are not offered to the model
+directly.
+
+Kedi refuses, before any model request:
+- `> codemode: enabled` on a bridge that declared no `codemode`;
+- CodeMode settings (search and execution limits, `preload_tools`). They are
+  Kedi's sandbox's limits, and the backend's sandbox has its own.
+
+The fast-agent bridge runs fast-agent's Python sandbox (`exec_sandbox`); the pi
+bridge runs pi's JavaScript `codemode` tool. Both need Kedi 0.1.8.
 
 ### Transcript
 

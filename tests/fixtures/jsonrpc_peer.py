@@ -62,6 +62,8 @@ def handshake() -> dict[str, Any]:
         result["capabilities"] = {**CAPABILITIES, "testModel": True}
     elif SCENARIO == "both-histories":
         result["capabilities"] = {**CAPABILITIES, "transcript": True, "sessions": True}
+    elif SCENARIO == "codemode":
+        result["codemode"] = {"language": "python"}
     elif SCENARIO in ("compaction", "compaction-without-threshold"):
         result["capabilities"] = {**CAPABILITIES, "transcript": True, "sessions": True}
         result["compaction"] = {"threshold": SCENARIO == "compaction"}
@@ -596,6 +598,10 @@ def run(request_id: int, params: dict[str, Any]) -> None:
             return
         reply = call_kedi("model/complete", call)
         send({"id": request_id, "result": {"text": json.dumps(reply)}})
+        return
+    if SCENARIO == "codemode":
+        # Whether the run turned the backend's code mode on.
+        send({"id": request_id, "result": {"text": json.dumps(params.get("codemode"))}})
         return
     if SCENARIO.startswith("compaction"):
         # The compaction policy the run carries, and the history mode Kedi chose.

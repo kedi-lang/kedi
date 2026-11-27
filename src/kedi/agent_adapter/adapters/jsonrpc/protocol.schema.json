@@ -243,7 +243,8 @@
         "settings": {"type": "array", "items": {"type": "string"}},
         "effort": {"type": "array", "items": {"$ref": "#/$defs/EffortLevel"}},
         "mcp": {"type": "object", "properties": {"transports": {"type": "array", "items": {"$ref": "#/$defs/McpTransport"}}}},
-        "compaction": {"type": "object", "required": ["threshold"], "additionalProperties": false, "properties": {"threshold": {"type": "boolean"}}}
+        "compaction": {"type": "object", "required": ["threshold"], "additionalProperties": false, "properties": {"threshold": {"type": "boolean"}}},
+        "codemode": {"type": "object", "required": ["language"], "additionalProperties": false, "properties": {"language": {"enum": ["python", "javascript"]}}}
       }
     },
     "RunParams": {
@@ -273,6 +274,7 @@
         "history": {"$ref": "#/$defs/Transcript"},
         "processHistory": {"type": "boolean"},
         "compaction": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["mode", "threshold"], "additionalProperties": false, "properties": {"mode": {"enum": ["native", "disabled"]}, "threshold": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]}}}]},
+        "codemode": {"type": "boolean"},
         "subagent": {"$ref": "#/$defs/Subagent"},
         "hooks": {"type": "array", "items": {"$ref": "#/$defs/HookEvent"}},
         "mcpServers": {"type": "array", "items": {"$ref": "#/$defs/McpServer"}},

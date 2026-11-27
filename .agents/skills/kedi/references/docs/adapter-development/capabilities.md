@@ -34,7 +34,7 @@ fails in ways Kedi cannot detect.
 | `supports_effort` | honors `> effort:` | — | `> requires: effort` fails |
 | `supports_settings` | honors the names in `settings` | — | `> requires: settings` fails |
 | `settings` | the accepted setting names | allows `tool_reason` only when listed | `tool_reason is not supported by adapter '<shortname>'` |
-| `supports_codemode` | runs the CodeMode controls | allows `> codemode:` | `CodeMode is not supported by adapter '<shortname>'` |
+| `supports_codemode` | runs the CodeMode controls, or, on a JSON-RPC bridge, its backend's own code mode | allows `> codemode:` | `CodeMode is not supported by adapter '<shortname>'` |
 | `supports_native_approvals` | applies approval policies itself | stops wrapping tools with approval; passes `approval_ceiling` to children | — |
 | `supports_native_approval_handler` | drives an interactive approval handler natively | — | `> requires: native_approval_handler` fails |
 | `supports_subagents` | runs children (`SupportsSubagentExecution`) | offers `delegate_task` and `continue_subagent` | `AgentSubagentUnsupported: Active adapter does not support Kedi subagent delegation` |

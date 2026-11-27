@@ -200,6 +200,12 @@ def test_kedi_managed_children_match_the_schema(traffic: Traffic, adapters: list
     assert manager_run(adapter, "Delegate in the background.")
 
 
+def test_a_code_mode_handshake_and_run_match_the_schema(traffic: Traffic, adapters: list) -> None:
+    adapter = peer("codemode")
+    adapters.append(adapter)
+    assert run("> codemode: enabled\n[r] << Hi.\n= <r>\n", adapter) == "true"
+
+
 def test_the_check_reports_what_breaks_the_schema() -> None:
     broken = Traffic()
     broken.frames = [

@@ -17,7 +17,7 @@ import shlex
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
@@ -29,6 +29,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
 from ....agent_profile import AgentProfile, AgentProfileOverrideUnsupported, McpServerSpec
+from ....agent_profile.codemode import CodeModeSettings
 from ....agent_profile.compaction import CompactionSettingsError
 from ....agent_profile.settings import KEDI_RUNTIME_SETTING_KEYS, speech_voice
 from ....effort import EFFORT_VALUES
@@ -304,6 +305,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
         """The MCP transports the bridge connects for ``> mcp:`` servers."""
         self.compaction = peer.compaction
         """``{threshold}`` when the bridge compacts its session natively, else ``None``."""
+        self.codemode = peer.codemode
+        """``{language}`` when the bridge's backend has a code mode of its own, else ``None``."""
         self.hook_origins = peer.hook_origins
         """The sources of the bridge's own tools: it reports their calls with hook/invoke."""
 
@@ -373,6 +376,25 @@ class JsonRpcAdapter(HookRegistrationMixin):
                 "input-token threshold; omit compaction_threshold to use its own policy"
             )
         return {"mode": settings.mode, "threshold": settings.threshold}
+
+    def _code_mode(self) -> bool:
+        """``> codemode: enabled`` turns the backend's own code mode on: Kedi's CodeMode does not
+        run on a bridge, so its settings (search and execution limits) cannot hold."""
+
+        settings = self.active_profile.codemode
+        if not isinstance(settings, CodeModeSettings) or not settings.enabled:
+            return False
+        defaults = CodeModeSettings()
+        if changed := [
+            item.name
+            for item in fields(CodeModeSettings)
+            if getattr(settings, item.name) != getattr(defaults, item.name)
+        ]:
+            raise AgentProfileOverrideUnsupported(
+                f"bridge {self.backend['name']!r} runs its backend's own code mode, which Kedi's "
+                f"CodeMode settings do not reach: {', '.join(changed)}; use `> codemode: enabled`"
+            )
+        return True
 
     @property
     def supports_native_subagent_resume(self) -> bool:
@@ -560,6 +582,7 @@ class JsonRpcAdapter(HookRegistrationMixin):
         # A child keeps its own conversation: the parent's history is not the child's.
         conversation = None if child is not None else self._conversation.get()
         compaction = self._compaction_policy()
+        code_mode = self._code_mode()
         # The first native run in a Kedi call takes the prompt's media; nested runs get none.
         attachments = take_prompt_media()
         user_content = (
@@ -671,6 +694,8 @@ class JsonRpcAdapter(HookRegistrationMixin):
                 commit = partial(conversation.result_state.__setitem__, "bridge")
             if params["session"] is not None and compaction is not None:
                 params["compaction"] = compaction
+            if code_mode:
+                params["codemode"] = True
             self._runs[run_id] = run
             try:
                 with self._quoting_bridge(), agent_event_run(self.shortname) as run.events:
@@ -1425,6 +1450,7 @@ class _Peer:
     sessions: bool
     test_model: bool
     compaction: JsonObject | None
+    codemode: JsonObject | None
 
 
 def _negotiate(handshake: JsonObject) -> _Peer:
@@ -1469,6 +1495,11 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         isinstance(compaction, dict) and isinstance(compaction.get("threshold"), bool)
     ):
         raise JsonRpcError(INVALID_PARAMS, "compaction must be {threshold: true or false}")
+    codemode = handshake.get("codemode")
+    if codemode is not None and not (
+        isinstance(codemode, dict) and codemode.get("language") in ("python", "javascript")
+    ):
+        raise JsonRpcError(INVALID_PARAMS, "codemode must be {language: python or javascript}")
     tools = flags["supports_tool_registration"]
     governed = flags["supports_request_budget"]
     native_tools = advertised.get(NATIVE_TOOLS) is True
@@ -1490,6 +1521,10 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         (
             compaction is not None and not flags["supports_stateful_history"],
             "compaction needs sessions: the bridge compacts its own session state",
+        ),
+        (
+            codemode is not None and not tools,
+            "codemode needs tools: the backend's code calls Kedi's tools with tool/call",
         ),
         (
             bool(transports) and not native_tools,
@@ -1539,6 +1574,8 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         # A bridge with tools of its own admits their results with artifact/admit.
         supports_native_artifacts=native_tools,
         supports_native_compaction=compaction is not None,
+        # `> codemode: enabled` runs the backend's own code mode, when it has one.
+        supports_codemode=codemode is not None,
     )
     return _Peer(
         kind,
@@ -1553,6 +1590,7 @@ def _negotiate(handshake: JsonObject) -> _Peer:
         flags["supports_stateful_history"],
         advertised.get(TEST_MODEL) is True,
         compaction,
+        codemode,
     )
 
 

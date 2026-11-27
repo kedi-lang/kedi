@@ -23,7 +23,7 @@
 | `> history: enabled\|disabled` | Enable or disable scoped conversation continuity |
 | `> history:` | Configure history ownership and native compaction settings |
 | `> artifacts:` | Configure scoped large-value storage and compact references |
-| `> codemode: enabled\|disabled` | Enable or disable scoped tool discovery and sandboxed tool execution |
+| `> codemode: enabled\|disabled` | Enable or disable scoped tool discovery and sandboxed tool execution; on a bridge with a code mode of its own, that one |
 | `> codemode:` | Configure CodeMode discovery, execution and resource limits |
 | `> approval: allow`, `deny`, or handler | Set lexical tool approval policy |
 | `> hooks: enabled\|disabled` | Enable or disable inherited lexical lifecycle handlers |

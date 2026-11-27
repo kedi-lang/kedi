@@ -2233,6 +2233,33 @@ def test_the_test_model_sees_a_summary_request_and_may_report_counts(adapters: l
     assert "usage counts tokens" in str(failure("[r] << Hello.\n= <r>\n", counted))
 
 
+def test_codemode_enabled_runs_the_bridges_own_code_mode(adapters: list) -> None:
+    adapter = peer("codemode")
+    adapters.append(adapter)
+    assert adapter.capabilities.supports("codemode")
+    assert adapter.codemode == {"language": "python"}
+    assert json.loads(run("> codemode: enabled\n[r] << Hi.\n= <r>\n", adapter)) is True
+    # Off, or unset, the run carries nothing: the backend's code mode stays off.
+    assert json.loads(run("> codemode: disabled\n[r] << Hi.\n= <r>\n", adapter)) is None
+    assert json.loads(run(ECHO, adapter)) is None
+
+
+def test_kedi_refuses_codemode_a_bridge_cannot_hold(adapters: list) -> None:
+    # Kedi's CodeMode settings are its own sandbox's limits, which a bridge's does not take.
+    adapter = peer("codemode")
+    adapters.append(adapter)
+    limited = "> codemode:\n    max_nested_calls: 4\n[r] << Hi.\n= <r>\n"
+    error = failure(limited, adapter)
+    assert "runs its backend's own code mode" in str(error)
+    assert "max_nested_calls" in str(error)
+    # A bridge without a code mode of its own is refused by Kedi's runtime, as other adapters are.
+    plain = peer("sessions")
+    adapters.append(plain)
+    assert not plain.capabilities.supports("codemode")
+    error = failure("> codemode: enabled\n[r] << Hi.\n= <r>\n", plain)
+    assert "CodeMode is not supported" in str(error)
+
+
 def test_a_malformed_compaction_or_purpose_is_refused(adapters: list) -> None:
     hello = [sys.executable, str(Path(__file__).parent / "fixtures/jsonrpc_hello.py")]
     handshake = {"backend": {"name": "probe"}, "kind": "agent-harness"}
