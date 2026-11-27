@@ -26,7 +26,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from .package_dependencies import installed_distributions, uninstall_python_distributions
-from .package_environment import ENVIRONMENT_DIRECTORY, UV_SYNC
+from .package_environment import ENVIRONMENT_DIRECTORY, UV_SYNC, UV_SYNC_PROJECT
 from .package_graph import describe, installed_dependents, installed_metadata
 from .package_manifest import parse_kedi_requirement, validate_package_name
 
@@ -49,6 +49,7 @@ def lifecycle_record(
     before: dict[str, str] | None,
     after: dict[str, str] | None,
     environment: bool = False,
+    environment_project: str | None = None,
     installed_as: str = "explicit",
 ) -> dict[str, Any]:
     """The ``lifecycle`` record of one installation.
@@ -85,15 +86,21 @@ def lifecycle_record(
         {"kind": "runtime_directory", "path": RUNTIME_DIRECTORY, "removed": REMOVED_WITH_PACKAGE},
     ]
     if environment:
-        created.append(
-            {
-                "kind": "environment",
-                "path": ENVIRONMENT_DIRECTORY,
-                "command": "uv " + " ".join(UV_SYNC),
-                "contains": "the environment (venv/) and its Python (python/, python-bin/)",
-                "removed": REMOVED_WITH_PACKAGE,
-            }
-        )
+        entry: dict[str, Any] = {
+            "kind": "environment",
+            "path": ENVIRONMENT_DIRECTORY,
+            "command": "uv " + " ".join(UV_SYNC),
+            "contains": "the environment (venv/) and its Python (python/, python-bin/)",
+            "removed": REMOVED_WITH_PACKAGE,
+        }
+        if environment_project is not None:
+            entry["command"] = "uv " + " ".join(UV_SYNC_PROJECT)
+            entry["project"] = environment_project
+            entry["contains"] = (
+                "the environment (venv/), its Python (python/, python-bin/) and the project it "
+                "was synced from (project/)"
+            )
+        created.append(entry)
     created += [
         {
             "kind": "python_distribution",

@@ -172,6 +172,8 @@ Each entry has a `kind` and exactly one way to build it:
 - `environment: uv` runs a `command:` in a Python environment of the package's
   own, for a bridge whose harness pins what Kedi cannot share. See
   [Package Environments](../tooling/package-commands.md#package-environments).
+  `environment_project:` takes that environment's uv project from a GitHub
+  repository at an exact commit, for a harness that ships no wheel.
 
 The shortname follows the package name rules and cannot be a built-in
 adapter's. An import makes the package's adapters selectable in the importing
@@ -183,7 +185,7 @@ written where the package is imported keeps its adapter wherever it is called.
 
 Supported fields are `author`, `contact`, `license`, `version`, `source`,
 `python`, `python_dependencies`, `kedi_dependencies`, and `adapters`, whose
-entries take `kind`, `class`, `command`, and `environment`. See the [Manifest Reference](../reference/package-manifest.md)
+entries take `kind`, `class`, `command`, `environment`, and `environment_project`. See the [Manifest Reference](../reference/package-manifest.md)
 for their exact validation rules. Unknown fields, duplicate scalar fields, multiple
 dependency blocks, multiple package directives, and a missing package directive
 are errors.

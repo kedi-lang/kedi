@@ -101,6 +101,7 @@ _PACKAGE_ADAPTER_FIELDS = {
     "class": "class_path",
     "command": "command",
     "environment": "environment",
+    "environment_project": "environment_project",
 }
 
 

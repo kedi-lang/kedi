@@ -21,7 +21,13 @@ from uuid import uuid4
 
 from .lang import PackageMetadata
 from .package_dependencies import install_python_dependencies, installed_distributions
-from .package_environment import environment_installer, install_environment, needs_environment
+from .package_environment import (
+    ProjectSource,
+    environment_installer,
+    environment_project,
+    install_environment,
+    needs_environment,
+)
 from .package_graph import resolve_dependencies
 from .package_lifecycle import (
     lifecycle_record,
@@ -290,6 +296,8 @@ class _PlannedInstall:
     provenance: _Provenance
     uv: str | None
     """The uv that installs its environment, when an adapter declares ``environment: uv``."""
+    project: ProjectSource | None
+    """The project that environment comes from, when the adapter names one."""
 
     @property
     def metadata(self) -> PackageMetadata:
@@ -323,7 +331,7 @@ def _plan_install(
         if needs_environment(prepared.metadata)
         else None
     )
-    return _PlannedInstall(prepared, provenance, uv)
+    return _PlannedInstall(prepared, provenance, uv, environment_project(prepared.metadata))
 
 
 def install_package(
@@ -418,18 +426,25 @@ def _install_one(
                     before=before,
                     after=after,
                     environment=step.uv is not None,
+                    environment_project=(
+                        f"git+{step.project.repository}@{step.project.commit}"
+                        if step.project
+                        else None
+                    ),
                     installed_as=installed_as,
                 ),
             )
             # A venv is not relocatable: it is installed where the package now lives.
             source = target / prepared.source.relative_path
-            uv = step.uv
+            uv, project = step.uv, step.project
             backup = _commit_staged_package(
                 root,
                 prepared.metadata.name,
                 staging,
                 target,
-                then=None if uv is None else lambda: install_environment(uv, target, source),
+                then=None
+                if uv is None
+                else lambda: install_environment(uv, target, source, project),
             )
         except BaseException:
             if staging.exists() or staging.is_symlink():
@@ -769,22 +784,20 @@ def _git_https_url(source: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
-def _run_git(args: list[str], *, error_context: str) -> str:
+def _run_git(args: list[str], *, error_context: str, timeout: int = GIT_TIMEOUT_SECONDS) -> str:
     try:
         result = subprocess.run(
             ["git", *args],
             check=False,
             capture_output=True,
             text=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            timeout=timeout,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"},
         )
     except FileNotFoundError as exc:
         raise ModuleNotFoundError("Git is required to install a git+ Kedi package") from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"{error_context}: git did not finish within {GIT_TIMEOUT_SECONDS} seconds"
-        ) from exc
+        raise RuntimeError(f"{error_context}: git did not finish within {timeout} seconds") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
         if len(detail) > MAX_GIT_ERROR_CHARS:
