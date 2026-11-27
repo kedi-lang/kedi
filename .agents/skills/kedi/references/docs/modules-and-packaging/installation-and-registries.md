@@ -21,7 +21,8 @@ $ kedi install path/to/package.kedi
 
 The command validates and stages `package.kedi` and its declared source directory,
 installs `python_dependencies` into the interpreter running Kedi, then commits
-the staged package. Dependency errors leave the previous Kedi package intact.
+the staged package. The Kedi packages it lists in `kedi_dependencies` come from
+the registry and install first, in the same transaction. Dependency errors leave the previous Kedi package intact.
 Python environment changes are not part of the registry's atomic transaction.
 
 Installing the same package name replaces the previous installation as one
@@ -138,6 +139,9 @@ unchanged version string does not conceal a revoked commit.
 | `unknown` | The verified commit is absent from the audit index. |
 | `malformed` | The receipt or installed manifest fails validation. |
 | `unverified` | A local or explicit Git source without verified registry provenance. |
+
+`kedi audit` also prints a `DEPENDENCY` line for each installed package whose
+Kedi dependency is missing or no longer satisfies it, and exits nonzero.
 
 Exit code `0` means no actionable findings, `1` means a yanked, revoked,
 unknown, or malformed installation, and `2` means the online audit could not

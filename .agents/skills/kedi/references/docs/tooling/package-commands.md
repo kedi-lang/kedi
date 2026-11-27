@@ -99,6 +99,11 @@ kedi remove package_name --dry-run
 It deletes the installed package directory, with its `.kedi-runtime/`, together with an
 interrupted installation's staging and backup directories and the package's lock file.
 
+- **A needed package stays.** A package another installed package lists in
+  `kedi_dependencies` is not removed, and the error names its dependents.
+- **Orphans go with it.** The dependencies it was the last to need, and that were
+  installed only as dependencies, are removed too. `--dry-run` shows them.
+
 - **Python by default:** untouched. The distributions the package added stay, because
   something else may use them, and `kedi remove` names them.
 - **`--with-python-dependencies`:** uninstalls them too, but keeps any distribution that:
@@ -115,6 +120,42 @@ distributions are unknown, so they stay.
 Package bridges keep their run-time files inside the package:
 - `KEDI_PACKAGE_RUNTIME_DIR` names its `.kedi-runtime/`;
 - `KEDI_BRIDGE_CACHE` points below it for the bridge SDKs' preflight cache.
+
+## Kedi Dependencies
+
+The Kedi packages a manifest lists in `kedi_dependencies` install with it:
+
+```console
+$ kedi install
+Installed dependency kedi_http at /home/me/.kedi/registry/kedi_http
+Installed release_tools at /home/me/.kedi/registry/release_tools
+```
+
+- **Resolution comes first.** Kedi reads the whole graph before it changes anything:
+  - the registry's active version of each dependency, checked out at its verified commit;
+  - the specifiers;
+  - cycles;
+  - the installed packages a change would break.
+
+  A cycle, or a conflict that no version meets, is refused with the requirements that
+  clash, and nothing changes.
+- **What is reused.** An installed package that satisfies every requirement on it is kept.
+  Otherwise the registry's active version replaces it, but only if it also satisfies every
+  installed package that needs it.
+- **One transaction.** Dependencies install first, then the package. If a step fails, the
+  packages the installation added are removed and the ones it replaced come back. The error
+  says so, and names any Python distributions they added, which stay installed.
+- **Explicit or dependency.** The install record says how each package came:
+  - `installed_as: explicit` for the package asked for, and `dependency` for the others;
+  - an explicit package stays explicit when a dependent upgrades it;
+  - `kedi add` of a dependency makes it explicit.
+
+  `kedi remove` takes along only orphaned dependencies.
+- **One version per Kedi home.** A package is installed once; there is no side-by-side
+  versioning.
+
+`kedi audit` reports an installed package whose Kedi dependency is missing or no longer
+satisfies it.
 
 ## Package Environments
 

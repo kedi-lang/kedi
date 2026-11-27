@@ -112,6 +112,28 @@ already have made to the environment. Externally managed system Python policies
 are respected; use a writable virtual environment when system installation is
 not permitted.
 
+## Kedi Dependencies
+
+`kedi_dependencies` lists the Kedi packages a package needs: a package name,
+optionally with a PEP 440 specifier.
+
+```kedi
+> package: release_tools:
+  version: 1.0.0
+  source: src/release_tools
+  kedi_dependencies:
+    hermes>=0.1
+    kedi_http
+```
+
+Names resolve through the registry, also when the package itself is installed
+from a local path or a Git URL; an entry cannot name a path or a URL. The
+package's own modules import a dependency like any installed package
+(`> import: hermes`). That import makes the dependency's adapters selectable in
+the importing module (`> agent: hermes`); modules that import the package do
+not gain them. How installation and removal treat them is described in
+[Package Commands](../tooling/package-commands.md#kedi-dependencies).
+
 ## Adapters
 
 A package can expose agent integrations that importing modules select by
@@ -147,6 +169,9 @@ Each entry has a `kind` and exactly one way to build it:
   with `Class(model=...)`. The module comes from the interpreter running Kedi,
   usually through `python_dependencies`, and is imported only when a program
   selects the adapter.
+- `environment: uv` runs a `command:` in a Python environment of the package's
+  own, for a bridge whose harness pins what Kedi cannot share. See
+  [Package Environments](../tooling/package-commands.md#package-environments).
 
 The shortname follows the package name rules and cannot be a built-in
 adapter's. An import makes the package's adapters selectable in the importing
@@ -157,8 +182,8 @@ written where the package is imported keeps its adapter wherever it is called.
 ## Unknown and Duplicate Fields
 
 Supported fields are `author`, `contact`, `license`, `version`, `source`,
-`python`, `python_dependencies`, and `adapters`, whose entries take `kind`,
-`class`, and `command`. See the [Manifest Reference](../reference/package-manifest.md)
+`python`, `python_dependencies`, `kedi_dependencies`, and `adapters`, whose
+entries take `kind`, `class`, `command`, and `environment`. See the [Manifest Reference](../reference/package-manifest.md)
 for their exact validation rules. Unknown fields, duplicate scalar fields, multiple
 dependency blocks, multiple package directives, and a missing package directive
 are errors.

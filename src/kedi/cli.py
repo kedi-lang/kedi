@@ -92,6 +92,8 @@ def _run_package_command(command: str, arguments: list[str]) -> int:
         except (FileNotFoundError, ModuleNotFoundError, RuntimeError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
 
+    for dependency in installed.dependencies:
+        click.echo(f"Installed dependency {dependency.name} at {dependency.root}")
     message = f"Installed {installed.name} at {installed.root}"
     if installed.source_revision is not None:
         message += f" ({installed.source_revision})"
@@ -158,9 +160,14 @@ def _run_package_audit() -> int:
         if result.status in visible_statuses:
             click.echo(_format_package_audit_result(result))
 
+    for problem in report.dependency_problems:
+        click.echo(f"DEPENDENCY {problem}")
+
     counts = report.counts
     ordered = ("active", "superseded", "yanked", "revoked", "unverified", "unknown", "malformed")
     summary = " ".join(f"{status}={counts[status]}" for status in ordered)
+    if report.dependency_problems:
+        summary += f" dependency_problems={len(report.dependency_problems)}"
     click.echo(f"Checked {len(report.results)} installed package(s): {summary}")
     if report.exit_code:
         raise click.exceptions.Exit(report.exit_code)

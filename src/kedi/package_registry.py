@@ -12,8 +12,8 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable, Generator
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -22,7 +22,14 @@ from uuid import uuid4
 from .lang import PackageMetadata
 from .package_dependencies import install_python_dependencies, installed_distributions
 from .package_environment import environment_installer, install_environment, needs_environment
-from .package_lifecycle import lifecycle_record, plan_removal, read_lifecycle, remove
+from .package_graph import resolve_dependencies
+from .package_lifecycle import (
+    lifecycle_record,
+    plan_removal,
+    python_additions,
+    read_lifecycle,
+    remove,
+)
 from .package_manifest import (
     PACKAGE_MANIFEST_NAME,
     load_package_manifest,
@@ -65,6 +72,8 @@ class InstalledPackage:
     root: Path
     source: Path
     source_revision: str | None = None
+    dependencies: tuple[InstalledPackage, ...] = ()
+    """The Kedi packages installed first, because this one needs them."""
 
 
 @dataclass(frozen=True)
@@ -265,6 +274,58 @@ def prepare_package(
     return PreparedPackage(resolved_manifest, metadata, source)
 
 
+@dataclass(frozen=True)
+class _Provenance:
+    source_kind: str = "local"
+    source_url: str | None = None
+    source_revision: str | None = None
+    registry_record: RegistryPackageRecord | None = None
+
+
+@dataclass(frozen=True)
+class _PlannedInstall:
+    """One package of an installation, validated and checked before anything changes."""
+
+    prepared: PreparedPackage
+    provenance: _Provenance
+    uv: str | None
+    """The uv that installs its environment, when an adapter declares ``environment: uv``."""
+
+    @property
+    def metadata(self) -> PackageMetadata:
+        return self.prepared.metadata
+
+
+def _plan_install(
+    manifest_path: Path, provenance: _Provenance, *, expected_name: str | None
+) -> _PlannedInstall:
+    if provenance.source_kind not in _INSTALL_SOURCE_KINDS:
+        raise ValueError(
+            f"Unknown Kedi package installation source kind: {provenance.source_kind!r}"
+        )
+    prepared = prepare_package(
+        manifest_path,
+        expected_name=expected_name,
+        allow_direct_urls=provenance.source_kind == "local",
+    )
+    record = provenance.registry_record
+    if record is not None:
+        if provenance.source_kind != "registry":
+            raise ValueError("Registry provenance may only be attached to registry installations")
+        if prepared.metadata.name != record.name:
+            raise ValueError("Registry package name differs from the checked-out package manifest")
+        if prepared.metadata.version != record.version:
+            raise ValueError(
+                "Registry package version differs from the checked-out package manifest"
+            )
+    uv = (
+        environment_installer(prepared.metadata, prepared.source.path)
+        if needs_environment(prepared.metadata)
+        else None
+    )
+    return _PlannedInstall(prepared, provenance, uv)
+
+
 def install_package(
     manifest_path: Path,
     *,
@@ -274,31 +335,61 @@ def install_package(
     source_url: str | None = None,
     source_revision: str | None = None,
     registry_record: RegistryPackageRecord | None = None,
+    registry_client: PackageRegistryClient | None = None,
+    api_client: HTTPRegistryAPIClient | None = None,
 ) -> InstalledPackage:
-    """Install a package with an atomic, per-package registry transaction."""
-    if source_kind not in _INSTALL_SOURCE_KINDS:
-        raise ValueError(f"Unknown Kedi package installation source kind: {source_kind!r}")
-    prepared = prepare_package(
-        manifest_path, expected_name=expected_name, allow_direct_urls=source_kind == "local"
+    """Install a package and, first, the Kedi packages it needs, as one transaction.
+
+    The whole graph is resolved before anything changes: the registry's versions, the
+    specifiers, cycles, and the installed packages an upgrade would break. If a step then fails,
+    the packages this installation added are removed and the ones it replaced come back."""
+    requested = _plan_install(
+        manifest_path,
+        _Provenance(source_kind, source_url, source_revision, registry_record),
+        expected_name=expected_name,
     )
-    if registry_record is not None:
-        if source_kind != "registry":
-            raise ValueError("Registry provenance may only be attached to registry installations")
-        if prepared.metadata.name != registry_record.name:
-            raise ValueError("Registry package name differs from the checked-out package manifest")
-        if prepared.metadata.version != registry_record.version:
-            raise ValueError(
-                "Registry package version differs from the checked-out package manifest"
-            )
     root = _resolved_registry_root(registry_root)
+    with ExitStack() as checkouts:
+
+        def fetch(name: str) -> _PlannedInstall:
+            client = registry_client
+            if client is None and os.getenv(MOCK_REGISTRY_ROOT_ENV):
+                client = mock_registry_client_from_environment()
+            if client is not None:
+                manifest = client.package_root(name) / PACKAGE_MANIFEST_NAME
+                return _plan_install(manifest, _Provenance("registry"), expected_name=name)
+            manifest, provenance = _checkout_registry_package(
+                name, checkouts, api_client or HTTPRegistryAPIClient()
+            )
+            return _plan_install(manifest, provenance, expected_name=name)
+
+        steps = resolve_dependencies(requested.metadata, registry_root=root, fetch=fetch)
+        transaction = _Transaction(root)
+        dependencies: list[InstalledPackage] = []
+        try:
+            for step in steps:
+                dependencies.append(_install_one(step, transaction, installed_as="dependency"))
+            installed = _install_one(requested, transaction, installed_as="explicit")
+        except BaseException as exc:
+            undone = transaction.roll_back()
+            for step in [*steps, requested]:
+                _drop_lock_if_absent(root, step.metadata.name)
+            if undone and isinstance(exc, Exception):
+                raise PackageRegistryError(f"{exc}\n{undone}") from exc
+            raise
+        transaction.finish()
+
+    _clear_installed_module_cache()
+    return replace(installed, dependencies=tuple(dependencies))
+
+
+def _install_one(
+    step: _PlannedInstall, transaction: _Transaction, *, installed_as: str
+) -> InstalledPackage:
+    prepared, provenance, root = step.prepared, step.provenance, transaction.root
     root.mkdir(parents=True, exist_ok=True)
     target = installed_package_root(prepared.metadata.name, registry_root=root)
     staging = root / f".{prepared.metadata.name}.staging-{uuid4().hex}"
-    uv = (
-        environment_installer(prepared.metadata, prepared.source.path)
-        if needs_environment(prepared.metadata)
-        else None
-    )
 
     # The lock covers the whole installation, not only the commit: `kedi remove` takes it too,
     # so a staging directory it finds belongs to no running install.
@@ -312,23 +403,28 @@ def install_package(
             before = installed_distributions() if requirements else None
             install_python_dependencies(requirements)
             after = installed_distributions() if requirements else None
+            previous = read_lifecycle(target) if target.is_dir() else None
+            if target.is_dir() and (previous or {}).get("installed_as", "explicit") == "explicit":
+                installed_as = "explicit"  # what the user asked for stays theirs
             _write_install_receipt(
                 staging,
                 prepared,
-                source_kind=source_kind,
-                source_url=source_url,
-                source_revision=source_revision,
-                registry_record=registry_record,
+                source_kind=provenance.source_kind,
+                source_url=provenance.source_url,
+                source_revision=provenance.source_revision,
+                registry_record=provenance.registry_record,
                 lifecycle=lifecycle_record(
-                    previous=read_lifecycle(target) if target.is_dir() else None,
+                    previous=previous,
                     before=before,
                     after=after,
-                    environment=uv is not None,
+                    environment=step.uv is not None,
+                    installed_as=installed_as,
                 ),
             )
             # A venv is not relocatable: it is installed where the package now lives.
             source = target / prepared.source.relative_path
-            _commit_staged_package(
+            uv = step.uv
+            backup = _commit_staged_package(
                 root,
                 prepared.metadata.name,
                 staging,
@@ -339,14 +435,62 @@ def install_package(
             if staging.exists() or staging.is_symlink():
                 _remove_tree(staging)
             raise
-
-    _clear_installed_module_cache()
+    transaction.committed.append((prepared.metadata.name, target, backup))
     return InstalledPackage(
         prepared.metadata.name,
         target,
         target / prepared.source.relative_path,
-        source_revision=source_revision,
+        source_revision=provenance.source_revision,
     )
+
+
+@dataclass
+class _Transaction:
+    """The packages an installation committed, each with the backup of the one it replaced.
+
+    Backups are kept until the whole installation succeeds."""
+
+    root: Path
+    committed: list[tuple[str, Path, Path | None]] = field(default_factory=list)
+
+    def finish(self) -> None:
+        # The installation succeeded. A failed cleanup must not turn it into an ambiguous error
+        # for the caller; `kedi remove` takes a leftover backup.
+        for _, _, backup in self.committed:
+            if backup is not None:
+                _remove_tree(backup, ignore_errors=True)
+
+    def roll_back(self) -> str:
+        """Undoes the committed packages, newest first, and says what it did."""
+        if not self.committed:
+            return ""
+        added: list[str] = []
+        for name, target, backup in reversed(self.committed):
+            before = {
+                e["name"] for e in python_additions(read_lifecycle(backup) if backup else None)
+            }
+            added += [
+                e["name"]
+                for e in python_additions(read_lifecycle(target))
+                if e["name"] not in before
+            ]
+            with _package_install_lock(self.root, name):
+                _remove_tree(target)
+                if backup is not None:
+                    backup.replace(target)
+        names = ", ".join(name for name, _, _ in self.committed)
+        message = f"The packages this installation had installed were undone: {names}."
+        if added:
+            message += (
+                f" Python distributions they added stay installed: {', '.join(sorted(added))}."
+            )
+        return message
+
+
+def _drop_lock_if_absent(root: Path, name: str) -> None:
+    """A failed installation of a package that is not installed leaves no lock file behind."""
+    if not (root / name).exists():
+        (root / f".{name}.lock").unlink(missing_ok=True)
 
 
 def _commit_staged_package(
@@ -356,11 +500,12 @@ def _commit_staged_package(
     target: Path,
     *,
     then: Callable[[], None] | None = None,
-) -> None:
+) -> Path | None:
     """Atomically replace one package; the caller holds the package's install lock.
 
     ``then`` finishes the new package in place (its environment). If it fails, the new package
-    is deleted and the previous one comes back."""
+    is deleted and the previous one comes back. Returns the previous package's backup, which
+    the caller deletes once its whole installation succeeds."""
     backup = root / f".{package_name}.backup-{uuid4().hex}"
     moved_previous = False
     try:
@@ -378,11 +523,7 @@ def _commit_staged_package(
         if moved_previous and backup.exists() and not target.exists():
             backup.replace(target)
         raise
-    else:
-        # The new package is committed. A failed cleanup must not turn a
-        # successful installation into an ambiguous error for the caller.
-        if backup.exists() or backup.is_symlink():
-            _remove_tree(backup, ignore_errors=True)
+    return backup if moved_previous else None
 
 
 @contextmanager
@@ -729,7 +870,26 @@ def install_registry_package(
     """Install one active package at the registry's exact verified commit."""
     name = validate_package_name(package_name)
     selected_client = api_client or HTTPRegistryAPIClient()
-    record = selected_client.package_record(name)
+    with ExitStack() as checkouts:
+        manifest_path, provenance = _checkout_registry_package(name, checkouts, selected_client)
+        return install_package(
+            manifest_path,
+            registry_root=registry_root,
+            expected_name=name,
+            source_kind=provenance.source_kind,
+            source_url=provenance.source_url,
+            source_revision=provenance.source_revision,
+            registry_record=provenance.registry_record,
+            api_client=selected_client,
+        )
+
+
+def _checkout_registry_package(
+    name: str, checkouts: ExitStack, client: HTTPRegistryAPIClient
+) -> tuple[Path, _Provenance]:
+    """Checks out an active registry package's verified commit into a temporary directory that
+    ``checkouts`` removes."""
+    record = client.package_record(name)
     if record.name != name:
         raise PackageRegistryError(
             f"Registry returned package {record.name!r} for requested package {name!r}"
@@ -738,22 +898,12 @@ def install_registry_package(
         raise PackageRegistryError(
             f"Kedi package {name!r} is {record.status} and cannot be installed"
         )
-    repository = _registry_repository_url(
-        record.repository,
-        allow_local=selected_client.is_local,
+    repository = _registry_repository_url(record.repository, allow_local=client.is_local)
+    temporary = checkouts.enter_context(
+        tempfile.TemporaryDirectory(prefix="kedi-registry-package-")
     )
-    with tempfile.TemporaryDirectory(prefix="kedi-registry-package-") as temporary:
-        checkout = Path(temporary) / "checkout"
-        manifest_path = _checkout_registry_commit(checkout, repository, record)
-        return install_package(
-            manifest_path,
-            registry_root=registry_root,
-            expected_name=name,
-            source_kind="registry",
-            source_url=repository,
-            source_revision=record.verified_commit,
-            registry_record=record,
-        )
+    manifest_path = _checkout_registry_commit(Path(temporary) / "checkout", repository, record)
+    return manifest_path, _Provenance("registry", repository, record.verified_commit, record)
 
 
 def _checkout_registry_commit(
@@ -935,6 +1085,7 @@ def add_package(
             registry_root=registry_root,
             expected_name=package_name,
             source_kind="registry",
+            registry_client=selected_client,
         )
     return install_registry_package(package_name, registry_root=registry_root)
 

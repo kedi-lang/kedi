@@ -13,6 +13,8 @@
   python_dependencies:
     pydantic>=2
     httpx[http2]>=0.27
+  kedi_dependencies:
+    kedi_http>=1.0
 ```
 
 The file must be named exactly `package.kedi`, contain exactly one package
@@ -28,6 +30,7 @@ or executable statements. Comments are allowed.
 | `version` | no | valid PEP 440 version |
 | `python` | no | fixed version or inclusive closed range |
 | `python_dependencies` | no | one list of valid PEP 508 requirements |
+| `kedi_dependencies` | no | one list of Kedi package names, each optionally with a PEP 440 specifier; no paths, URLs, extras or markers; not the package itself; each name once |
 | `author` | no | metadata text |
 | `contact` | no | metadata text |
 | `license` | no | metadata text |
@@ -56,6 +59,7 @@ package directive fail validation.
 | `kind` | yes | `agent` (selected with `> agent:`, an agent harness) or `adapter` (selected with `> adapter:`, an agent framework) |
 | `command` | one of `command` or `class` | a shell-style command line; arguments naming regular files of `source` become absolute paths |
 | `class` | one of `command` or `class` | `module:Class`, a Python adapter class built with `Class(model=...)` |
+| `environment` | no | `uv`, with `command` only: the command runs in an environment of the package's own, from the uv project (`pyproject.toml`, `uv.lock`) at the root of `source` |
 
 Unknown entry fields, duplicate shortnames or fields, and a second adapters
 block fail validation. Nothing is imported or launched when a package is
@@ -97,6 +101,10 @@ the interpreter running Kedi. Pip is used when available in that interpreter;
 otherwise `uv pip --python` targets the same interpreter. Requirement extras,
 version constraints and environment markers retain their PEP 508 meaning.
 Reading a manifest or importing a package does not install Python dependencies.
+
+`kedi_dependencies` resolve through the registry, the same way as `kedi add <name>`. Kedi installs
+them first, in one transaction with the package; see
+[Package Commands](../tooling/package-commands.md#kedi-dependencies).
 
 ## Installation
 

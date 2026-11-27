@@ -188,7 +188,8 @@ fallbacks. Selective imports bind names directly, not under a namespace.
 Modules without an export directive expose nothing.
 
 `> package:` supports `author`, `contact`, `version`, `source`, `python`,
-`license`, and one `python_dependencies:` list. The manifest must contain no
+`license`, one `python_dependencies:` list, one `kedi_dependencies:` list, and
+one `adapters:` block. The manifest must contain no
 executable statements.
 
 ## Tests and Evaluation

@@ -864,6 +864,8 @@ class PackageMetadata:
     python_requirement: Optional[str] = None
     license: Optional[str] = None
     python_dependencies: List[str] = field(default_factory=list)
+    kedi_dependencies: List[str] = field(default_factory=list)
+    """Kedi packages this one needs: a name, optionally with a PEP 440 specifier."""
     adapters: dict[str, PackageAdapterDecl] = field(default_factory=dict)
     field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
