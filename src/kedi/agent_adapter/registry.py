@@ -211,6 +211,16 @@ def build_package_adapter(adapter: PackageAdapter, model: str | None) -> AgentAd
     if adapter.command is not None:
         from .adapters.jsonrpc import JsonRpcAdapter
 
+        if adapter.environment == "uv":
+            from kedi.package_environment import environment_ready
+            from kedi.package_registry import installed_package_root
+
+            if not environment_ready(installed_package_root(adapter.package)):
+                raise KediExecutionError(
+                    f"> {adapter.directive}: {label} runs in the package's environment, whose "
+                    "installation did not finish. Install the package again: "
+                    f"kedi add {adapter.package}, or kedi install for a local package."
+                )
         program = adapter.command[0]
         if shutil.which(program) is None:
             raise KediExecutionError(

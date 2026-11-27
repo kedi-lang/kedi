@@ -81,6 +81,7 @@ def test_the_environment_lives_in_the_package_runs_its_command_and_goes_with_it(
 
     environment = installed.root / ENVIRONMENT_DIRECTORY
     assert (environment / "venv").is_dir()
+    assert (environment / "ready").is_file()
     assert not (environment / "cache").exists()
     record = json.loads((installed.root / INSTALL_RECEIPT_NAME).read_text())["lifecycle"]
     assert [entry["kind"] for entry in record["created"]] == [
@@ -175,6 +176,7 @@ def test_installing_the_environment_runs_uv_sync_into_the_package_and_drops_its_
     assert env["UV_PYTHON_PREFERENCE"] == "only-managed"
     assert "VIRTUAL_ENV" not in env
     assert not (root / "cache").exists()
+    assert package_environment.environment_ready(tmp_path / "pkg")
     monkeypatch.setenv("UV_PYTHON_PREFERENCE", "system")
     package_environment.install_environment("/bin/uv", tmp_path / "pkg", tmp_path / "pkg/src")
     assert calls[1][1]["UV_PYTHON_PREFERENCE"] == "system"
@@ -184,9 +186,11 @@ def test_installing_the_environment_runs_uv_sync_into_the_package_and_drops_its_
         raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(package_environment.subprocess, "run", fail)
+    (root / "ready").unlink()
     with pytest.raises(RuntimeError, match="Installing the environment of pkg with uv failed"):
         package_environment.install_environment("/bin/uv", tmp_path / "pkg", tmp_path / "pkg/src")
     assert not (root / "cache").exists()
+    assert not package_environment.environment_ready(tmp_path / "pkg")
 
 
 def test_a_program_the_environment_lacks_runs_from_path(
@@ -234,3 +238,59 @@ def test_a_command_whose_program_the_environment_lacks_keeps_it(
     install_package(manifest, registry_root=tmp_path / "home" / "registry")
     (adapter,) = package_adapters("bridged")
     assert adapter.command is not None and adapter.command[0] == "node"
+
+
+def ready(uv: str, root: Path, source: Path) -> None:
+    (root / ENVIRONMENT_DIRECTORY).mkdir()
+    (root / ENVIRONMENT_DIRECTORY / "ready").write_text("")
+
+
+def test_an_interrupted_environment_brings_the_previous_version_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(package_environment, "find_uv", lambda: "/bin/uv")
+    monkeypatch.setattr(package_registry, "install_environment", ready)
+    install_package(bridge_package(tmp_path / "v1"), registry_root=registry)
+
+    def interrupted(uv: str, root: Path, source: Path) -> None:
+        (root / ENVIRONMENT_DIRECTORY).mkdir()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(package_registry, "install_environment", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        install_package(bridge_package(tmp_path / "v2", version="0.2.0"), registry_root=registry)
+
+    assert "version: 0.1.0" in (registry / "bridged" / "package.kedi").read_text()
+    assert sorted(path.name for path in registry.iterdir()) == [".bridged.lock", "bridged"]
+
+
+def test_a_half_installed_environment_is_refused_and_a_finished_one_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kedi.agent_adapter.adapters import jsonrpc
+    from kedi.agent_adapter.registry import build_package_adapter
+    from kedi.errors import KediExecutionError
+
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(package_environment, "find_uv", lambda: "/bin/uv")
+    monkeypatch.setattr(package_registry, "install_environment", lambda uv, root, source: None)
+    installed = install_package(
+        bridge_package(tmp_path / "source"), registry_root=tmp_path / "home" / "registry"
+    )
+    (adapter,) = package_adapters("bridged")
+    with pytest.raises(KediExecutionError, match="whose installation did not finish") as error:
+        build_package_adapter(adapter, None)
+    assert "kedi add bridged" in str(error.value)
+
+    class Bridge:
+        kind = "agent-harness"
+
+        def __init__(self, command: list[str], **_: object) -> None:
+            self.command = command
+
+    monkeypatch.setattr(jsonrpc, "JsonRpcAdapter", Bridge)
+    monkeypatch.setattr("kedi.agent_adapter.registry.shutil.which", lambda program: program)
+    ready("/bin/uv", installed.root, installed.source)
+    built = build_package_adapter(adapter, None)
+    assert isinstance(built, Bridge) and built.command[0] == "python"
