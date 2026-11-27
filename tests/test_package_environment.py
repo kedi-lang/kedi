@@ -4,6 +4,7 @@ inside the installed package, and goes with it."""
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -112,11 +113,11 @@ def test_a_failed_environment_brings_the_previous_version_back(
     monkeypatch.setattr(
         package_registry,
         "install_environment",
-        lambda uv, root, source: (root / ENVIRONMENT_DIRECTORY).mkdir(),
+        lambda uv, root, source, project=None: (root / ENVIRONMENT_DIRECTORY).mkdir(),
     )
     install_package(bridge_package(tmp_path / "v1"), registry_root=registry)
 
-    def fail(uv: str, root: Path, source: Path) -> None:
+    def fail(uv: str, root: Path, source: Path, project: object = None) -> None:
         (root / ENVIRONMENT_DIRECTORY).mkdir()
         raise RuntimeError("uv failed")
 
@@ -230,7 +231,9 @@ def test_a_command_whose_program_the_environment_lacks_keeps_it(
 ) -> None:
     monkeypatch.setenv("KEDI_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(package_environment, "find_uv", lambda: "/bin/uv")
-    monkeypatch.setattr(package_registry, "install_environment", lambda uv, root, source: None)
+    monkeypatch.setattr(
+        package_registry, "install_environment", lambda uv, root, source, project=None: None
+    )
     manifest = bridge_package(tmp_path / "source")
     manifest.write_text(
         manifest.read_text().replace("command: python bridge.py", "command: node bridge.py")
@@ -240,7 +243,7 @@ def test_a_command_whose_program_the_environment_lacks_keeps_it(
     assert adapter.command is not None and adapter.command[0] == "node"
 
 
-def ready(uv: str, root: Path, source: Path) -> None:
+def ready(uv: str, root: Path, source: Path, project: object = None) -> None:
     (root / ENVIRONMENT_DIRECTORY).mkdir()
     (root / ENVIRONMENT_DIRECTORY / "ready").write_text("")
 
@@ -253,7 +256,7 @@ def test_an_interrupted_environment_brings_the_previous_version_back(
     monkeypatch.setattr(package_registry, "install_environment", ready)
     install_package(bridge_package(tmp_path / "v1"), registry_root=registry)
 
-    def interrupted(uv: str, root: Path, source: Path) -> None:
+    def interrupted(uv: str, root: Path, source: Path, project: object = None) -> None:
         (root / ENVIRONMENT_DIRECTORY).mkdir()
         raise KeyboardInterrupt
 
@@ -274,7 +277,9 @@ def test_a_half_installed_environment_is_refused_and_a_finished_one_runs(
 
     monkeypatch.setenv("KEDI_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(package_environment, "find_uv", lambda: "/bin/uv")
-    monkeypatch.setattr(package_registry, "install_environment", lambda uv, root, source: None)
+    monkeypatch.setattr(
+        package_registry, "install_environment", lambda uv, root, source, project=None: None
+    )
     installed = install_package(
         bridge_package(tmp_path / "source"), registry_root=tmp_path / "home" / "registry"
     )
@@ -294,3 +299,192 @@ def test_a_half_installed_environment_is_refused_and_a_finished_one_runs(
     ready("/bin/uv", installed.root, installed.source)
     built = build_package_adapter(adapter, None)
     assert isinstance(built, Bridge) and built.command[0] == "python"
+
+
+# environment_project: the environment comes from a repository at an exact commit.
+
+COMMIT = "8fc0374447313e276f6b9a2764bfc750190c966a"
+
+
+def git(repository: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repository), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def project_repository(root: Path, files: dict[str, bytes]) -> tuple[Path, str]:
+    """A local repository holding ``files`` at its one commit."""
+    root.mkdir(parents=True)
+    git(root, "init", "--quiet", "--initial-branch=main")
+    git(root, "config", "user.email", "environment-tests@kedi-lang.org")
+    git(root, "config", "user.name", "Kedi Environment Tests")
+    git(root, "config", "uploadpack.allowReachableSHA1InWant", "true")
+    for name, content in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(content)
+    git(root, "add", ".")
+    git(root, "commit", "--quiet", "-m", "project")
+    return root, git(root, "rev-parse", "HEAD")
+
+
+def uv_only(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Records uv's commands instead of running them; git still runs."""
+    real = subprocess.run
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> object:
+        if command[0] == "git":
+            return real(command, **kwargs)  # type: ignore[call-overload]
+        calls.append(command)
+        return None
+
+    monkeypatch.setattr(package_environment.subprocess, "run", run)
+    return calls
+
+
+def test_an_environment_project_is_a_github_repository_at_a_full_commit() -> None:
+    project = package_environment.parse_environment_project(
+        f" git+https://github.com/NousResearch/hermes-agent@{COMMIT} "
+    )
+    assert project == package_environment.ProjectSource(
+        "https://github.com/NousResearch/hermes-agent", COMMIT
+    )
+    for value, message in [
+        ("git+https://github.com/o/r", "must end with @ and a full 40-character commit hash"),
+        ("git+https://github.com/o/r@v0.23.4", "a tag or branch can move"),
+        (f"git+https://github.com/o/r@{COMMIT[:12]}", "full 40-character commit hash"),
+        (f"git+https://github.com/o/r@{COMMIT.upper()}", "full 40-character commit hash"),
+        (f"https://github.com/o/r@{COMMIT}", "must start with 'git+'"),
+        (f"git+https://gitlab.com/o/r@{COMMIT}", "credential-free https://github.com URL"),
+        (f"git+http://github.com/o/r@{COMMIT}", "credential-free https://github.com URL"),
+        (f"git+https://github.com/o/r?x=1@{COMMIT}", "without query parameters"),
+    ]:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            package_environment.parse_environment_project(value)
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        (
+            f"command: python bridge.py\n      environment_project: git+https://github.com/o/r@{COMMIT}",
+            "environment_project names the project of an environment: uv",
+        ),
+        (
+            "command: python bridge.py\n      environment: uv\n      environment_project: git+https://github.com/o/r@main",
+            "package adapter 'bridged': environment_project 'git\\+https://github.com/o/r@main' must end",
+        ),
+    ],
+)
+def test_the_environment_project_field_is_checked(
+    tmp_path: Path, fields: str, message: str
+) -> None:
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text(
+        f"> package: bridged:\n  source: src\n  adapters:\n    bridged:\n      kind: agent\n      {fields}\n"
+    )
+    with pytest.raises(ValueError, match=message):
+        validate_package_metadata(load_package_manifest(manifest))
+
+
+def test_adapters_sharing_an_environment_name_one_project(tmp_path: Path) -> None:
+    manifest = tmp_path / "package.kedi"
+    adapter = "      kind: agent\n      command: python bridge.py\n      environment: uv\n"
+    manifest.write_text(
+        "> package: bridged:\n  source: src\n  adapters:\n"
+        f"    first:\n{adapter}      environment_project: git+https://github.com/o/r@{COMMIT}\n"
+        f"    second:\n{adapter}"
+    )
+    with pytest.raises(ValueError, match="name the same environment_project, or none"):
+        validate_package_metadata(load_package_manifest(manifest))
+
+
+def test_a_project_commit_is_checked_out_without_its_history_and_synced_with_its_own_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, commit = project_repository(
+        tmp_path / "upstream", {"pyproject.toml": b"[project]\n", "uv.lock": b"", "tools/run": b"x"}
+    )
+    calls = uv_only(monkeypatch)
+    project = package_environment.ProjectSource(repository.as_uri(), commit)
+
+    package_environment.install_environment(
+        "/bin/uv", tmp_path / "pkg", tmp_path / "unused", project
+    )
+
+    root = tmp_path / "pkg" / ENVIRONMENT_DIRECTORY
+    assert calls == [
+        ["/bin/uv", "sync", "--frozen", "--no-dev", "--project", str(root / "project")]
+    ]
+    assert (root / "project" / "pyproject.toml").read_text() == "[project]\n"
+    assert (root / "project" / "tools" / "run").read_bytes() == b"x"
+    assert not (root / "project" / ".git").exists()
+    assert package_environment.environment_ready(tmp_path / "pkg")
+
+
+def test_a_commit_the_repository_does_not_have_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, _ = project_repository(tmp_path / "upstream", {"pyproject.toml": b""})
+    uv_only(monkeypatch)
+    project = package_environment.ProjectSource(repository.as_uri(), COMMIT)
+    with pytest.raises(RuntimeError, match="Could not check out the environment project"):
+        package_environment.install_environment("/bin/uv", tmp_path / "pkg", tmp_path, project)
+    assert not package_environment.environment_ready(tmp_path / "pkg")
+
+
+def test_a_checkout_of_another_commit_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run_git(args: list[str], **_: object) -> str:
+        return "0" * 40 if args[-2:] == ["rev-parse", "HEAD"] else ""
+
+    monkeypatch.setattr(package_registry, "_run_git", run_git)
+    project = package_environment.ProjectSource("https://github.com/o/r", COMMIT)
+    with pytest.raises(RuntimeError, match="git checked out another commit"):
+        package_environment.install_environment("/bin/uv", tmp_path / "pkg", tmp_path, project)
+
+
+@needs_uv
+@pytest.mark.usefixtures("offline")
+def test_a_package_environment_from_a_project_commit_runs_its_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_root = tmp_path / "wheel-source"
+    bridge_package(wheel_root)  # builds the fixture wheel and a uv project around it
+    built = wheel_root / "src" / "bridged"
+    files = {name: (built / name).read_bytes() for name in ("pyproject.toml", "uv.lock")}
+    files |= {f"wheels/{w.name}": w.read_bytes() for w in (built / "wheels").iterdir()}
+    repository, commit = project_repository(tmp_path / "upstream", files)
+    value = f"git+https://github.com/example/project@{commit}"
+    original = package_environment.parse_environment_project
+    monkeypatch.setattr(
+        package_environment,
+        "parse_environment_project",
+        lambda text: package_environment.ProjectSource(repository.as_uri(), original(text).commit),
+    )
+    source = tmp_path / "source" / "src" / "bridged"
+    source.mkdir(parents=True)
+    (source / "main.kedi").write_text("= installed\n")
+    (source / "bridge.py").write_text("import kedi_env_fixture\nprint(kedi_env_fixture.VALUE)\n")
+    manifest = tmp_path / "source" / "package.kedi"
+    manifest.write_text(
+        "> package: bridged:\n  version: 0.1.0\n  source: src/bridged\n  adapters:\n    bridged:\n"
+        "      kind: agent\n      command: python bridge.py\n      environment: uv\n"
+        f"      environment_project: {value}\n"
+    )
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "home"))
+    registry = tmp_path / "home" / "registry"
+
+    installed = install_package(manifest, registry_root=registry)
+
+    record = json.loads((installed.root / INSTALL_RECEIPT_NAME).read_text())["lifecycle"]
+    (environment,) = [entry for entry in record["created"] if entry["kind"] == "environment"]
+    assert environment["project"] == f"git+{repository.as_uri()}@{commit}"
+    assert environment["command"] == "uv sync --frozen --no-dev"
+    (adapter,) = package_adapters("bridged")
+    assert adapter.command is not None
+    ran = subprocess.run(list(adapter.command), capture_output=True, text=True, check=True)
+    assert ran.stdout.strip() == "from the package environment"
+    remove_package("bridged", registry_root=registry)
+    assert list(registry.iterdir()) == []

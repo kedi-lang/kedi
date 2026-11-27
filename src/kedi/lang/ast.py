@@ -850,6 +850,8 @@ class PackageAdapterDecl:
     command: Optional[str] = None
     environment: Optional[str] = None
     """``uv``: the command runs in an environment of the package's own (a uv project in its source)."""
+    environment_project: Optional[str] = None
+    """The uv project the environment comes from instead: ``https://….tar.gz sha256:…``."""
     field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 

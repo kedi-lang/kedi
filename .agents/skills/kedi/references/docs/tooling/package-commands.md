@@ -187,6 +187,35 @@ root.
 - **Removal.** The install record lists the environment, and `kedi remove` takes it with the
   package.
 
+### A Project From a Repository
+
+Some harnesses ship no wheel and support being installed only from a source checkout. Hermes is
+one: its runtime finds its assets through the checkout's layout. `environment_project:` names the
+uv project of the environment as a GitHub repository at an exact commit:
+
+```kedi
+> package: hermes:
+  version: 0.1.0
+  source: src/hermes
+  adapters:
+    hermes:
+      kind: agent
+      command: python bridge.py
+      environment: uv
+      environment_project: git+https://github.com/NousResearch/hermes-agent@8fc0374447313e276f6b9a2764bfc750190c966a
+```
+
+- **An exact commit.** The value takes the form of `kedi add git+https://github.com/…`, followed by
+  `@` and a full 40-character commit hash. A tag or branch is refused, because either can move;
+  the commit is the content's identity.
+- **Checkout.** Kedi fetches that one commit, without history or tags, into
+  `.kedi-env/project/`, and drops its `.git`. Git LFS files are not downloaded.
+- **Sync.** `uv sync --frozen --no-dev` runs in `project/`. It installs the project itself,
+  editable, from the project's own `uv.lock`.
+- **What stays.** `project/` stays, because the editable install runs from it, and the install
+  record lists it with the environment.
+- **The package source** then needs no `pyproject.toml` or `uv.lock`.
+
 ## `kedi python install`
 
 ```bash

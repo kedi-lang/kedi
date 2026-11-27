@@ -72,6 +72,16 @@ def validate_package_metadata(
 
     for adapter in metadata.adapters.values():
         validate_package_adapter(adapter)
+    projects = {
+        adapter.environment_project
+        for adapter in metadata.adapters.values()
+        if adapter.environment == "uv"
+    }
+    if len(projects) > 1:
+        raise ValueError(
+            f"Kedi package {metadata.name!r}: its adapters share one environment, so those with "
+            "environment: uv name the same environment_project, or none"
+        )
     for dependency in metadata.python_dependencies:
         try:
             requirement = Requirement(dependency)
@@ -164,6 +174,18 @@ def validate_package_adapter(adapter: PackageAdapterDecl) -> None:
                 f"package adapter {name!r}: environment: uv runs a command; a class runs in "
                 "Kedi's own interpreter"
             )
+    if adapter.environment_project is not None:
+        if adapter.environment != "uv":
+            raise ValueError(
+                f"package adapter {name!r}: environment_project names the project of an "
+                "environment: uv"
+            )
+        from .package_environment import parse_environment_project
+
+        try:
+            parse_environment_project(adapter.environment_project)
+        except ValueError as exc:
+            raise ValueError(f"package adapter {name!r}: {exc}") from exc
     if adapter.command is not None:
         try:
             parts = shlex.split(adapter.command)

@@ -60,6 +60,7 @@ package directive fail validation.
 | `command` | one of `command` or `class` | a shell-style command line; arguments naming regular files of `source` become absolute paths |
 | `class` | one of `command` or `class` | `module:Class`, a Python adapter class built with `Class(model=...)` |
 | `environment` | no | `uv`, with `command` only: the command runs in an environment of the package's own, from the uv project (`pyproject.toml`, `uv.lock`) at the root of `source` |
+| `environment_project` | no | with `environment: uv`: the uv project instead, as `git+https://github.com/OWNER/REPOSITORY@<40-character commit>` (no tag or branch); every `environment: uv` adapter of a package names the same one, or none |
 
 Unknown entry fields, duplicate shortnames or fields, and a second adapters
 block fail validation. Nothing is imported or launched when a package is
