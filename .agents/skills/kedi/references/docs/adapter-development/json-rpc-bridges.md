@@ -600,7 +600,8 @@ bridge that way.
 ## Bridge SDKs
 
 [kedi-lang/json-rpc](https://github.com/kedi-lang/json-rpc) has a TypeScript
-SDK (`ts/sdk`) and a Python SDK (`python/`) for writing bridges. They speak the
+SDK (`ts/sdk`, on npm as [`@kedi-lang/bridge`](https://www.npmjs.com/package/@kedi-lang/bridge))
+and a Python SDK (`python/`) for writing bridges. They speak the
 protocol and run the steps Kedi decides around each model request and tool
 call: admission, live input, history processing, fallbacks, usage, hooks and
 approval. They also check the bridge in four layers:
