@@ -65,7 +65,7 @@ Advanced users can still configure `lsp.kedi-lsp.binary.path` and `arguments`
 for a custom server; specify `settings.python_path` as well when that server
 is a wrapper whose Python interpreter cannot be inferred.
 
-The managed installer pins `kedi==0.1.7`, `tree-sitter-kedi==0.4.11`, and
+The managed installer pins `kedi==0.1.8`, `tree-sitter-kedi==0.4.11`, and
 `kedi-debugger==0.1.2`. The parser pin follows the published Kedi wheel's
 dependencies, independently of the development grammar. Use a project interpreter
 for unreleased Kedi features. Existing managed environments gain the debugger on their
