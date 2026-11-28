@@ -13,12 +13,14 @@ Framing: one JSON-RPC message per line, UTF-8, no embedded newlines, at most
 Kedi to bridge:
 
 - ``initialize`` ``{protocolVersion, client, testModel?}`` returns ``{protocolVersion, backend, kind,
-  capabilities, mediaKinds?, settings?, effort?, mcp?, compaction?}``: ``settings`` names the
-  ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps, ``mcp``
-  ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``), and
+  capabilities, mediaKinds?, settings?, effort?, mcp?, compaction?, codemode?}``: ``settings``
+  names the ``> settings:`` the backend applies, ``effort`` the ``> effort:`` levels it maps,
+  ``mcp`` ``{transports}`` the ``> mcp:`` transports it connects (with ``nativeTools``),
   ``compaction`` ``{threshold}`` says the backend compacts its session natively (with
-  ``sessions``), ``threshold`` whether it honors an exact input-token threshold. Kedi sends
-  nothing else before it completes.
+  ``sessions``), ``threshold`` whether it honors an exact input-token threshold, and
+  ``codemode`` ``{language}`` says the backend has a code mode of its own, model-written
+  ``python`` or ``javascript`` that calls tools (with ``tools``). Kedi sends nothing else
+  before it completes.
 - ``run`` ``{runId, callKind, promptKind, model, fallbackModels, settings, effort, system,
   instructionParts, user, userContent, output, tools, continuation, session, history?,
   processHistory?, compaction?, subagent, hooks, mcpServers, admitResults}``
@@ -41,7 +43,11 @@ Kedi to bridge:
   session as the backend does, at ``threshold`` input tokens when it is set) or ``disabled``.
   Without it the bridge keeps its backend's automatic compaction off. A summary request is a
   model request (``budget/admit``, ``run/usage``; ``model/complete`` with ``purpose:
-  "compaction"`` in test mode), and no ``run/event`` reports it.
+  "compaction"`` in test mode), and no ``run/event`` reports it. ``codemode: true`` comes when
+  the bridge declared ``codemode`` and the profile sets ``> codemode: enabled``: turn the
+  backend's code mode on, offer Kedi's tools to its code only, and send each call the code
+  makes as a direct one (``tool/call``, or the native tool steps). Without it the backend's
+  code mode stays off.
 - ``run/cancel`` (notification) ``{runId}``: stop the run; it answers with ``CANCELLED``.
 - ``run/input`` ``{runId, items: [{id, text}]}`` (with ``liveInput``): input for a running
   run, from its parent or a child. Add each ``text`` as a user turn before the next model

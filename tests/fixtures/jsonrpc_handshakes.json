@@ -144,6 +144,38 @@
       "kediSays": "compaction needs sessions"
     },
     {
+      "name": "codemode-needs-tools",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {},
+        "codemode": {
+          "language": "python"
+        }
+      },
+      "refuses": "KB012",
+      "kediSays": "codemode needs tools"
+    },
+    {
+      "name": "codemode-names-a-language",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-framework",
+        "capabilities": {
+          "tools": true
+        },
+        "codemode": {
+          "language": "lua"
+        }
+      },
+      "refuses": "KB013",
+      "kediSays": "codemode must be {language: python or javascript}"
+    },
+    {
       "name": "valid",
       "handshake": {
         "backend": {
@@ -181,6 +213,23 @@
         "kind": "agent-harness",
         "capabilities": {
           "tools": true
+        }
+      },
+      "refuses": null,
+      "kediSays": null
+    },
+    {
+      "name": "codemode-with-tools",
+      "handshake": {
+        "backend": {
+          "name": "probe"
+        },
+        "kind": "agent-harness",
+        "capabilities": {
+          "tools": true
+        },
+        "codemode": {
+          "language": "javascript"
         }
       },
       "refuses": null,

@@ -15,6 +15,12 @@ Claude Agent SDK, and Codex App Server. All four adapters expose the same three
 controls and use the same catalog, Monty subset, limits, approval composition,
 and artifact boundary.
 
+On a [JSON-RPC bridge](../adapter-development/json-rpc-bridges.md#code-mode)
+whose backend has a code mode of its own, such as fast-agent or pi,
+`> codemode: enabled` turns the backend's code mode on instead. Every tool call
+from its code still goes through Kedi's hooks, approval and budgets. CodeMode
+settings do not apply there.
+
 ## Enable CodeMode
 
 Enable it in the current lexical scope:
