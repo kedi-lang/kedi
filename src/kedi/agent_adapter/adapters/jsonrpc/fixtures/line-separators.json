@@ -1,0 +1,32 @@
+{
+  "name": "line-separators",
+  "code": "KB111",
+  "description": "U+2028, U+2029 and CR stay inside one frame.",
+  "failure": "U+2028, U+2029 or CR change the prompt",
+  "help": "split frames at LF only and pass the text through as given",
+  "spec": "2-transport",
+  "run": {
+    "user": "one two three\rfour"
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Read."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Read."
+    },
+    "modelSaw": [
+      {
+        "request": 1,
+        "contains": "one two three\rfour"
+      }
+    ]
+  }
+}

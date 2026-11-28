@@ -1,0 +1,101 @@
+{
+  "name": "compaction",
+  "code": "KB118",
+  "description": "With a native compaction policy, a session past its threshold is compacted: the summary request reaches the test model with purpose compaction, is admitted like any request, reports no event, and the run still answers with its state.",
+  "failure": "the bridge does not compact its session at the program's threshold",
+  "help": "with run.params.compaction mode native, compact the session once it passes threshold input tokens, sending the summary request through run.modelRequest with purpose compaction",
+  "spec": "7-history",
+  "capabilities": [
+    "sessions",
+    "compactionThreshold"
+  ],
+  "run": {
+    "user": "Where is Lyon?",
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ],
+    "session": {
+      "id": "s1",
+      "turn": 0,
+      "state": null
+    },
+    "compaction": {
+      "mode": "native",
+      "threshold": 1
+    }
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ],
+      "usage": {
+        "inputTokens": 5000,
+        "outputTokens": 10
+      }
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Lyon is in France."
+        }
+      ],
+      "usage": {
+        "inputTokens": 6000,
+        "outputTokens": 10
+      }
+    }
+  ],
+  "summaries": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "The user asked where Lyon is."
+        }
+      ],
+      "usage": {
+        "inputTokens": 5000,
+        "outputTokens": 20
+      }
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "result": {
+      "text": "Lyon is in France."
+    },
+    "resultKeys": [
+      "state"
+    ],
+    "compacted": true
+  }
+}

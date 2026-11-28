@@ -1,0 +1,67 @@
+{
+  "name": "governed-denied-request",
+  "code": "KB104",
+  "description": "A denied request never reaches the model, and the run fails.",
+  "failure": "a denied request does not end the run",
+  "help": "when budget/admit denies a request, skip it and end the run (run.modelRequest throws StepDenied)",
+  "spec": "6-steps-kedi-decides",
+  "capabilities": [
+    "governed",
+    "tools"
+  ],
+  "budget": {
+    "request": 1
+  },
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Never sent."
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "failed": true,
+    "modelRequests": 1
+  }
+}

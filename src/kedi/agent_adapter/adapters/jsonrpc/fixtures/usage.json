@@ -1,0 +1,32 @@
+{
+  "name": "usage",
+  "code": "KB110",
+  "description": "With usage, one run/usage per model request.",
+  "failure": "a model request's usage is not reported",
+  "help": "return the reply's token counts from the request's usage()",
+  "spec": "9-usage",
+  "capabilities": [
+    "usage"
+  ],
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Counted."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Counted."
+    },
+    "count": [
+      {
+        "method": "run/usage",
+        "times": 1
+      }
+    ]
+  }
+}

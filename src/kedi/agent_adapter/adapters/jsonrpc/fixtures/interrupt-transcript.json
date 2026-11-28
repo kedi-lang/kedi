@@ -1,0 +1,61 @@
+{
+  "name": "interrupt-transcript",
+  "code": "KB117",
+  "description": "An interrupted transcript run answers -32006 with the turn's messages so far.",
+  "failure": "an interrupted transcript run does not hand back its messages",
+  "help": "register run.onInterrupt to return {messages}, the turn so far in Kedi's schema",
+  "spec": "8-children-and-live-input",
+  "capabilities": [
+    "interrupt",
+    "transcript"
+  ],
+  "run": {
+    "history": [
+      {
+        "id": "m1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "My name is Ada."
+          }
+        ]
+      },
+      {
+        "id": "m2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello, Ada."
+          }
+        ]
+      }
+    ]
+  },
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/interrupt"
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Too late."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": -32006
+    },
+    "errorDataKeys": [
+      "messages"
+    ]
+  }
+}

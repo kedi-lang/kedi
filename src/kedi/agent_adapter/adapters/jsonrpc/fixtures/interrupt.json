@@ -1,0 +1,33 @@
+{
+  "name": "interrupt",
+  "code": "KB107",
+  "description": "run/interrupt stops the attempt: the run answers -32006.",
+  "failure": "run/interrupt does not stop the attempt",
+  "help": "pass run.signal to every wait; an interrupted run answers -32006",
+  "spec": "8-children-and-live-input",
+  "capabilities": [
+    "interrupt"
+  ],
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/interrupt"
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Too late."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": -32006
+    }
+  }
+}
