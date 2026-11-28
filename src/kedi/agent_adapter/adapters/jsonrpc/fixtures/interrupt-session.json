@@ -1,0 +1,44 @@
+{
+  "name": "interrupt-session",
+  "code": "KB108",
+  "description": "An interrupted run in a session answers -32006 with its state, so the conversation continues.",
+  "failure": "an interrupted session run does not hand back its state",
+  "help": "register run.onInterrupt to return {state} as the run has it so far",
+  "spec": "8-children-and-live-input",
+  "capabilities": [
+    "interrupt",
+    "sessions"
+  ],
+  "run": {
+    "session": {
+      "id": "s1",
+      "turn": 0,
+      "state": null
+    }
+  },
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/interrupt"
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Too late."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": -32006
+    },
+    "errorDataKeys": [
+      "state"
+    ]
+  }
+}

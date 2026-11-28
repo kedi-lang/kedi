@@ -1,0 +1,60 @@
+{
+  "name": "transcript",
+  "code": "KB105",
+  "description": "Kedi's transcript reaches the model; the turn's messages come back.",
+  "failure": "Kedi's transcript does not reach the model, or the turn's messages do not come back",
+  "help": "build the conversation from run.params.history and answer the turn's messages",
+  "spec": "7-history",
+  "capabilities": [
+    "transcript"
+  ],
+  "run": {
+    "user": "What is my name?",
+    "history": [
+      {
+        "id": "m1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "My name is Ada."
+          }
+        ]
+      },
+      {
+        "id": "m2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello, Ada."
+          }
+        ]
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Ada."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Ada."
+    },
+    "resultKeys": [
+      "messages"
+    ],
+    "modelSaw": [
+      {
+        "request": 1,
+        "contains": "My name is Ada."
+      }
+    ]
+  }
+}

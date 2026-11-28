@@ -182,6 +182,9 @@ the kit checks that:
   "Fill these fields: …", fails.
 
 `--json` prints the report as JSON. The command exits 1 when a check fails.
+For a JSON-RPC bridge, `kedi adapter check --bridge COMMAND` also runs the
+protocol's conformance fixtures; see
+[JSON-RPC Bridges](json-rpc-bridges.md#conformance).
 `PydanticAdapter`, `LangChainAdapter` and `WebGPUAdapter` have
 `for_conformance`; the Claude and Codex harness adapters reach their models
 through their CLIs, so this endpoint cannot record them:

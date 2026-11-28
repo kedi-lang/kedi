@@ -1,0 +1,46 @@
+{
+  "name": "structured",
+  "code": "KB102",
+  "description": "A structured run answers with data.",
+  "failure": "a structured run does not answer with data",
+  "help": "parse the model's answer against run.output.schema and answer {data}",
+  "spec": "5-runs",
+  "capabilities": [
+    "structuredOutput"
+  ],
+  "run": {
+    "callKind": "produce",
+    "output": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "capital": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capital"
+        ]
+      },
+      "toolName": "final_result"
+    }
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "{\"capital\": \"Ankara\"}"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "data": {
+        "capital": "Ankara"
+      }
+    },
+    "modelRequests": 1
+  }
+}

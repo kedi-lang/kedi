@@ -150,6 +150,9 @@ an ordinary run.
 `kedi adapter check MODULE:CLASS [--json]` runs the adapter conformance kit
 against `CLASS.for_conformance(base_url)` and exits 1 when a check fails. See
 [Testing an Adapter](../adapter-development/testing.md#conformance-check).
+`kedi adapter check --bridge COMMAND [--json]` runs the JSON-RPC conformance
+fixtures against the bridge `COMMAND` starts, in test mode. See
+[JSON-RPC Bridges](../adapter-development/json-rpc-bridges.md#conformance).
 
 `kedi audit` checks installed package receipts for yanked or revoked registry
 commits, and installed packages for missing or unsatisfied Kedi dependencies. It

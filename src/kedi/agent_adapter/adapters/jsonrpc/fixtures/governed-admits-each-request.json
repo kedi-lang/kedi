@@ -1,0 +1,78 @@
+{
+  "name": "governed-admits-each-request",
+  "code": "KB103",
+  "description": "A governed bridge asks budget/admit before every model request.",
+  "failure": "model requests are not all admitted",
+  "help": "send every model request through run.modelRequest, and turn off the harness's own retries",
+  "spec": "4-capabilities",
+  "capabilities": [
+    "governed",
+    "tools"
+  ],
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "result": {
+      "text": "Done."
+    },
+    "order": [
+      "budget/admit",
+      "model/complete",
+      "tool/call",
+      "budget/admit",
+      "model/complete"
+    ],
+    "count": [
+      {
+        "method": "budget/admit",
+        "times": 2
+      }
+    ]
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "name": "codemode",
+  "code": "KB119",
+  "description": "With code mode on, Kedi's tools reach the model only through the backend's code tool.",
+  "failure": "code mode still offers Kedi's tools to the model as tools of their own",
+  "help": "with run.params.codemode true, turn the backend's code mode on and offer Kedi's tools to its code only",
+  "spec": "5-runs",
+  "capabilities": [
+    "codemode",
+    "tools"
+  ],
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ],
+    "codemode": true
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Ready."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Ready."
+    },
+    "modelTools": [
+      {
+        "request": 1,
+        "atLeast": 1,
+        "excludes": [
+          "lookup"
+        ]
+      }
+    ]
+  }
+}

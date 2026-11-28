@@ -1,0 +1,52 @@
+{
+  "name": "media-input",
+  "code": "KB114",
+  "description": "An image of the user turn reaches the model.",
+  "failure": "the user turn's media does not reach the model",
+  "help": "send run.params.userContent's media parts to the model where Kedi put them",
+  "spec": "5-runs",
+  "capabilities": [
+    "mediaInput"
+  ],
+  "run": {
+    "user": "Look at photo please.",
+    "userContent": [
+      {
+        "type": "text",
+        "text": "Look at "
+      },
+      {
+        "type": "media",
+        "name": "photo",
+        "kind": "image",
+        "mediaType": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+      },
+      {
+        "type": "text",
+        "text": " please."
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "A pixel."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "A pixel."
+    },
+    "modelSaw": [
+      {
+        "request": 1,
+        "contains": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+      }
+    ]
+  }
+}

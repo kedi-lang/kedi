@@ -1,0 +1,76 @@
+{
+  "name": "events",
+  "code": "KB113",
+  "description": "With events, the model's text beside its tool calls is reported as commentary.",
+  "failure": "the bridge's events do not report the model's commentary",
+  "help": "send run/event message.completed with phase commentary for text beside tool calls (run.event)",
+  "spec": "4-capabilities",
+  "capabilities": [
+    "events",
+    "tools"
+  ],
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Let me look it up."
+        },
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Lyon is in France."
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "result": {
+      "text": "Lyon is in France."
+    },
+    "events": [
+      {
+        "type": "message.completed",
+        "phase": "commentary",
+        "text": "Let me look it up."
+      }
+    ]
+  }
+}

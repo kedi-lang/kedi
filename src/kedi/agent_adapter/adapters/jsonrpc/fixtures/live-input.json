@@ -1,0 +1,92 @@
+{
+  "name": "live-input",
+  "code": "KB106",
+  "description": "Input sent while the run runs reaches the next model request, and is acknowledged delivered.",
+  "failure": "live input does not reach the next model request",
+  "help": "register run.onInput and add each text as a user turn; run.modelRequest answers it delivered",
+  "spec": "8-children-and-live-input",
+  "capabilities": [
+    "liveInput",
+    "tools"
+  ],
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ]
+  },
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/input",
+        "items": [
+          {
+            "id": "i1",
+            "text": "Use the blue one."
+          }
+        ]
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Blue it is."
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "result": {
+      "text": "Blue it is."
+    },
+    "modelSaw": [
+      {
+        "request": 2,
+        "contains": "Use the blue one."
+      }
+    ],
+    "answers": [
+      {
+        "method": "run/input",
+        "result": {
+          "delivered": true
+        }
+      }
+    ]
+  }
+}

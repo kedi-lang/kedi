@@ -176,15 +176,19 @@ redundant-cast = "ignore"
 branch = true
 concurrency = ["thread"]
 source = ["src/kedi"]
+# fake_kedi.py is a byte-identical copy of kedi-lang/json-rpc's testing/fake_kedi.py, whose
+# branches are tested there against every bridge; Kedi's test runs it end to end only.
 omit = [
     "tree-sitter-kedi/**",
     "tests/**",
+    "src/kedi/agent_adapter/adapters/jsonrpc/fake_kedi.py",
 ]
 
 [tool.coverage.report]
 omit = [
     "tree-sitter-kedi/**",
     "tests/**",
+    "src/kedi/agent_adapter/adapters/jsonrpc/fake_kedi.py",
 ]
 exclude_also = [
     "if TYPE_CHECKING:",

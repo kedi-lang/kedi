@@ -1,0 +1,42 @@
+{
+  "name": "model-fallback",
+  "code": "KB115",
+  "description": "When the primary model fails, the request is tried on the fallback model.",
+  "failure": "a failed request is not tried on the fallback models",
+  "help": "with modelFallback, try run.params.fallbackModels in order when a request fails (run.modelRequest does)",
+  "spec": "4-capabilities",
+  "capabilities": [
+    "modelFallback"
+  ],
+  "failModels": [
+    "primary"
+  ],
+  "run": {
+    "model": "primary",
+    "fallbackModels": [
+      "backup"
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "From the backup."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "From the backup."
+    },
+    "modelRequests": 2,
+    "modelSaw": [
+      {
+        "request": 2,
+        "contains": "backup"
+      }
+    ]
+  }
+}

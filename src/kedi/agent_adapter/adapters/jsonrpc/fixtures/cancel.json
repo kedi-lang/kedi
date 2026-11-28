@@ -1,0 +1,30 @@
+{
+  "name": "cancel",
+  "code": "KB109",
+  "description": "run/cancel stops the run: it answers -32003.",
+  "failure": "run/cancel does not stop the run",
+  "help": "pass run.signal to every wait; a cancelled run answers -32003",
+  "spec": "5-runs",
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/cancel"
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Too late."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": -32003
+    }
+  }
+}

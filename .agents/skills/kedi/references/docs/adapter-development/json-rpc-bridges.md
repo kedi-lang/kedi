@@ -597,10 +597,32 @@ A bridge for a JavaScript harness can be bundled into one file that needs only
 Node; [kedi-lang/json-rpc](https://github.com/kedi-lang/json-rpc) builds the pi
 bridge that way.
 
+## Bridge SDKs
+
+[kedi-lang/json-rpc](https://github.com/kedi-lang/json-rpc) has a TypeScript
+SDK (`ts/sdk`) and a Python SDK (`python/`) for writing bridges. They speak the
+protocol and run the steps Kedi decides around each model request and tool
+call: admission, live input, history processing, fallbacks, usage, hooks and
+approval. They also check the bridge in four layers:
+
+| Layer | When | What |
+|---|---|---|
+| types | compile time (TypeScript) | `defineHandshake` refuses a handshake that breaks the capability rules, such as `liveInput` without `subagents` |
+| handshake | every start | the same rules, with Kedi's diagnostic codes (`KB001`…) |
+| preflight | first start of each version | the [conformance fixtures](#conformance) run against the bridge in test mode, for the capabilities it declares |
+| runtime | while serving | the protocol's invariants, such as usage for a request Kedi never admitted, or a step after its run ended |
+
+A bridge that fails its preflight answers `initialize` with the diagnostics,
+and Kedi's error shows them. `--check` prints the report; `--check
+--diagnostics json` prints it as JSON.
+
 ## Reference Bridge
 
-`kedi.agent_adapter.adapters.jsonrpc.REFERENCE_BRIDGE` is a bridge in
-JavaScript (Node.js 18 or later) for any OpenAI-compatible chat endpoint:
+`kedi.agent_adapter.adapters.jsonrpc.REFERENCE_BRIDGE` is a bridge for any
+OpenAI-compatible chat endpoint, built with the TypeScript SDK. Kedi ships it
+bundled into one file that needs only Node.js 20 or later; its source is
+[`ts/reference`](https://github.com/kedi-lang/json-rpc/tree/main/ts/reference)
+in kedi-lang/json-rpc:
 
 ```python
 from kedi.agent_adapter.adapters.jsonrpc import reference_bridge_command
@@ -622,7 +644,7 @@ image models to draw (OpenRouter's chat completions with `modalities`
 completions audio); `reference_bridge_command(..., image_output=True,
 audio_output=True)` passes them. In native mode it connects `stdio` MCP
 servers for each run, taking each MCP call through the steps above. Start a new
-bridge from it.
+bridge from its source.
 
 ## Test Model
 
@@ -674,6 +696,29 @@ a proxy that a bridge runs in front of a harness can answer from Kedi instead
 of forwarding.
 
 ## Conformance
+
+`kedi adapter check --bridge COMMAND` runs the protocol's conformance fixtures
+against the bridge `COMMAND` starts: the fixtures the SDKs' preflight runs,
+shipped with Kedi. The bridge runs in test mode, so it must declare
+`testModel`; no model, network or key is involved. Every frame is checked
+against the protocol's schema, and a fixture whose capabilities the bridge
+lacks is skipped:
+
+```bash
+kedi adapter check --bridge "node my_bridge.mjs"
+```
+
+```text
+pass  cancel
+skip  codemode: the bridge lacks codemode
+FAIL  live-input [KB106]: live input does not reach the next model request
+      run answered {'code': -32002, 'message': 'KB201: live input arrived, but the run has no run.onInput handler', …}, expected {'text': 'Blue it is.'}
+      no run/input answer held {'delivered': True}
+      model request 2 did not carry 'Use the blue one.'
+      help: register run.onInput and add each text as a user turn; run.modelRequest answers it delivered
+```
+
+`--json` prints the results as JSON. The command exits 1 when a fixture fails.
 
 `kedi adapter check kedi.agent_adapter:JsonRpcAdapter` runs the
 [conformance kit](testing.md#conformance-check) against the reference bridge.

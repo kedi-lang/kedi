@@ -398,7 +398,8 @@ def test_kedi_adapter_check_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "BrokenFactoryAdapter.for_conformance failed: install the backend extra" in broken.output
 
     for arguments, message in (
-        (["adapter", "check"], "Usage: kedi adapter check MODULE:CLASS [--json]"),
+        (["adapter", "check"], "Usage: kedi adapter check (MODULE:CLASS | --bridge COMMAND)"),
+        (["adapter", "check", "--bridge"], "Usage: kedi adapter check"),
         (["adapter", "check", "no_colon"], "MODULE:CLASS"),
         (["adapter", "check", f"{module}:Missing"], "has no attribute 'Missing'"),
         (["adapter", "check", "kedi.agent_adapter:ToolSpec"], "has no for_conformance(base_url)"),
@@ -406,3 +407,24 @@ def test_kedi_adapter_check_cli(monkeypatch: pytest.MonkeyPatch) -> None:
         refused = runner.invoke(main, arguments)
         assert refused.exit_code == 2, refused.output
         assert message in refused.output
+
+
+def test_kedi_adapter_check_runs_the_json_rpc_fixtures_on_a_bridge() -> None:
+    from kedi.agent_adapter.adapters.jsonrpc import REFERENCE_BRIDGE
+    from kedi.cli import main
+
+    runner = CliRunner()
+    bridge = f"node {REFERENCE_BRIDGE} --base-url http://127.0.0.1:9/v1"
+    result = runner.invoke(main, ["adapter", "check", "--bridge", bridge, "--json"])
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    statuses = {fixture["name"]: fixture["status"] for fixture in report["fixtures"]}
+    assert report["ok"] is True
+    assert statuses["kedi-tool"] == statuses["live-input"] == "pass"
+    assert statuses["codemode"] == "skip"
+    text = runner.invoke(main, ["adapter", "check", "--bridge", bridge])
+    assert text.exit_code == 0 and "pass  governed-denied-request" in text.output
+
+    missing = runner.invoke(main, ["adapter", "check", "--bridge", "kedi-no-such-bridge"])
+    assert missing.exit_code == 1
+    assert "the bridge did not start" in missing.output

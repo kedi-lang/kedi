@@ -1,0 +1,41 @@
+{
+  "name": "continuation",
+  "code": "KB112",
+  "description": "A continuation replays the rejected answer and Kedi's correction to the model.",
+  "failure": "a continuation does not replay the rejected answer and Kedi's correction",
+  "help": "replay run.params.continuation: its answer as the model's turn, its message as a user turn",
+  "spec": "5-runs",
+  "run": {
+    "continuation": {
+      "answer": {
+        "text": "Paris."
+      },
+      "message": "That was not asked. Answer again."
+    }
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Hello."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Hello."
+    },
+    "modelSaw": [
+      {
+        "request": 1,
+        "contains": "Paris."
+      },
+      {
+        "request": 1,
+        "contains": "That was not asked. Answer again."
+      }
+    ]
+  }
+}

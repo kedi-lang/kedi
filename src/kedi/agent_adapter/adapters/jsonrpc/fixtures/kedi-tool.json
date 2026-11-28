@@ -1,0 +1,76 @@
+{
+  "name": "kedi-tool",
+  "code": "KB101",
+  "description": "The model calls a Kedi tool; its result reaches the next model request.",
+  "failure": "Kedi's tools do not round-trip",
+  "help": "call Kedi's tools with tool/call (run.callTool) and send their results to the model",
+  "spec": "6-steps-kedi-decides",
+  "capabilities": [
+    "tools"
+  ],
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Lyon is in France."
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "result": {
+      "text": "Lyon is in France."
+    },
+    "modelRequests": 2,
+    "modelSaw": [
+      {
+        "request": 2,
+        "contains": "France"
+      }
+    ],
+    "order": [
+      "model/complete",
+      "tool/call",
+      "model/complete"
+    ]
+  }
+}

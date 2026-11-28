@@ -231,16 +231,20 @@ def _skills_command_help() -> str:
     )
 
 
-_ADAPTER_USAGE = "Usage: kedi adapter check MODULE:CLASS [--json]"
+_ADAPTER_USAGE = "Usage: kedi adapter check (MODULE:CLASS | --bridge COMMAND) [--json]"
 
 
 def _check_adapter_command(arguments: list[str]) -> bool:
-    """``kedi adapter check``: run the conformance kit on ``CLASS.for_conformance``; passed?"""
+    """``kedi adapter check``: run the conformance kit on ``CLASS.for_conformance``, or the
+    JSON-RPC fixtures on the bridge ``--bridge COMMAND`` starts; passed?"""
 
     import importlib
     import json
 
     rest = [argument for argument in arguments if argument != "--json"]
+    as_json = len(rest) != len(arguments)
+    if len(rest) == 3 and rest[:2] == ["check", "--bridge"]:
+        return _check_bridge(rest[2], as_json=as_json)
     if len(rest) != 2 or rest[0] != "check":
         raise click.UsageError(_ADAPTER_USAGE)
     module_name, _, attribute = rest[1].partition(":")
@@ -259,9 +263,26 @@ def _check_adapter_command(arguments: list[str]) -> bool:
         report = check_adapter(factory)
     except Exception as exc:
         raise click.ClickException(f"{rest[1]}.for_conformance failed: {exc}") from exc
-    as_json = len(rest) != len(arguments)
     click.echo(json.dumps(report.as_dict(), indent=2) if as_json else report.render())
     return report.passed
+
+
+def _check_bridge(command: str, *, as_json: bool) -> bool:
+    """The JSON-RPC conformance fixtures, run on the bridge ``command`` starts; passed?"""
+
+    import json
+    import shlex
+
+    from kedi.agent_adapter.adapters.jsonrpc import fake_kedi
+
+    try:
+        results = fake_kedi.check(shlex.split(command))
+    except OSError as exc:
+        raise click.ClickException(f"the bridge did not start: {exc}") from exc
+    click.echo(
+        json.dumps(fake_kedi.as_json(results), indent=2) if as_json else fake_kedi.render(results)
+    )
+    return not fake_kedi.failed(results)
 
 
 def _run_notebook_command(arguments: list[str]) -> int:
@@ -504,7 +525,9 @@ def main(
             )
         elif source == "adapter" and command_source is None:
             click.echo(
-                f"{_ADAPTER_USAGE}\n\nCheck that an adapter sends the model what Kedi rendered."
+                f"{_ADAPTER_USAGE}\n\nCheck that an adapter sends the model what Kedi rendered. With"
+                " --bridge, run the JSON-RPC conformance fixtures on the bridge COMMAND starts, in"
+                " test mode: no model or key is needed."
             )
         else:
             click.echo(ctx.get_help())

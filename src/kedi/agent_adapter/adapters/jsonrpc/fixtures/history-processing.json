@@ -1,0 +1,70 @@
+{
+  "name": "history-processing",
+  "code": "KB116",
+  "description": "With processHistory, the request carries what the program's history processor kept, and the run answers the whole transcript.",
+  "failure": "the history processor's result does not decide what the request carries",
+  "help": "ask history/process before each request, send what it returns, and answer transcript",
+  "spec": "7-history",
+  "capabilities": [
+    "transcript"
+  ],
+  "historyProcess": {
+    "keepLast": 1
+  },
+  "run": {
+    "user": "What is my name?",
+    "history": [
+      {
+        "id": "m1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "My name is Ada."
+          }
+        ]
+      },
+      {
+        "id": "m2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello, Ada."
+          }
+        ]
+      }
+    ],
+    "processHistory": true
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "I do not know."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "I do not know."
+    },
+    "resultKeys": [
+      "transcript"
+    ],
+    "modelMissed": [
+      {
+        "request": 1,
+        "contains": "My name is Ada."
+      }
+    ],
+    "count": [
+      {
+        "method": "history/process",
+        "times": 1
+      }
+    ]
+  }
+}
